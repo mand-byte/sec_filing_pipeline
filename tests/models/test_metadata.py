@@ -1,5 +1,6 @@
+from src.domain.enums import FallbackReason, ParseAttemptStatus, ParseFailureType
 from src.models import Base  # noqa: F401
-from src.models import filing, registry, review, state  # noqa: F401
+from src.models import filing, parse_route_log, registry, review, state  # noqa: F401
 
 
 def test_models_base_module_is_importable():
@@ -27,3 +28,42 @@ def test_ingestion_state_primary_key_is_cik_plus_route_type():
     primary_key_names = {column.name for column in table.primary_key.columns}
 
     assert primary_key_names == {"cik", "route_type"}
+
+
+def test_phase3_enums_match_fixed_taxonomy() -> None:
+    assert {item.value for item in ParseFailureType} == {"network", "parse", "logic"}
+    assert {item.value for item in ParseAttemptStatus} == {
+        "success",
+        "failed",
+        "skipped",
+    }
+    assert "all_methods_failed" in {item.value for item in FallbackReason}
+
+
+def test_parse_route_log_table_has_required_columns() -> None:
+    table = Base.metadata.tables["parse_route_log"]
+    expected = {
+        "id",
+        "run_id",
+        "route_type",
+        "filing_id",
+        "accession_no",
+        "cik",
+        "document_id",
+        "document_type",
+        "document_filename",
+        "document_path",
+        "snapshot_path",
+        "source_url",
+        "sha256_hex",
+        "byte_length",
+        "parser_method",
+        "attempted_at_utc",
+        "status",
+        "failure_type",
+        "error_message",
+        "fallback_reason",
+        "decision_state",
+        "selected_candidate",
+    }
+    assert expected <= set(table.columns.keys())
