@@ -13,9 +13,17 @@ from src.worker.owner_pipeline import (
 class FakeSession:
     def __init__(self) -> None:
         self.added = []
+        self.by_pk = {}
 
     def add(self, obj) -> None:
         self.added.append(obj)
+        if hasattr(obj, "fact_id"):
+            self.by_pk[(obj.__class__, obj.fact_id)] = obj
+        if hasattr(obj, "review_item_id"):
+            self.by_pk[(obj.__class__, obj.review_item_id)] = obj
+
+    def get(self, model, pk):
+        return self.by_pk.get((model, pk))
 
 
 def test_build_fact_row_marks_complete_xml_fact_as_accepted() -> None:
@@ -187,3 +195,41 @@ def test_persist_owner_submission_is_idempotent_in_same_session() -> None:
 
     assert first_count == 3
     assert len(session.added) == 3
+
+
+def test_persist_owner_submission_skips_db_existing_rows() -> None:
+    parsed_submission = ParsedOwnershipSubmission(
+        accession_no="0000320193-24-000012",
+        document_filename="primary_doc.xml",
+        facts=[
+            ParsedOwnershipFact(
+                fact_name="reporting_owner_cik",
+                fact_value="",
+                parser_method="structured_xml",
+                snippet_text="",
+                snippet_locator="/ownershipDocument/reportingOwner/reportingOwnerId/rptOwnerCik",
+                document_filename="primary_doc.xml",
+                validation_results={"mandatory_present": False},
+            )
+        ],
+    )
+
+    existing_fact = build_fact_row(
+        filing_id="filing-1",
+        accession_no=parsed_submission.accession_no,
+        parsed_fact=parsed_submission.facts[0],
+    )
+    existing_review = build_review_item(
+        accession_no=parsed_submission.accession_no,
+        parsed_fact=parsed_submission.facts[0],
+    )
+
+    session = FakeSession()
+    session.by_pk[(existing_fact.__class__, existing_fact.fact_id)] = existing_fact
+    session.by_pk[(existing_review.__class__, existing_review.review_item_id)] = (
+        existing_review
+    )
+
+    persist_owner_submission(session, "filing-1", parsed_submission)
+
+    assert session.added == []

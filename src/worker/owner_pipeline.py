@@ -92,8 +92,16 @@ def persist_owner_submission(
             accession_no=parsed_submission.accession_no,
             parsed_fact=parsed_fact,
         )
+        session_get = getattr(session, "get", None)
+
         fact_key = ("fact", fact_row.fact_id)
         if fact_key in persisted_ids:
+            continue
+        if (
+            callable(session_get)
+            and session_get(ExtractedFact, fact_row.fact_id) is not None
+        ):
+            persisted_ids.add(fact_key)
             continue
 
         session.add(fact_row)
@@ -103,6 +111,12 @@ def persist_owner_submission(
             review_item = build_review_item(parsed_submission.accession_no, parsed_fact)
             review_key = ("review", review_item.review_item_id)
             if review_key in persisted_ids:
+                continue
+            if (
+                callable(session_get)
+                and session_get(ReviewQueueItem, review_item.review_item_id) is not None
+            ):
+                persisted_ids.add(review_key)
                 continue
             session.add(review_item)
             persisted_ids.add(review_key)
