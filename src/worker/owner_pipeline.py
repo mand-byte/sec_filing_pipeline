@@ -88,8 +88,23 @@ def update_ingestion_state(
     accession_no: str,
     acceptance_datetime_utc: datetime,
 ) -> IngestionState:
-    state.last_accession_no = accession_no
-    state.last_acceptance_datetime_utc = acceptance_datetime_utc
+    current_acceptance = state.last_acceptance_datetime_utc
+    current_accession = state.last_accession_no or ""
+
+    should_advance = current_acceptance is None
+    if current_acceptance is not None:
+        if acceptance_datetime_utc > current_acceptance:
+            should_advance = True
+        elif (
+            acceptance_datetime_utc == current_acceptance
+            and accession_no > current_accession
+        ):
+            should_advance = True
+
+    if should_advance:
+        state.last_accession_no = accession_no
+        state.last_acceptance_datetime_utc = acceptance_datetime_utc
+
     return state
 
 

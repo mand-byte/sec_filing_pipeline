@@ -112,3 +112,23 @@ def test_update_ingestion_state_advances_cursor_values() -> None:
 
     assert updated.last_acceptance_datetime_utc == acceptance
     assert updated.last_accession_no == "0000320193-24-000012"
+
+
+def test_update_ingestion_state_keeps_newer_existing_cursor() -> None:
+    newer_acceptance = datetime(2024, 4, 4, 9, 0, tzinfo=timezone.utc)
+    state = IngestionState(
+        cik="0000320193",
+        route_type="owner",
+        last_acceptance_datetime_utc=newer_acceptance,
+        last_accession_no="0000320193-24-000050",
+    )
+
+    older_acceptance = datetime(2024, 4, 3, 12, 30, tzinfo=timezone.utc)
+    updated = update_ingestion_state(
+        state=state,
+        accession_no="0000320193-24-000012",
+        acceptance_datetime_utc=older_acceptance,
+    )
+
+    assert updated.last_acceptance_datetime_utc == newer_acceptance
+    assert updated.last_accession_no == "0000320193-24-000050"
