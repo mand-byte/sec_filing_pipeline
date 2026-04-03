@@ -209,13 +209,25 @@ class DecisionService:
                 failure_reason=None,
             )
         except Exception as exc:  # noqa: BLE001
+            is_not_applicable = (
+                isinstance(exc, ValueError)
+                and str(exc) == "deterministic parser not applicable"
+            )
             self._append_attempt(
                 document=document,
                 parser_method=ParserMethod.DETERMINISTIC_RULE.value,
                 status=ParseAttemptStatus.FAILED.value,
-                failure_type=ParseFailureType.PARSE.value,
+                failure_type=(
+                    ParseFailureType.LOGIC.value
+                    if is_not_applicable
+                    else ParseFailureType.PARSE.value
+                ),
                 error_message=str(exc),
-                fallback_reason=FallbackReason.ALL_METHODS_FAILED.value,
+                fallback_reason=(
+                    FallbackReason.DETERMINISTIC_RULE_NOT_APPLICABLE.value
+                    if is_not_applicable
+                    else FallbackReason.DETERMINISTIC_RULE_EXCEPTION.value
+                ),
                 decision_state=DecisionState.NEEDS_REVIEW.value,
                 selected_candidate=False,
             )

@@ -1,7 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from src.domain.enums import DecisionState, ParserMethod, RouteType
+from src.domain.enums import (
+    DecisionState,
+    FallbackReason,
+    ParseFailureType,
+    ParserMethod,
+    RouteType,
+)
 from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
 from src.worker.decision_service import DecisionService, ParseRouteAttempt
 
@@ -150,7 +156,7 @@ def test_decision_chain_all_methods_fail_returns_needs_review_with_failure_detai
         raise ValueError("invalid xml")
 
     def deterministic_parser(_: str) -> ParsedOwnershipSubmission:
-        raise ValueError("not applicable")
+        raise ValueError("deterministic parser not applicable")
 
     service = DecisionService(
         structured_parser=structured_parser,
@@ -163,13 +169,48 @@ def test_decision_chain_all_methods_fail_returns_needs_review_with_failure_detai
 
     assert result.final_decision_state == DecisionState.NEEDS_REVIEW.value
     assert result.selected_parser_method is None
-    assert result.failure_reason == "all_methods_failed"
+    assert result.failure_reason == FallbackReason.ALL_METHODS_FAILED.value
     assert [row.parser_method for row in repo.rows] == [
         ParserMethod.STRUCTURED_XML.value,
         ParserMethod.DETERMINISTIC_RULE.value,
     ]
     assert [row.status for row in repo.rows] == ["failed", "failed"]
-    assert repo.rows[0].failure_type == "parse"
-    assert repo.rows[1].fallback_reason == "all_methods_failed"
+    assert repo.rows[0].failure_type == ParseFailureType.PARSE.value
+    assert repo.rows[1].failure_type == ParseFailureType.LOGIC.value
+    assert (
+        repo.rows[1].fallback_reason
+        == FallbackReason.DETERMINISTIC_RULE_NOT_APPLICABLE.value
+    )
     assert repo.rows[1].decision_state == DecisionState.NEEDS_REVIEW.value
     assert result.route_type == RouteType.OWNER.value
+
+
+def test_decision_chain_deterministic_exception_logs_exception_fallback_reason() -> (
+    None
+):
+    repo = _FakeAttemptRepo()
+
+    def structured_parser(_: str) -> ParsedOwnershipSubmission:
+        raise ValueError("invalid xml")
+
+    def deterministic_parser(_: str) -> ParsedOwnershipSubmission:
+        raise RuntimeError("boom")
+
+    service = DecisionService(
+        structured_parser=structured_parser,
+        deterministic_parser=deterministic_parser,
+        attempt_log_repo=repo,
+        now_fn=lambda: datetime(2024, 4, 3, 12, 0, tzinfo=timezone.utc),
+    )
+
+    result = service.parse_document(document=_doc(), document_text="ownership text")
+
+    assert result.final_decision_state == DecisionState.NEEDS_REVIEW.value
+    assert result.selected_parser_method is None
+    assert result.failure_reason == FallbackReason.ALL_METHODS_FAILED.value
+    assert [row.status for row in repo.rows] == ["failed", "failed"]
+    assert repo.rows[1].failure_type == ParseFailureType.PARSE.value
+    assert (
+        repo.rows[1].fallback_reason
+        == FallbackReason.DETERMINISTIC_RULE_EXCEPTION.value
+    )
