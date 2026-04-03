@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     RAW_STORE_DIR: Path = Path("./raw_data")
 
     SEC_API_USER_AGENT: str = "Sample Company (contact@sample.com)"
-    SEC_RATE_LIMIT_PER_SEC: float = 10.0
+    SEC_RATE_LIMIT_PER_SECOND: float = 10.0
 
 
 settings = Settings()
