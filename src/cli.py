@@ -31,8 +31,8 @@ def parse_log_query(
     from_utc: str | None = typer.Option(None, "--from-utc"),
     to_utc: str | None = typer.Option(None, "--to-utc"),
     failure_type: str | None = typer.Option(None, "--failure-type"),
-    limit: int = typer.Option(100, "--limit"),
-    offset: int = typer.Option(0, "--offset"),
+    limit: int = typer.Option(100, "--limit", min=1),
+    offset: int = typer.Option(0, "--offset", min=0),
 ) -> None:
     typer.echo(
         "query parse route logs by filters "
@@ -43,8 +43,8 @@ def parse_log_query(
 
 @parse_log_app.command("timeline")
 def parse_log_timeline(
-    accession_no: str | None = typer.Option(None, "--accession-no"),
-    document_id: str | None = typer.Option(None, "--document-id"),
+    accession_no: str = typer.Option(..., "--accession-no"),
+    document_id: str = typer.Option(..., "--document-id"),
 ) -> None:
     typer.echo(
         "show parse route decision timeline "
