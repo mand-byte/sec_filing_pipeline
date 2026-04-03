@@ -1,3 +1,6 @@
+import pytest
+from lxml import etree
+
 from src.parsers.ownership_xml import parse_ownership_xml
 
 
@@ -41,3 +44,23 @@ def test_parse_ownership_xml_emits_xpath_backed_facts() -> None:
         "/nonDerivativeTransaction/transactionAmounts/transactionShares/value"
     )
     assert shares_fact.parser_method == "structured_xml"
+
+
+def test_parse_ownership_xml_rejects_entity_expansion_payload() -> None:
+    xml_with_entity = """
+<!DOCTYPE ownershipDocument [
+  <!ENTITY xxe "expanded">
+]>
+<ownershipDocument>
+  <issuer>
+    <issuerCik>&xxe;</issuerCik>
+  </issuer>
+</ownershipDocument>
+"""
+
+    with pytest.raises(etree.XMLSyntaxError):
+        parse_ownership_xml(
+            accession_no="0000320193-24-000012",
+            document_filename="primary_doc.xml",
+            xml_text=xml_with_entity,
+        )

@@ -59,6 +59,25 @@ def test_build_review_item_for_missing_mandatory_value() -> None:
     assert review_item.status == "open"
 
 
+def test_build_review_item_for_non_mandatory_validation_failure() -> None:
+    parsed_fact = ParsedOwnershipFact(
+        fact_name="transaction_shares",
+        fact_value="12x",
+        parser_method="structured_xml",
+        snippet_text="12x",
+        snippet_locator="/ownershipDocument/nonDerivativeTable/nonDerivativeTransaction/transactionAmounts/transactionShares/value",
+        document_filename="primary_doc.xml",
+        validation_results={"mandatory_present": True, "is_numeric": False},
+    )
+
+    review_item = build_review_item(
+        accession_no="0000320193-24-000012",
+        parsed_fact=parsed_fact,
+    )
+
+    assert review_item.review_reason == "source_conflict"
+
+
 def test_persist_owner_submission_adds_facts_and_review_items() -> None:
     parsed_submission = ParsedOwnershipSubmission(
         accession_no="0000320193-24-000012",
@@ -132,3 +151,39 @@ def test_update_ingestion_state_keeps_newer_existing_cursor() -> None:
 
     assert updated.last_acceptance_datetime_utc == newer_acceptance
     assert updated.last_accession_no == "0000320193-24-000050"
+
+
+def test_persist_owner_submission_is_idempotent_in_same_session() -> None:
+    parsed_submission = ParsedOwnershipSubmission(
+        accession_no="0000320193-24-000012",
+        document_filename="primary_doc.xml",
+        facts=[
+            ParsedOwnershipFact(
+                fact_name="issuer_cik",
+                fact_value="0000320193",
+                parser_method="structured_xml",
+                snippet_text="0000320193",
+                snippet_locator="/ownershipDocument/issuer/issuerCik",
+                document_filename="primary_doc.xml",
+                validation_results={"mandatory_present": True},
+            ),
+            ParsedOwnershipFact(
+                fact_name="reporting_owner_cik",
+                fact_value="",
+                parser_method="structured_xml",
+                snippet_text="",
+                snippet_locator="/ownershipDocument/reportingOwner/reportingOwnerId/rptOwnerCik",
+                document_filename="primary_doc.xml",
+                validation_results={"mandatory_present": False},
+            ),
+        ],
+    )
+
+    session = FakeSession()
+    persist_owner_submission(session, "filing-1", parsed_submission)
+    first_count = len(session.added)
+
+    persist_owner_submission(session, "filing-1", parsed_submission)
+
+    assert first_count == 3
+    assert len(session.added) == 3

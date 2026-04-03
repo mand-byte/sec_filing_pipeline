@@ -38,7 +38,16 @@ def parse_ownership_xml(
     document_filename: str,
     xml_text: str,
 ) -> ParsedOwnershipSubmission:
-    root = etree.fromstring(xml_text.encode("utf-8"))
+    parser = etree.XMLParser(
+        resolve_entities=False,
+        no_network=True,
+        recover=False,
+        huge_tree=False,
+    )
+    root = etree.fromstring(xml_text.encode("utf-8"), parser=parser)
+    if root.getroottree().docinfo.doctype:
+        raise etree.XMLSyntaxError("DOCTYPE is not allowed", 0, 0, 0)
+
     fields = {
         "issuer_cik": "/ownershipDocument/issuer/issuerCik",
         "reporting_owner_cik": "/ownershipDocument/reportingOwner/reportingOwnerId/rptOwnerCik",

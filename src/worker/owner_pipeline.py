@@ -50,13 +50,22 @@ def build_fact_row(
 def build_review_item(
     accession_no: str, parsed_fact: ParsedOwnershipFact
 ) -> ReviewQueueItem:
+    mandatory_present = bool(
+        parsed_fact.validation_results.get("mandatory_present", True)
+    )
+    review_reason = (
+        ReviewReason.MANDATORY_FIELD_MISSING.value
+        if not mandatory_present
+        else ReviewReason.SOURCE_CONFLICT.value
+    )
+
     return ReviewQueueItem(
         review_item_id=_fact_id(
             accession_no, parsed_fact.fact_name, parsed_fact.snippet_locator
         ),
         accession_no=accession_no,
         fact_id=None,
-        review_reason=ReviewReason.MANDATORY_FIELD_MISSING.value,
+        review_reason=review_reason,
         payload={
             "fact_name": parsed_fact.fact_name,
             "snippet_locator": parsed_fact.snippet_locator,
@@ -72,15 +81,31 @@ def persist_owner_submission(
     filing_id: str,
     parsed_submission: ParsedOwnershipSubmission,
 ) -> None:
+    persisted_ids = getattr(session, "_owner_persisted_ids", None)
+    if persisted_ids is None:
+        persisted_ids = set()
+        setattr(session, "_owner_persisted_ids", persisted_ids)
+
     for parsed_fact in parsed_submission.facts:
         fact_row = build_fact_row(
             filing_id=filing_id,
             accession_no=parsed_submission.accession_no,
             parsed_fact=parsed_fact,
         )
+        fact_key = ("fact", fact_row.fact_id)
+        if fact_key in persisted_ids:
+            continue
+
         session.add(fact_row)
+        persisted_ids.add(fact_key)
+
         if fact_row.decision_state == DecisionState.NEEDS_REVIEW.value:
-            session.add(build_review_item(parsed_submission.accession_no, parsed_fact))
+            review_item = build_review_item(parsed_submission.accession_no, parsed_fact)
+            review_key = ("review", review_item.review_item_id)
+            if review_key in persisted_ids:
+                continue
+            session.add(review_item)
+            persisted_ids.add(review_key)
 
 
 def update_ingestion_state(
