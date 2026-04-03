@@ -3,30 +3,31 @@ from enum import Enum
 
 
 class RouteType(str, Enum):
-    ISSUER = "ISSUER"
-    OWNER = "OWNER"
-    HOLDINGS = "HOLDINGS"
+    ISSUER = "issuer"
+    OWNER = "owner"
+    HOLDINGS = "holdings"
 
 
 class ParserMethod(str, Enum):
-    XML = "XML"
-    HTML = "HTML"
-    TEXT = "TEXT"
+    STRUCTURED_XML = "structured_xml"
+    DETERMINISTIC_RULE = "deterministic_rule"
 
 
 class DecisionState(str, Enum):
-    AUTO = "AUTO"
-    REVIEW = "REVIEW"
+    ACCEPTED = "accepted"
+    ACCEPTED_WITH_WARNING = "accepted_with_warning"
+    NEEDS_REVIEW = "needs_review"
+    DROPPED = "dropped"
 
 
 class ReviewReason(str, Enum):
-    UNSUPPORTED_FORM = "UNSUPPORTED_FORM"
-    PARSE_ERROR = "PARSE_ERROR"
-    MISSING_EVENT_TIME = "MISSING_EVENT_TIME"
+    MANDATORY_FIELD_MISSING = "mandatory_field_missing"
+    SOURCE_CONFLICT = "source_conflict"
+    AMENDMENT_CONFLICT = "amendment_conflict"
 
 
 @dataclass(frozen=True, slots=True)
 class CanonicalForm:
-    raw: str
-    base: str
+    form_type_raw: str
+    form_type_base: str
     is_amendment: bool
