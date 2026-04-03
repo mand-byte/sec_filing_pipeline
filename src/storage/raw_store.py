@@ -23,10 +23,24 @@ class RawStore:
     def __init__(self, root: Path) -> None:
         self.root = root
 
+    @staticmethod
+    def _validate_path_component(value: str, field_name: str) -> str:
+        if value in {"", ".", ".."}:
+            raise ValueError(f"Invalid {field_name}: {value!r}")
+        if "/" in value or "\\" in value:
+            raise ValueError(f"Invalid {field_name}: {value!r}")
+        if Path(value).is_absolute():
+            raise ValueError(f"Invalid {field_name}: {value!r}")
+        return value
+
     def persist_document(self, artifact: RawArtifact) -> StoredArtifact:
+        cik = self._validate_path_component(artifact.cik, "cik")
+        accession_no = self._validate_path_component(
+            artifact.accession_no, "accession_no"
+        )
         sha256_hex = hashlib.sha256(artifact.content).hexdigest()
         suffix = Path(artifact.filename).suffix or ".bin"
-        documents_dir = self.root / artifact.cik / artifact.accession_no / "documents"
+        documents_dir = self.root / cik / accession_no / "documents"
         documents_dir.mkdir(parents=True, exist_ok=True)
         path = documents_dir / f"{sha256_hex}{suffix}"
         path.write_bytes(artifact.content)
@@ -46,7 +60,13 @@ class RawStore:
         suffix: str,
         content: str,
     ) -> Path:
-        snapshots_dir = self.root / cik / accession_no / "snapshots"
+        normalized_cik = self._validate_path_component(cik, "cik")
+        normalized_accession_no = self._validate_path_component(
+            accession_no, "accession_no"
+        )
+        snapshots_dir = (
+            self.root / normalized_cik / normalized_accession_no / "snapshots"
+        )
         snapshots_dir.mkdir(parents=True, exist_ok=True)
 
         stem = Path(filename).stem

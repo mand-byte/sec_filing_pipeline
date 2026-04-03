@@ -1,6 +1,8 @@
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from src.storage.raw_store import RawArtifact, RawStore
 
 
@@ -62,3 +64,39 @@ def test_persist_text_snapshot_writes_snapshot_with_suffix_and_content(
     assert path == expected_path
     assert path.suffix == ".txt"
     assert path.read_text(encoding="utf-8") == "owner filing summary"
+
+
+@pytest.mark.parametrize(
+    "invalid_cik", ["", ".", "..", "/abs", "bad/value", r"bad\\value"]
+)
+def test_persist_document_rejects_invalid_cik(tmp_path: Path, invalid_cik: str) -> None:
+    store = RawStore(tmp_path)
+    artifact = RawArtifact(
+        cik=invalid_cik,
+        accession_no="0000320193-26-000001",
+        filename="ownership.xml",
+        content_type="text/xml",
+        content=b"document",
+    )
+
+    with pytest.raises(ValueError):
+        store.persist_document(artifact)
+
+
+@pytest.mark.parametrize(
+    "invalid_accession_no", ["", ".", "..", "/abs", "bad/value", r"bad\\value"]
+)
+def test_persist_text_snapshot_rejects_invalid_accession_no(
+    tmp_path: Path,
+    invalid_accession_no: str,
+) -> None:
+    store = RawStore(tmp_path)
+
+    with pytest.raises(ValueError):
+        store.persist_text_snapshot(
+            cik="0000320193",
+            accession_no=invalid_accession_no,
+            filename="filing-summary",
+            suffix="txt",
+            content="owner filing summary",
+        )
