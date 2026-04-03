@@ -37,7 +37,15 @@ def test_phase3_enums_match_fixed_taxonomy() -> None:
         "failed",
         "skipped",
     }
-    assert "all_methods_failed" in {item.value for item in FallbackReason}
+    assert {item.value for item in FallbackReason} == {
+        "structured_xml_exception",
+        "structured_xml_missing_mandatory",
+        "structured_xml_numeric_invalid",
+        "structured_xml_empty_value",
+        "deterministic_rule_exception",
+        "deterministic_rule_not_applicable",
+        "all_methods_failed",
+    }
 
 
 def test_parse_route_log_table_has_required_columns() -> None:
@@ -67,3 +75,11 @@ def test_parse_route_log_table_has_required_columns() -> None:
         "selected_candidate",
     }
     assert expected <= set(table.columns.keys())
+    assert {column.name for column in table.primary_key.columns} == {"id"}
+
+    index_names = {index.name for index in table.indexes}
+    assert {
+        "ix_parse_route_log_doc_type_attempted",
+        "ix_parse_route_log_failure_attempted",
+        "ix_parse_route_log_timeline",
+    } <= index_names
