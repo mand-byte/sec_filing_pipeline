@@ -1,12 +1,6 @@
-import logging
 import typer
 
 app = typer.Typer(help="SEC Filing Pipeline")
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 
 @app.command("init-db")
@@ -20,8 +14,8 @@ def owner_sync() -> None:
 
 
 @app.command("replay-accession")
-def replay_accession() -> None:
-    raise NotImplementedError("replay-accession command is not implemented yet")
+def replay_accession(accession_no: str) -> None:
+    raise NotImplementedError(accession_no)
 
 
 if __name__ == "__main__":
