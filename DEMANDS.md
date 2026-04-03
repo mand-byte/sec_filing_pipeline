@@ -440,3 +440,31 @@
 ## 一段可直接发给 agent 的任务说明
 
 请构建一个 precision-first 的 SEC filing backend。系统必须支持 cold-start 与 incremental ingestion，按 issuer / owner / holdings(13F) 三条 route 抓取 SEC filings，先保存 raw filing 与 document，再做标准化、解析、security mapping 与 ClickHouse append-only 落表。必须保留 original 与 amendment，使用 ETL-side deterministic dedup 保证幂等，不能依赖 ClickHouse UPDATE/FINAL。解析必须采用受控 fallback：structured XBRL/XML > official table > deterministic rule parser > spaCy > LLM structuring。目标是最大化真实正确率并最小化人工复核；不确定时宁可不产出 fact。所有 fact 必须带 evidence snippet、locator、parser_method、confidence、decision_state。spaCy 微调是正式能力，要支持训练数据沉淀、模型版本化、shadow evaluation 与 reviewed feedback loop，用来持续降低 review rate。LLM 仅用于对已定位 narrative snippet 做 schema-constrained structuring，不得用于 SEC 抓取、truth verification、security mapping final decision 或整篇 filing 的自主抽取。基础能力与路线要求沿用现有方案中的 cold-start/incremental、raw persistence、13F 独立 route、append-only、evidence/confidence、amendment preservation 等约束。 
+数据源来为clickhouse，data_quant.us_stock_universe
+其结构为
+CREATE TABLE IF NOT EXISTS us_stock_universe
+        (
+            ticker String,
+            composite_figi FixedString(12),
+            name                 String,
+            cik                  FixedString(10),
+            active               UInt8 DEFAULT 0,
+            base_currency_name   Nullable(String),
+            base_currency_symbol Nullable(FixedString(3)),
+            currency_name        Nullable(String),
+            currency_symbol      Nullable(FixedString(3)),
+            delisted_utc         Nullable(DateTime64(3, 'UTC')),
+            last_updated_utc     DateTime64(3, 'UTC'),
+            locale               LowCardinality(String),
+            market               LowCardinality(String),
+            primary_exchange     Nullable(String),
+            share_class_figi     Nullable(FixedString(12)),
+            type                 Nullable(String),
+            update_time DateTime64(3, 'UTC') DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(update_time)
+        ORDER BY (composite_figi)
+上表的数据只有CS和ADR,已排除goog,googl这种多个ticker对应一个figi的情况。figi和cik是一一对应的。对于active=0的个股，sec文档提交时间小于等于delisted_utc，之后的提交时间的文件不用处理。        
+本项目不要求一定要使用clickhouse,也可以考虑使用postgresql等关系数据库。
+本项目唯一要求是对于量化需要的数据都抓取，并且要保证其真实准确度和最少人工修正。
+
+
