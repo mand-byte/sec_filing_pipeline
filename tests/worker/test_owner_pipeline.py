@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from src.domain.enums import ParserMethod
 from src.storage.parse_route_log_repo import ParseRouteLogRepository
 from src.models.state import IngestionState
 from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
@@ -275,6 +276,8 @@ def test_replay_creates_new_parse_route_log_rows_with_new_run_id() -> None:
         xml_text=xml_text,
     )
 
+    keys_after_first_run = set(session.by_pk)
+
     process_owner_document(
         session=session,
         parse_route_logger=parse_route_logger,
@@ -296,4 +299,73 @@ def test_replay_creates_new_parse_route_log_rows_with_new_run_id() -> None:
 
     assert len(session.rows) == 2
     assert {row.run_id for row in session.rows} == {"run-1", "run-2"}
-    assert len(session.added) == 3
+    assert set(session.by_pk) == keys_after_first_run
+
+
+def test_process_owner_document_fallback_logs_ordered_attempt_timeline() -> None:
+    xml_text = "ownership text"
+    session = FakeSession()
+    parse_route_logger = ParseRouteLogRepository(session)
+    attempted_at = datetime(2024, 4, 3, 13, 0, tzinfo=timezone.utc)
+
+    def structured_stub(_: str) -> ParsedOwnershipSubmission:
+        return ParsedOwnershipSubmission(
+            accession_no="0000320193-24-000012",
+            document_filename="primary_doc.xml",
+            facts=[
+                ParsedOwnershipFact(
+                    fact_name="issuer_cik",
+                    fact_value="",
+                    parser_method=ParserMethod.STRUCTURED_XML.value,
+                    snippet_text="",
+                    snippet_locator="/ownershipDocument/issuer/issuerCik",
+                    document_filename="primary_doc.xml",
+                    validation_results={"mandatory_present": False},
+                )
+            ],
+        )
+
+    def deterministic_stub(_: str) -> ParsedOwnershipSubmission:
+        return ParsedOwnershipSubmission(
+            accession_no="0000320193-24-000012",
+            document_filename="primary_doc.txt",
+            facts=[
+                ParsedOwnershipFact(
+                    fact_name="issuer_cik",
+                    fact_value="0000320193",
+                    parser_method=ParserMethod.DETERMINISTIC_RULE.value,
+                    snippet_text="Issuer CIK: 0000320193",
+                    snippet_locator="line:1",
+                    document_filename="primary_doc.txt",
+                    validation_results={"mandatory_present": True},
+                )
+            ],
+        )
+
+    process_owner_document(
+        session=session,
+        parse_route_logger=parse_route_logger,
+        run_id="run-1",
+        attempted_at_utc=attempted_at,
+        filing_id="filing-1",
+        accession_no="0000320193-24-000012",
+        cik="0000320193",
+        document_id="doc-1",
+        document_type="4",
+        document_filename="primary_doc.xml",
+        document_path="raw/0000320193/0000320193-24-000012/doc-1.xml",
+        snapshot_path=None,
+        source_url="https://www.sec.gov/Archives/edgar/data/320193/000032019324000012/xslF345X05/doc.xml",
+        sha256_hex="a" * 64,
+        byte_length=len(xml_text.encode("utf-8")),
+        xml_text=xml_text,
+        structured_parser=structured_stub,
+        deterministic_parser=deterministic_stub,
+    )
+
+    assert [row.parser_method for row in session.rows] == [
+        ParserMethod.STRUCTURED_XML.value,
+        ParserMethod.DETERMINISTIC_RULE.value,
+    ]
+    assert session.rows[0].attempted_at_utc == attempted_at
+    assert session.rows[1].attempted_at_utc > session.rows[0].attempted_at_utc

@@ -1,6 +1,8 @@
-from datetime import datetime
-from hashlib import sha1
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timedelta
+from hashlib import sha1
+from typing import Callable
 
 from src.domain.enums import DecisionState, ReviewReason, RouteType
 from src.models.filing import ExtractedFact
@@ -61,6 +63,8 @@ def process_owner_document(
     sha256_hex: str,
     byte_length: int,
     xml_text: str,
+    structured_parser: Callable[[str], ParsedOwnershipSubmission] | None = None,
+    deterministic_parser: Callable[[str], ParsedOwnershipSubmission] | None = None,
 ) -> DecisionResult:
     document = ParseDocument(
         filing_id=filing_id,
@@ -77,19 +81,34 @@ def process_owner_document(
         xml_text=xml_text,
     )
 
-    decision_service = DecisionService(
-        structured_parser=lambda text: parse_ownership_xml(
+    effective_structured_parser = structured_parser or (
+        lambda text: parse_ownership_xml(
             accession_no=document.accession_no,
             document_filename=document.document_filename,
             xml_text=text,
-        ),
-        deterministic_parser=lambda text: parse_ownership_deterministic(
+        )
+    )
+    effective_deterministic_parser = deterministic_parser or (
+        lambda text: parse_ownership_deterministic(
             accession_no=document.accession_no,
             document_filename=document.document_filename,
             source_text=text,
-        ),
+        )
+    )
+
+    attempt_sequence = 0
+
+    def _next_attempted_at() -> datetime:
+        nonlocal attempt_sequence
+        timestamp = attempted_at_utc + timedelta(microseconds=attempt_sequence)
+        attempt_sequence += 1
+        return timestamp
+
+    decision_service = DecisionService(
+        structured_parser=effective_structured_parser,
+        deterministic_parser=effective_deterministic_parser,
         attempt_log_repo=parse_route_logger,
-        now_fn=lambda: attempted_at_utc,
+        now_fn=_next_attempted_at,
     )
 
     decision_result = decision_service.parse_document(
