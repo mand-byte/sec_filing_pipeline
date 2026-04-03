@@ -6,11 +6,17 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "clickhouse-connect",
+    "lxml",
     "psycopg[binary]",
     "pydantic",
     "pydantic-settings",
     "sqlalchemy",
     "typer>=0.15.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
 ]
 
 [build-system]

@@ -1,5 +1,8 @@
-def main():
-    print("Hello from sec-filing-pipeline!")
+from src.cli import app
+
+
+def main() -> None:
+    app()
 
 
 if __name__ == "__main__":
