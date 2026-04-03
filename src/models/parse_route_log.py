@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
@@ -39,6 +39,14 @@ class ParseRouteLog(Base):
     selected_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
+        CheckConstraint(
+            "status != 'failed' OR (failure_type IS NOT NULL AND error_message IS NOT NULL)",
+            name="ck_parse_route_log_failed_requires_failure_and_error",
+        ),
+        CheckConstraint(
+            "status != 'success' OR failure_type IS NULL",
+            name="ck_parse_route_log_success_has_no_failure_type",
+        ),
         Index(
             "ix_parse_route_log_doc_type_attempted", "document_type", "attempted_at_utc"
         ),

@@ -83,3 +83,9 @@ def test_parse_route_log_table_has_required_columns() -> None:
         "ix_parse_route_log_failure_attempted",
         "ix_parse_route_log_timeline",
     } <= index_names
+
+    check_names = {constraint.name for constraint in table.constraints}
+    assert {
+        "ck_parse_route_log_failed_requires_failure_and_error",
+        "ck_parse_route_log_success_has_no_failure_type",
+    } <= check_names

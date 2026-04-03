@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from src.models.base import Base
+from src.models.parse_route_log import ParseRouteLog
 from src.storage.parse_route_log_repo import ParseRouteLogRepository
 
 
@@ -229,3 +234,169 @@ def test_timeline_orders_equal_timestamps_by_id() -> None:
     )
 
     assert [row.id for row in rows] == ["a", "b", "c"]
+
+
+def test_sqlalchemy_append_and_query_persist_and_filter() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, future=True)()
+    repo = ParseRouteLogRepository(session)
+    base_time = datetime(2024, 4, 3, 12, 0, tzinfo=timezone.utc)
+
+    repo.append(
+        ParseRouteLog(
+            id="id-1",
+            run_id="run-1",
+            route_type="owner",
+            filing_id="filing-1",
+            accession_no="0000320193-24-000012",
+            cik="0000320193",
+            document_id="doc-1",
+            document_type="4",
+            document_filename="ownership.xml",
+            document_path="raw/path/one.xml",
+            snapshot_path=None,
+            source_url=None,
+            sha256_hex="a" * 64,
+            byte_length=10,
+            parser_method="structured_xml",
+            attempted_at_utc=base_time,
+            status="failed",
+            failure_type="parse",
+            error_message="parse error",
+            fallback_reason="structured_xml_exception",
+            decision_state="needs_review",
+            selected_candidate=False,
+        )
+    )
+    repo.append(
+        ParseRouteLog(
+            id="id-2",
+            run_id="run-1",
+            route_type="owner",
+            filing_id="filing-1",
+            accession_no="0000320193-24-000012",
+            cik="0000320193",
+            document_id="doc-2",
+            document_type="4",
+            document_filename="ownership2.xml",
+            document_path="raw/path/two.xml",
+            snapshot_path=None,
+            source_url=None,
+            sha256_hex="b" * 64,
+            byte_length=20,
+            parser_method="deterministic_rule",
+            attempted_at_utc=base_time + timedelta(minutes=1),
+            status="success",
+            failure_type=None,
+            error_message=None,
+            fallback_reason=None,
+            decision_state="accepted",
+            selected_candidate=True,
+        )
+    )
+    session.commit()
+
+    rows = repo.query(
+        document_type="4",
+        start_utc=base_time - timedelta(minutes=1),
+        end_utc=base_time + timedelta(minutes=2),
+        failure_type="parse",
+        limit=10,
+        offset=0,
+    )
+
+    assert [row.id for row in rows] == ["id-1"]
+
+
+def test_sqlalchemy_timeline_orders_by_attempted_at_then_id() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, future=True)()
+    repo = ParseRouteLogRepository(session)
+    base_time = datetime(2024, 4, 3, 12, 0, tzinfo=timezone.utc)
+
+    session.add_all(
+        [
+            ParseRouteLog(
+                id="c",
+                run_id="run-1",
+                route_type="owner",
+                filing_id="filing-1",
+                accession_no="0000320193-24-000012",
+                cik="0000320193",
+                document_id="doc-1",
+                document_type="4",
+                document_filename="c.xml",
+                document_path="raw/c.xml",
+                snapshot_path=None,
+                source_url=None,
+                sha256_hex="c" * 64,
+                byte_length=10,
+                parser_method="structured_xml",
+                attempted_at_utc=base_time,
+                status="failed",
+                failure_type="logic",
+                error_message="logic",
+                fallback_reason="structured_xml_missing_mandatory",
+                decision_state="needs_review",
+                selected_candidate=False,
+            ),
+            ParseRouteLog(
+                id="a",
+                run_id="run-1",
+                route_type="owner",
+                filing_id="filing-1",
+                accession_no="0000320193-24-000012",
+                cik="0000320193",
+                document_id="doc-1",
+                document_type="4",
+                document_filename="a.xml",
+                document_path="raw/a.xml",
+                snapshot_path=None,
+                source_url=None,
+                sha256_hex="a" * 64,
+                byte_length=10,
+                parser_method="structured_xml",
+                attempted_at_utc=base_time,
+                status="failed",
+                failure_type="logic",
+                error_message="logic",
+                fallback_reason="structured_xml_missing_mandatory",
+                decision_state="needs_review",
+                selected_candidate=False,
+            ),
+            ParseRouteLog(
+                id="b",
+                run_id="run-1",
+                route_type="owner",
+                filing_id="filing-1",
+                accession_no="0000320193-24-000012",
+                cik="0000320193",
+                document_id="doc-1",
+                document_type="4",
+                document_filename="b.xml",
+                document_path="raw/b.xml",
+                snapshot_path=None,
+                source_url=None,
+                sha256_hex="b" * 64,
+                byte_length=10,
+                parser_method="deterministic_rule",
+                attempted_at_utc=base_time + timedelta(minutes=1),
+                status="success",
+                failure_type=None,
+                error_message=None,
+                fallback_reason=None,
+                decision_state="needs_review",
+                selected_candidate=True,
+            ),
+        ]
+    )
+    session.commit()
+
+    rows = repo.timeline(
+        accession_no="0000320193-24-000012",
+        document_id="doc-1",
+    )
+
+    assert [row.id for row in rows] == ["a", "c", "b"]

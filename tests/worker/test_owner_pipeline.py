@@ -1,14 +1,21 @@
 from datetime import datetime, timezone
 
 from src.domain.enums import ParserMethod
-from src.storage.parse_route_log_repo import ParseRouteLogRepository
 from src.models.state import IngestionState
 from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
+from src.storage.parse_route_log_repo import ParseRouteLogRepository
+from src.storage.raw_store import RawStore
+from src.storage.sec_download_adapter import (
+    DownloadedAttachment,
+    DownloadedFilingBundle,
+)
 from src.worker.owner_pipeline import (
     build_fact_row,
     build_review_item,
+    ingest_downloaded_owner_filing_bundle,
     process_owner_document,
     persist_owner_submission,
+    replay_owner_accession,
     update_ingestion_state,
 )
 
@@ -369,3 +376,83 @@ def test_process_owner_document_fallback_logs_ordered_attempt_timeline() -> None
     ]
     assert session.rows[0].attempted_at_utc == attempted_at
     assert session.rows[1].attempted_at_utc > session.rows[0].attempted_at_utc
+
+
+def test_ingest_downloaded_owner_bundle_persists_and_processes_xml(tmp_path) -> None:
+    bundle = DownloadedFilingBundle(
+        cik="0000320193",
+        accession_no="0000320193-24-000012",
+        attachments=[
+            DownloadedAttachment(
+                filename="ownership.xml",
+                content_type="text/xml",
+                content=(
+                    "<ownershipDocument><issuer><issuerCik>0000320193</issuerCik></issuer>"
+                    "</ownershipDocument>"
+                ).encode("utf-8"),
+            ),
+            DownloadedAttachment(
+                filename="index.json",
+                content_type="application/json",
+                content=b"{}",
+            ),
+        ],
+    )
+
+    session = FakeSession()
+    repo = ParseRouteLogRepository(session)
+    raw_store = RawStore(tmp_path)
+
+    processed = ingest_downloaded_owner_filing_bundle(
+        session=session,
+        parse_route_logger=repo,
+        raw_store=raw_store,
+        bundle=bundle,
+        run_id="run-1",
+        attempted_at_utc=datetime(2024, 4, 3, 12, 30, tzinfo=timezone.utc),
+    )
+
+    assert processed == 1
+    assert len(session.rows) >= 1
+    assert list(tmp_path.rglob("*"))
+
+
+def test_replay_owner_accession_uses_download_adapter(tmp_path) -> None:
+    class _Adapter:
+        def download_owner_filing_bundle(
+            self, cik: str, accession_no: str
+        ) -> DownloadedFilingBundle:
+            assert cik == "0000320193"
+            assert accession_no == "0000320193-24-000012"
+            return DownloadedFilingBundle(
+                cik=cik,
+                accession_no=accession_no,
+                attachments=[
+                    DownloadedAttachment(
+                        filename="ownership.xml",
+                        content_type="text/xml",
+                        content=(
+                            "<ownershipDocument><issuer><issuerCik>0000320193</issuerCik></issuer>"
+                            "</ownershipDocument>"
+                        ).encode("utf-8"),
+                    )
+                ],
+            )
+
+    session = FakeSession()
+    repo = ParseRouteLogRepository(session)
+    raw_store = RawStore(tmp_path)
+
+    processed = replay_owner_accession(
+        session=session,
+        parse_route_logger=repo,
+        raw_store=raw_store,
+        sec_download_adapter=_Adapter(),
+        cik="0000320193",
+        accession_no="0000320193-24-000012",
+        run_id="run-2",
+        attempted_at_utc=datetime(2024, 4, 3, 12, 45, tzinfo=timezone.utc),
+    )
+
+    assert processed == 1
+    assert len(session.rows) >= 1

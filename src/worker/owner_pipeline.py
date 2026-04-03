@@ -11,6 +11,11 @@ from src.models.state import IngestionState
 from src.parsers.ownership_deterministic import parse_ownership_deterministic
 from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
 from src.parsers.ownership_xml import parse_ownership_xml
+from src.storage.raw_store import RawArtifact, RawStore
+from src.storage.sec_download_adapter import (
+    DownloadedAttachment,
+    DownloadedFilingBundle,
+)
 from src.worker.decision_service import DecisionResult, DecisionService
 
 
@@ -281,3 +286,92 @@ def update_ingestion_state(
 
 def default_ingestion_state(cik: str) -> IngestionState:
     return IngestionState(cik=cik, route_type=RouteType.OWNER.value)
+
+
+def _is_candidate_owner_attachment(attachment: DownloadedAttachment) -> bool:
+    filename = attachment.filename.lower()
+    content_type = attachment.content_type.lower()
+    return filename.endswith((".xml", ".txt")) or "xml" in content_type
+
+
+def _decode_attachment_text(attachment: DownloadedAttachment) -> str:
+    return attachment.content.decode("utf-8", errors="replace")
+
+
+def ingest_downloaded_owner_filing_bundle(
+    session,
+    parse_route_logger,
+    raw_store: RawStore,
+    bundle: DownloadedFilingBundle,
+    run_id: str,
+    attempted_at_utc: datetime,
+    structured_parser: Callable[[str], ParsedOwnershipSubmission] | None = None,
+    deterministic_parser: Callable[[str], ParsedOwnershipSubmission] | None = None,
+) -> int:
+    processed_documents = 0
+    for attachment in bundle.attachments:
+        stored = raw_store.persist_document(
+            RawArtifact(
+                cik=bundle.cik,
+                accession_no=bundle.accession_no,
+                filename=attachment.filename,
+                content_type=attachment.content_type,
+                content=attachment.content,
+            )
+        )
+
+        if not _is_candidate_owner_attachment(attachment):
+            continue
+
+        document_id = sha1(
+            f"{bundle.accession_no}:{attachment.filename}:{stored.sha256_hex}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        process_owner_document(
+            session=session,
+            parse_route_logger=parse_route_logger,
+            run_id=run_id,
+            attempted_at_utc=attempted_at_utc,
+            filing_id=f"owner:{bundle.cik}:{bundle.accession_no}",
+            accession_no=bundle.accession_no,
+            cik=bundle.cik,
+            document_id=document_id,
+            document_type="4",
+            document_filename=attachment.filename,
+            document_path=str(stored.path),
+            snapshot_path=None,
+            source_url=None,
+            sha256_hex=stored.sha256_hex,
+            byte_length=stored.byte_length,
+            xml_text=_decode_attachment_text(attachment),
+            structured_parser=structured_parser,
+            deterministic_parser=deterministic_parser,
+        )
+        processed_documents += 1
+
+    return processed_documents
+
+
+def replay_owner_accession(
+    session,
+    parse_route_logger,
+    raw_store: RawStore,
+    sec_download_adapter,
+    cik: str,
+    accession_no: str,
+    run_id: str,
+    attempted_at_utc: datetime,
+) -> int:
+    bundle = sec_download_adapter.download_owner_filing_bundle(
+        cik=cik,
+        accession_no=accession_no,
+    )
+    return ingest_downloaded_owner_filing_bundle(
+        session=session,
+        parse_route_logger=parse_route_logger,
+        raw_store=raw_store,
+        bundle=bundle,
+        run_id=run_id,
+        attempted_at_utc=attempted_at_utc,
+    )
