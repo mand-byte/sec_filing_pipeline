@@ -7,7 +7,7 @@ def test_discover_owner_filings_filters_out_seen_accessions() -> None:
     payload = {
         "filings": {
             "recent": {
-                "form": ["4", "4/A", "8-K"],
+                "form": ["4", "4/A", "5"],
                 "accessionNumber": [
                     "0000320193-24-000012",
                     "0000320193-24-000011",
@@ -18,7 +18,7 @@ def test_discover_owner_filings_filters_out_seen_accessions() -> None:
                     "2024-04-02T12:30:00Z",
                     "2024-04-01T12:30:00Z",
                 ],
-                "primaryDocument": ["doc4.xml", "doc4a.xml", "doc8k.htm"],
+                "primaryDocument": ["doc4.xml", "doc4a.xml", "doc5.xml"],
             }
         }
     }
@@ -29,6 +29,9 @@ def test_discover_owner_filings_filters_out_seen_accessions() -> None:
 
     filings = discover_owner_filings(cik="0000320193", payload=payload, cursor=cursor)
 
+    # Keeps the newer owner filing and drops both:
+    # - same timestamp with accession <= cursor
+    # - strictly earlier timestamp owner filing
     assert [item.accession_no for item in filings] == ["0000320193-24-000012"]
 
 
