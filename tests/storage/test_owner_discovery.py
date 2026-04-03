@@ -48,3 +48,20 @@ def test_discover_owner_filings_ignores_non_owner_forms() -> None:
     }
 
     assert discover_owner_filings(cik="0000320193", payload=payload, cursor=None) == []
+
+
+def test_discover_owner_filings_handles_uneven_sec_arrays() -> None:
+    payload = {
+        "filings": {
+            "recent": {
+                "form": ["4", "8-K"],
+                "accessionNumber": ["0000320193-24-000012"],
+                "acceptanceDateTime": ["2024-04-03T12:30:00Z"],
+                "primaryDocument": ["doc4.xml", "doc8k.htm"],
+            }
+        }
+    }
+
+    filings = discover_owner_filings(cik="0000320193", payload=payload, cursor=None)
+
+    assert [item.accession_no for item in filings] == ["0000320193-24-000012"]

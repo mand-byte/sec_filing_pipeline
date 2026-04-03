@@ -37,7 +37,6 @@ def discover_owner_filings(
         accessions,
         acceptance_times,
         primary_documents,
-        strict=True,
     ):
         canonical = canonicalize_form_type(form)
         if route_for_form(canonical) is not RouteType.OWNER:
