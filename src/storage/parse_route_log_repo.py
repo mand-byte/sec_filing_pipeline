@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -28,9 +25,9 @@ class ParseRouteLogRepository:
             for row in self.session.rows
             if row.document_type == document_type
             and start_utc <= row.attempted_at_utc <= end_utc
-            and row.failure_type == failure_type
+            and (failure_type is None or row.failure_type == failure_type)
         ]
-        filtered.sort(key=lambda row: row.attempted_at_utc)
+        filtered.sort(key=lambda row: (row.attempted_at_utc, row.id))
         return filtered[offset : offset + limit]
 
     def timeline(self, accession_no: str, document_id: str) -> list[Any]:
@@ -39,5 +36,5 @@ class ParseRouteLogRepository:
             for row in self.session.rows
             if row.accession_no == accession_no and row.document_id == document_id
         ]
-        rows.sort(key=lambda row: row.attempted_at_utc)
+        rows.sort(key=lambda row: (row.attempted_at_utc, row.id))
         return rows

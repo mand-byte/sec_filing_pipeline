@@ -137,3 +137,95 @@ def test_timeline_returns_one_document_pair_in_chronological_order() -> None:
     )
 
     assert [row.id for row in rows] == ["earlier", "middle", "later"]
+
+
+def test_query_with_none_failure_type_does_not_filter_by_failure_type() -> None:
+    base_time = datetime(2024, 4, 3, 12, 0, tzinfo=timezone.utc)
+    session = _FakeSession()
+    repo = ParseRouteLogRepository(session)
+
+    session.rows.extend(
+        [
+            _Row(
+                id="failure-parse",
+                accession_no="0000320193-24-000012",
+                document_id="doc-1",
+                document_type="4",
+                attempted_at_utc=base_time + timedelta(minutes=1),
+                failure_type="parse",
+            ),
+            _Row(
+                id="failure-logic",
+                accession_no="0000320193-24-000013",
+                document_id="doc-2",
+                document_type="4",
+                attempted_at_utc=base_time + timedelta(minutes=2),
+                failure_type="logic",
+            ),
+            _Row(
+                id="failure-none",
+                accession_no="0000320193-24-000014",
+                document_id="doc-3",
+                document_type="4",
+                attempted_at_utc=base_time + timedelta(minutes=3),
+                failure_type=None,
+            ),
+        ]
+    )
+
+    rows = repo.query(
+        document_type="4",
+        start_utc=base_time,
+        end_utc=base_time + timedelta(minutes=10),
+        failure_type=None,
+        limit=10,
+        offset=0,
+    )
+
+    assert [row.id for row in rows] == [
+        "failure-parse",
+        "failure-logic",
+        "failure-none",
+    ]
+
+
+def test_timeline_orders_equal_timestamps_by_id() -> None:
+    base_time = datetime(2024, 4, 3, 12, 0, tzinfo=timezone.utc)
+    session = _FakeSession()
+    repo = ParseRouteLogRepository(session)
+
+    session.rows.extend(
+        [
+            _Row(
+                id="c",
+                accession_no="0000320193-24-000012",
+                document_id="doc-1",
+                document_type="4",
+                attempted_at_utc=base_time,
+                failure_type="parse",
+            ),
+            _Row(
+                id="a",
+                accession_no="0000320193-24-000012",
+                document_id="doc-1",
+                document_type="4",
+                attempted_at_utc=base_time,
+                failure_type="parse",
+            ),
+            _Row(
+                id="b",
+                accession_no="0000320193-24-000012",
+                document_id="doc-1",
+                document_type="4",
+                attempted_at_utc=base_time,
+                failure_type="parse",
+            ),
+        ]
+    )
+
+    rows = repo.timeline(
+        accession_no="0000320193-24-000012",
+        document_id="doc-1",
+    )
+
+    assert [row.id for row in rows] == ["a", "b", "c"]
