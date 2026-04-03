@@ -1,11 +1,124 @@
 from datetime import datetime
 from hashlib import sha1
+from dataclasses import dataclass
 
 from src.domain.enums import DecisionState, ReviewReason, RouteType
 from src.models.filing import ExtractedFact
 from src.models.review import ReviewQueueItem
 from src.models.state import IngestionState
+from src.parsers.ownership_deterministic import parse_ownership_deterministic
 from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
+from src.parsers.ownership_xml import parse_ownership_xml
+from src.worker.decision_service import DecisionResult, DecisionService
+
+
+@dataclass(frozen=True, slots=True)
+class ParseDocument:
+    filing_id: str
+    accession_no: str
+    cik: str
+    document_id: str
+    document_type: str
+    document_filename: str
+    document_path: str
+    snapshot_path: str | None
+    source_url: str | None
+    sha256_hex: str
+    byte_length: int
+    xml_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DecisionContextDocument:
+    run_id: str
+    filing_id: str
+    accession_no: str
+    cik: str
+    document_id: str
+    document_type: str
+    document_filename: str
+    document_path: str
+    snapshot_path: str | None
+    source_url: str | None
+    sha256_hex: str
+    byte_length: int
+
+
+def process_owner_document(
+    session,
+    parse_route_logger,
+    run_id: str,
+    attempted_at_utc: datetime,
+    filing_id: str,
+    accession_no: str,
+    cik: str,
+    document_id: str,
+    document_type: str,
+    document_filename: str,
+    document_path: str,
+    snapshot_path: str | None,
+    source_url: str | None,
+    sha256_hex: str,
+    byte_length: int,
+    xml_text: str,
+) -> DecisionResult:
+    document = ParseDocument(
+        filing_id=filing_id,
+        accession_no=accession_no,
+        cik=cik,
+        document_id=document_id,
+        document_type=document_type,
+        document_filename=document_filename,
+        document_path=document_path,
+        snapshot_path=snapshot_path,
+        source_url=source_url,
+        sha256_hex=sha256_hex,
+        byte_length=byte_length,
+        xml_text=xml_text,
+    )
+
+    decision_service = DecisionService(
+        structured_parser=lambda text: parse_ownership_xml(
+            accession_no=document.accession_no,
+            document_filename=document.document_filename,
+            xml_text=text,
+        ),
+        deterministic_parser=lambda text: parse_ownership_deterministic(
+            accession_no=document.accession_no,
+            document_filename=document.document_filename,
+            source_text=text,
+        ),
+        attempt_log_repo=parse_route_logger,
+        now_fn=lambda: attempted_at_utc,
+    )
+
+    decision_result = decision_service.parse_document(
+        document=_DecisionContextDocument(
+            run_id=run_id,
+            filing_id=document.filing_id,
+            accession_no=document.accession_no,
+            cik=document.cik,
+            document_id=document.document_id,
+            document_type=document.document_type,
+            document_filename=document.document_filename,
+            document_path=document.document_path,
+            snapshot_path=document.snapshot_path,
+            source_url=document.source_url,
+            sha256_hex=document.sha256_hex,
+            byte_length=document.byte_length,
+        ),
+        document_text=document.xml_text,
+    )
+
+    if decision_result.parsed_submission is None:
+        return decision_result
+
+    persist_owner_submission(
+        session=session,
+        filing_id=document.filing_id,
+        parsed_submission=decision_result.parsed_submission,
+    )
+    return decision_result
 
 
 def _fact_id(accession_no: str, fact_name: str, snippet_locator: str) -> str:

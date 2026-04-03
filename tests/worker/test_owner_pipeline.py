@@ -1,10 +1,12 @@
 from datetime import datetime, timezone
 
+from src.storage.parse_route_log_repo import ParseRouteLogRepository
 from src.models.state import IngestionState
 from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
 from src.worker.owner_pipeline import (
     build_fact_row,
     build_review_item,
+    process_owner_document,
     persist_owner_submission,
     update_ingestion_state,
 )
@@ -233,3 +235,65 @@ def test_persist_owner_submission_skips_db_existing_rows() -> None:
     persist_owner_submission(session, "filing-1", parsed_submission)
 
     assert session.added == []
+
+
+def test_replay_creates_new_parse_route_log_rows_with_new_run_id() -> None:
+    xml_text = """
+    <ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001214156</rptOwnerCik></reportingOwnerId>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <transactionAmounts><transactionShares><value>1200</value></transactionShares></transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+    </ownershipDocument>
+    """.strip()
+
+    session = FakeSession()
+    parse_route_logger = ParseRouteLogRepository(session)
+    attempted_at = datetime(2024, 4, 3, 12, 30, tzinfo=timezone.utc)
+
+    process_owner_document(
+        session=session,
+        parse_route_logger=parse_route_logger,
+        run_id="run-1",
+        attempted_at_utc=attempted_at,
+        filing_id="filing-1",
+        accession_no="0000320193-24-000012",
+        cik="0000320193",
+        document_id="doc-1",
+        document_type="4",
+        document_filename="primary_doc.xml",
+        document_path="raw/0000320193/0000320193-24-000012/doc-1.xml",
+        snapshot_path=None,
+        source_url="https://www.sec.gov/Archives/edgar/data/320193/000032019324000012/xslF345X05/doc.xml",
+        sha256_hex="a" * 64,
+        byte_length=len(xml_text.encode("utf-8")),
+        xml_text=xml_text,
+    )
+
+    process_owner_document(
+        session=session,
+        parse_route_logger=parse_route_logger,
+        run_id="run-2",
+        attempted_at_utc=attempted_at,
+        filing_id="filing-1",
+        accession_no="0000320193-24-000012",
+        cik="0000320193",
+        document_id="doc-1",
+        document_type="4",
+        document_filename="primary_doc.xml",
+        document_path="raw/0000320193/0000320193-24-000012/doc-1.xml",
+        snapshot_path=None,
+        source_url="https://www.sec.gov/Archives/edgar/data/320193/000032019324000012/xslF345X05/doc.xml",
+        sha256_hex="a" * 64,
+        byte_length=len(xml_text.encode("utf-8")),
+        xml_text=xml_text,
+    )
+
+    assert len(session.rows) == 2
+    assert {row.run_id for row in session.rows} == {"run-1", "run-2"}
+    assert len(session.added) == 3
