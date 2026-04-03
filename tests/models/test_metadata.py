@@ -2,6 +2,12 @@ from src.models import Base  # noqa: F401
 from src.models import filing, registry, review, state  # noqa: F401
 
 
+def test_models_base_module_is_importable():
+    from src.models.base import Base as BaseFromModule
+
+    assert BaseFromModule is Base
+
+
 def test_metadata_contains_required_phase0_tables():
     table_names = set(Base.metadata.tables)
 
