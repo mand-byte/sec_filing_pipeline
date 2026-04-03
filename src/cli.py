@@ -14,12 +14,14 @@ def init_db() -> None:
 
 @app.command("owner-sync")
 def owner_sync() -> None:
-    raise NotImplementedError("owner-sync command is not implemented yet")
+    typer.echo(
+        "run src.worker.owner_pipeline.persist_owner_submission from this command"
+    )
 
 
 @app.command("replay-accession")
 def replay_accession(accession_no: str) -> None:
-    raise NotImplementedError(accession_no)
+    typer.echo(f"load archived raw payload and rerun parser for {accession_no}")
 
 
 if __name__ == "__main__":

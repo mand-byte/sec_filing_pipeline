@@ -1,9 +1,11 @@
+from datetime import datetime
 from hashlib import sha1
 
-from src.domain.enums import DecisionState, ReviewReason
+from src.domain.enums import DecisionState, ReviewReason, RouteType
 from src.models.filing import ExtractedFact
 from src.models.review import ReviewQueueItem
-from src.parsers.ownership_xml import ParsedOwnershipFact
+from src.models.state import IngestionState
+from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
 
 
 def _fact_id(accession_no: str, fact_name: str, snippet_locator: str) -> str:
@@ -63,3 +65,33 @@ def build_review_item(
         status="open",
         note=None,
     )
+
+
+def persist_owner_submission(
+    session,
+    filing_id: str,
+    parsed_submission: ParsedOwnershipSubmission,
+) -> None:
+    for parsed_fact in parsed_submission.facts:
+        fact_row = build_fact_row(
+            filing_id=filing_id,
+            accession_no=parsed_submission.accession_no,
+            parsed_fact=parsed_fact,
+        )
+        session.add(fact_row)
+        if fact_row.decision_state == DecisionState.NEEDS_REVIEW.value:
+            session.add(build_review_item(parsed_submission.accession_no, parsed_fact))
+
+
+def update_ingestion_state(
+    state: IngestionState,
+    accession_no: str,
+    acceptance_datetime_utc: datetime,
+) -> IngestionState:
+    state.last_accession_no = accession_no
+    state.last_acceptance_datetime_utc = acceptance_datetime_utc
+    return state
+
+
+def default_ingestion_state(cik: str) -> IngestionState:
+    return IngestionState(cik=cik, route_type=RouteType.OWNER.value)

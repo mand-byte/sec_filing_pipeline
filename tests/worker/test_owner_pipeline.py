@@ -1,5 +1,21 @@
-from src.parsers.ownership_xml import ParsedOwnershipFact
-from src.worker.owner_pipeline import build_fact_row, build_review_item
+from datetime import datetime, timezone
+
+from src.models.state import IngestionState
+from src.parsers.ownership_xml import ParsedOwnershipFact, ParsedOwnershipSubmission
+from src.worker.owner_pipeline import (
+    build_fact_row,
+    build_review_item,
+    persist_owner_submission,
+    update_ingestion_state,
+)
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.added = []
+
+    def add(self, obj) -> None:
+        self.added.append(obj)
 
 
 def test_build_fact_row_marks_complete_xml_fact_as_accepted() -> None:
@@ -41,3 +57,58 @@ def test_build_review_item_for_missing_mandatory_value() -> None:
 
     assert review_item.review_reason == "mandatory_field_missing"
     assert review_item.status == "open"
+
+
+def test_persist_owner_submission_adds_facts_and_review_items() -> None:
+    parsed_submission = ParsedOwnershipSubmission(
+        accession_no="0000320193-24-000012",
+        document_filename="primary_doc.xml",
+        facts=[
+            ParsedOwnershipFact(
+                fact_name="issuer_cik",
+                fact_value="0000320193",
+                parser_method="structured_xml",
+                snippet_text="0000320193",
+                snippet_locator="/ownershipDocument/issuer/issuerCik",
+                document_filename="primary_doc.xml",
+                validation_results={"mandatory_present": True},
+            ),
+            ParsedOwnershipFact(
+                fact_name="reporting_owner_cik",
+                fact_value="",
+                parser_method="structured_xml",
+                snippet_text="",
+                snippet_locator="/ownershipDocument/reportingOwner/reportingOwnerId/rptOwnerCik",
+                document_filename="primary_doc.xml",
+                validation_results={"mandatory_present": False},
+            ),
+        ],
+    )
+
+    session = FakeSession()
+    persist_owner_submission(
+        session=session,
+        filing_id="filing-1",
+        parsed_submission=parsed_submission,
+    )
+
+    assert len(session.added) == 3
+    assert [obj.__tablename__ for obj in session.added] == [
+        "extracted_fact",
+        "extracted_fact",
+        "review_queue",
+    ]
+
+
+def test_update_ingestion_state_advances_cursor_values() -> None:
+    state = IngestionState(cik="0000320193", route_type="owner")
+    acceptance = datetime(2024, 4, 3, 12, 30, tzinfo=timezone.utc)
+
+    updated = update_ingestion_state(
+        state=state,
+        accession_no="0000320193-24-000012",
+        acceptance_datetime_utc=acceptance,
+    )
+
+    assert updated.last_acceptance_datetime_utc == acceptance
+    assert updated.last_accession_no == "0000320193-24-000012"
