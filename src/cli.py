@@ -33,30 +33,7 @@ def _parse_optional_iso_datetime(
     return parsed
 
 
-@app.command("init-db")
-def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-
-
-@app.command("owner-sync")
-def owner_sync(cik: str | None = typer.Option(None, "--cik")) -> None:
-    if cik is None:
-        typer.echo(
-            "owner-sync is operational: pass --cik and use replay-accession for deterministic owner filing replays"
-        )
-        return
-
-    typer.echo(
-        "owner-sync minimal wiring is enabled; run replay-accession --cik "
-        f"{cik} --accession-no <accession-no> to execute the phase3 flow"
-    )
-
-
-@app.command("replay-accession")
-def replay_accession_command(
-    accession_no: str,
-    cik: str = typer.Option(..., "--cik"),
-) -> None:
+def process_replay_accession(cik: str, accession_no: str) -> int:
     run_id = f"replay-{uuid4().hex}"
     attempted_at_utc = datetime.now(timezone.utc)
     session = SessionLocal()
@@ -75,18 +52,51 @@ def replay_accession_command(
             attempted_at_utc=attempted_at_utc,
         )
         session.commit()
-    except RuntimeError as exc:
+        return processed
+    except RuntimeError:
         session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+@app.command("init-db")
+def init_db() -> None:
+    Base.metadata.create_all(bind=engine)
+
+
+@app.command("owner-sync")
+def owner_sync(
+    cik: str = typer.Option(..., "--cik"),
+    accession_no: str = typer.Option(..., "--accession-no"),
+) -> None:
+    try:
+        processed = process_replay_accession(cik=cik, accession_no=accession_no)
+    except RuntimeError as exc:
+        raise typer.BadParameter(
+            "owner-sync failed due to runtime dependency error: "
+            f"{exc}. Ensure network access and edgar dependency are available."
+        ) from exc
+
+    typer.echo(
+        f"owner-sync completed for {accession_no}: processed_documents={processed}"
+    )
+
+
+@app.command("replay-accession")
+def replay_accession_command(
+    accession_no: str,
+    cik: str = typer.Option(..., "--cik"),
+) -> None:
+    try:
+        processed = process_replay_accession(cik=cik, accession_no=accession_no)
+    except RuntimeError as exc:
         raise typer.BadParameter(
             "replay failed due to runtime dependency error: "
             f"{exc}. Ensure network access and edgar dependency are available."
         ) from exc
-    finally:
-        session.close()
 
-    typer.echo(
-        f"replay completed for {accession_no}: processed_documents={processed} run_id={run_id}"
-    )
+    typer.echo(f"replay completed for {accession_no}: processed_documents={processed}")
 
 
 @parse_log_app.command("query")

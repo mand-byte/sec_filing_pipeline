@@ -209,3 +209,39 @@ def test_parse_log_timeline_outputs_ordered_rows(
     assert "fallback_reason=structured_xml_missing_mandatory" in result.output
     assert "decision_state=needs_review" in result.output
     assert "selected_candidate=True" in result.output
+
+
+def test_owner_sync_requires_cik_and_accession_no() -> None:
+    result = runner.invoke(app, ["owner-sync"])
+
+    assert result.exit_code != 0
+    assert "Missing option '--cik'" in result.output
+
+
+def test_owner_sync_executes_phase3_replay_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def _fake_process_replay_accession(cik: str, accession_no: str) -> int:
+        calls.append((cik, accession_no))
+        return 1
+
+    monkeypatch.setattr(
+        "src.cli.process_replay_accession",
+        _fake_process_replay_accession,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "owner-sync",
+            "--cik",
+            "0000320193",
+            "--accession-no",
+            "0000320193-24-000012",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("0000320193", "0000320193-24-000012")]
