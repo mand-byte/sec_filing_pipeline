@@ -145,6 +145,8 @@ class DecisionService:
         self._attempt_log_repo.append(attempt)
 
     def parse_document(self, document: Any, document_text: str) -> DecisionResult:
+        structured_fallback_reason: str | None = None
+
         try:
             structured = self._structured_parser(document_text)
             structured_ok, structured_reason = _submission_is_acceptable(structured)
@@ -167,6 +169,7 @@ class DecisionService:
                     failure_reason=None,
                 )
 
+            structured_fallback_reason = structured_reason
             self._append_attempt(
                 document=document,
                 parser_method=ParserMethod.STRUCTURED_XML.value,
@@ -178,13 +181,14 @@ class DecisionService:
                 selected_candidate=False,
             )
         except Exception as exc:  # noqa: BLE001
+            structured_fallback_reason = FallbackReason.STRUCTURED_XML_EXCEPTION.value
             self._append_attempt(
                 document=document,
                 parser_method=ParserMethod.STRUCTURED_XML.value,
                 status=ParseAttemptStatus.FAILED.value,
                 failure_type=ParseFailureType.PARSE.value,
                 error_message=str(exc),
-                fallback_reason=FallbackReason.STRUCTURED_XML_EXCEPTION.value,
+                fallback_reason=structured_fallback_reason,
                 decision_state=DecisionState.NEEDS_REVIEW.value,
                 selected_candidate=False,
             )
@@ -206,7 +210,7 @@ class DecisionService:
                 final_decision_state=DecisionState.NEEDS_REVIEW.value,
                 selected_parser_method=ParserMethod.DETERMINISTIC_RULE.value,
                 parsed_submission=deterministic,
-                failure_reason=None,
+                failure_reason=structured_fallback_reason,
             )
         except Exception as exc:  # noqa: BLE001
             is_not_applicable = (

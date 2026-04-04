@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 
@@ -13,6 +14,9 @@ class DownloadedAttachment:
 class DownloadedFilingBundle:
     cik: str
     accession_no: str
+    form_type_raw: str
+    acceptance_datetime_utc: datetime
+    primary_document: str
     attachments: list[DownloadedAttachment]
 
 
@@ -25,6 +29,29 @@ class _EdgarToolsDownloader:
         from edgar import Filing
 
         return Filing.get(cik=cik, accession_number=accession_no).obj()
+
+
+def _read_required_str_attr(filing: Any, names: tuple[str, ...], *, field: str) -> str:
+    for name in names:
+        value = getattr(filing, name, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    raise ValueError(f"downloaded filing missing required {field}")
+
+
+def _coerce_acceptance_datetime_utc(value: Any) -> datetime:
+    parsed: datetime | None = None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    if parsed is None:
+        raise ValueError("downloaded filing missing required acceptance_datetime_utc")
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class SecDownloadAdapter:
@@ -55,5 +82,19 @@ class SecDownloadAdapter:
         return DownloadedFilingBundle(
             cik=cik,
             accession_no=accession_no,
+            form_type_raw=_read_required_str_attr(
+                filing,
+                ("form", "form_type"),
+                field="form_type_raw",
+            ),
+            acceptance_datetime_utc=_coerce_acceptance_datetime_utc(
+                getattr(filing, "acceptance_datetime", None)
+                or getattr(filing, "acceptance_datetime_utc", None)
+            ),
+            primary_document=_read_required_str_attr(
+                filing,
+                ("primary_document", "primaryDocument", "document"),
+                field="primary_document",
+            ),
             attachments=attachments,
         )

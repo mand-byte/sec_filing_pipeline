@@ -46,6 +46,9 @@ class ReviewReason(str, Enum):
     MANDATORY_FIELD_MISSING = "mandatory_field_missing"
     SOURCE_CONFLICT = "source_conflict"
     AMENDMENT_CONFLICT = "amendment_conflict"
+    PARSER_DISAGREEMENT = "parser_disagreement"
+    UNSUPPORTED_LAYOUT = "unsupported_layout"
+    LOW_CONFIDENCE = "low_confidence"
 
 
 @dataclass(frozen=True, slots=True)
