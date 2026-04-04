@@ -1,4 +1,9 @@
-from src.domain.enums import FallbackReason, ParseAttemptStatus, ParseFailureType
+from src.domain.enums import (
+    FallbackReason,
+    ParseAttemptStatus,
+    ParseFailureType,
+    ReviewReason,
+)
 from src.models import Base  # noqa: F401
 from src.models import filing, parse_route_log, registry, review, state  # noqa: F401
 
@@ -46,6 +51,46 @@ def test_phase3_enums_match_fixed_taxonomy() -> None:
         "deterministic_rule_not_applicable",
         "all_methods_failed",
     }
+
+
+def test_review_reason_taxonomy_covers_owner_phase_a1() -> None:
+    assert {
+        "mandatory_field_missing",
+        "source_conflict",
+        "amendment_conflict",
+        "parser_disagreement",
+        "unsupported_layout",
+        "low_confidence",
+    } <= {item.value for item in ReviewReason}
+
+
+def test_owner_fact_and_review_tables_expose_traceability_columns() -> None:
+    fact_table = Base.metadata.tables["extracted_fact"]
+    review_table = Base.metadata.tables["review_queue"]
+
+    assert {"cik", "document_id", "run_id", "fallback_reason"} <= set(
+        fact_table.columns.keys()
+    )
+    assert {
+        "filing_id",
+        "document_id",
+        "run_id",
+        "parser_method",
+        "decision_state",
+    } <= set(review_table.columns.keys())
+
+
+def test_owner_phase_a1_traceability_columns_are_nullable_for_now() -> None:
+    fact_table = Base.metadata.tables["extracted_fact"]
+    review_table = Base.metadata.tables["review_queue"]
+
+    assert fact_table.columns["cik"].nullable is True
+    assert fact_table.columns["document_id"].nullable is True
+    assert fact_table.columns["run_id"].nullable is True
+    assert review_table.columns["filing_id"].nullable is True
+    assert review_table.columns["document_id"].nullable is True
+    assert review_table.columns["run_id"].nullable is True
+    assert review_table.columns["decision_state"].nullable is True
 
 
 def test_parse_route_log_table_has_required_columns() -> None:

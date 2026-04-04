@@ -8,10 +8,13 @@ from src.core.config import settings
 from src.models import Base
 from src.models import filing, parse_route_log, registry, review, state  # noqa: F401
 from src.storage.db import SessionLocal, engine
+from src.storage.ingestion_state_repo import IngestionStateRepository
 from src.storage.parse_route_log_repo import ParseRouteLogRepository
 from src.storage.raw_store import RawStore
 from src.storage.sec_download_adapter import SecDownloadAdapter
+from src.storage.sec_submissions_client import SecSubmissionsClient
 from src.worker.owner_pipeline import replay_owner_accession
+from src.worker.owner_sync_service import OwnerSyncResult, OwnerSyncService
 
 app = typer.Typer(help="SEC Filing Pipeline")
 parse_log_app = typer.Typer(help="Inspect parse-route decision logs")
@@ -60,18 +63,40 @@ def process_replay_accession(cik: str, accession_no: str) -> int:
         session.close()
 
 
+def process_owner_sync(cik: str) -> OwnerSyncResult:
+    run_id = f"owner-sync-{uuid4().hex}"
+    session = SessionLocal()
+    try:
+        repo = ParseRouteLogRepository(session)
+        raw_store = RawStore(root=Path(settings.RAW_STORE_DIR))
+        adapter = SecDownloadAdapter()
+        service = OwnerSyncService(
+            ingestion_state_repo=IngestionStateRepository(session),
+            submissions_client=SecSubmissionsClient(),
+            sec_download_adapter=adapter,
+            session=session,
+            parse_route_logger=repo,
+            raw_store=raw_store,
+        )
+        result = service.sync_owner(cik=cik, run_id=run_id)
+        session.commit()
+        return result
+    except RuntimeError:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 @app.command("init-db")
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
 
 @app.command("owner-sync")
-def owner_sync(
-    cik: str = typer.Option(..., "--cik"),
-    accession_no: str = typer.Option(..., "--accession-no"),
-) -> None:
+def owner_sync(cik: str = typer.Option(..., "--cik")) -> None:
     try:
-        processed = process_replay_accession(cik=cik, accession_no=accession_no)
+        result = process_owner_sync(cik=cik)
     except RuntimeError as exc:
         raise typer.BadParameter(
             "owner-sync failed due to runtime dependency error: "
@@ -79,7 +104,10 @@ def owner_sync(
         ) from exc
 
     typer.echo(
-        f"owner-sync completed for {accession_no}: processed_documents={processed}"
+        "owner-sync completed: "
+        f"discovered={result.discovered_count} "
+        f"processed={result.processed_count} "
+        f"last_accession_no={result.last_accession_no}"
     )
 
 
