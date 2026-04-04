@@ -466,5 +466,7 @@ CREATE TABLE IF NOT EXISTS us_stock_universe
 上表的数据只有CS和ADR,已排除goog,googl这种多个ticker对应一个figi的情况。figi和cik是一一对应的。对于active=0的个股，sec文档提交时间小于等于delisted_utc，之后的提交时间的文件不用处理。        
 本项目不要求一定要使用clickhouse,也可以考虑使用postgresql等关系数据库。
 本项目唯一要求是对于量化需要的数据都抓取，并且要保证其真实准确度和最少人工修正。
+文件解析过程的日志入库，用于分析解析成功与失败，以及失败的原因。
+下载及初步解析使用使用edgartools
 
 
