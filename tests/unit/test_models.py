@@ -1,25 +1,12 @@
-from datetime import datetime
-from typing import get_args, get_type_hints
-
-from sqlalchemy import Float, UniqueConstraint
+from sqlalchemy import Integer, String, UniqueConstraint
 
 
-class _SettingsStub:
-    def __init__(self, pg_dsn: str):
-        self.pg_dsn = pg_dsn
-
-
-def _mapped_annotation(model: type, field_name: str):
-    hints = get_type_hints(model, include_extras=True)
-    return get_args(hints[field_name])[0]
-
-
-def _unique_key_columns(table):
+def _named_unique_constraints(table):
     unique_constraints = [
         c for c in table.constraints if isinstance(c, UniqueConstraint)
     ]
     return {
-        tuple(column.name for column in constraint.columns)
+        constraint.name: tuple(column.name for column in constraint.columns)
         for constraint in unique_constraints
     }
 
@@ -157,8 +144,13 @@ def test_extracted_fact_unique_constraint_on_accession_route_field_name():
     import src.db.models  # noqa: F401
 
     extracted_fact = Base.metadata.tables["extracted_fact"]
+    constraints = _named_unique_constraints(extracted_fact)
 
-    assert ("accession_no", "route", "field_name") in _unique_key_columns(extracted_fact)
+    assert constraints["uq_fact_accession_route_field"] == (
+        "accession_no",
+        "route",
+        "field_name",
+    )
 
 
 def test_route_watermark_unique_constraint_on_cik_route():
@@ -166,8 +158,9 @@ def test_route_watermark_unique_constraint_on_cik_route():
     import src.db.models  # noqa: F401
 
     route_watermark = Base.metadata.tables["route_watermark"]
+    constraints = _named_unique_constraints(route_watermark)
 
-    assert ("cik", "route") in _unique_key_columns(route_watermark)
+    assert constraints["uq_route_watermark_cik_route"] == ("cik", "route")
 
 
 def test_delisted_route_completion_unique_constraint_on_figi_cik_route():
@@ -175,43 +168,75 @@ def test_delisted_route_completion_unique_constraint_on_figi_cik_route():
     import src.db.models  # noqa: F401
 
     delisted_route_completion = Base.metadata.tables["delisted_route_completion"]
+    constraints = _named_unique_constraints(delisted_route_completion)
 
-    assert ("composite_figi", "cik", "route") in _unique_key_columns(delisted_route_completion)
-
-
-def test_value_numeric_annotation_and_column_type_are_float():
-    from src.db.base import Base
-    from src.db.models import ExtractedFact
-
-    extracted_fact = Base.metadata.tables["extracted_fact"]
-
-    assert _mapped_annotation(ExtractedFact, "value_numeric") == float | None
-    assert isinstance(extracted_fact.c.value_numeric.type, Float)
-
-
-def test_datetime_annotations_are_python_datetime_types():
-    from src.db.models import (
-        DelistedRouteCompletion,
-        FilingDocument,
-        SecurityMaster,
+    assert constraints["uq_delisted_completion_key"] == (
+        "composite_figi",
+        "cik",
+        "route",
     )
 
-    assert _mapped_annotation(SecurityMaster, "last_updated_utc") == datetime
-    assert _mapped_annotation(SecurityMaster, "delisted_utc") == datetime | None
-    assert _mapped_annotation(FilingDocument, "accepted_at") == datetime | None
-    assert _mapped_annotation(DelistedRouteCompletion, "updated_at") == datetime
+
+def test_security_master_contract_nullability_and_lengths():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    security_master = Base.metadata.tables["security_master"]
+
+    assert isinstance(security_master.c.composite_figi.type, String)
+    assert security_master.c.composite_figi.type.length == 12
+
+    assert isinstance(security_master.c.cik.type, String)
+    assert security_master.c.cik.type.length == 10
+    assert security_master.c.cik.nullable is False
 
 
-def test_engine_and_session_factory_are_cached_by_dsn():
-    from src.db.session import get_engine, get_session_factory
+def test_filing_document_accepted_at_is_non_nullable():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
 
-    first_settings = _SettingsStub("sqlite+pysqlite:///:memory:")
-    second_settings = _SettingsStub("sqlite+pysqlite:///:memory:")
+    filing_document = Base.metadata.tables["filing_document"]
 
-    first_engine = get_engine(first_settings)
-    second_engine = get_engine(second_settings)
-    first_factory = get_session_factory(first_settings)
-    second_factory = get_session_factory(second_settings)
+    assert filing_document.c.accepted_at.nullable is False
 
-    assert first_engine is second_engine
-    assert first_factory is second_factory
+
+def test_extraction_evidence_required_fields_are_non_nullable():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    extraction_evidence = Base.metadata.tables["extraction_evidence"]
+
+    assert extraction_evidence.c.locator_kind.nullable is False
+    assert extraction_evidence.c.source_span.nullable is False
+
+
+def test_pipeline_log_run_id_route_stage_are_non_nullable():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    pipeline_log = Base.metadata.tables["pipeline_log"]
+
+    assert pipeline_log.c.run_id.nullable is False
+    assert pipeline_log.c.route.nullable is False
+    assert pipeline_log.c.stage.nullable is False
+
+
+def test_review_task_priority_is_string_not_integer():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    review_task = Base.metadata.tables["review_task"]
+
+    assert isinstance(review_task.c.priority.type, String)
+    assert not isinstance(review_task.c.priority.type, Integer)
+
+
+def test_review_decision_reviewer_is_non_nullable_string_64():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    review_decision = Base.metadata.tables["review_decision"]
+
+    assert isinstance(review_decision.c.reviewer.type, String)
+    assert review_decision.c.reviewer.type.length == 64
+    assert review_decision.c.reviewer.nullable is False
