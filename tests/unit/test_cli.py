@@ -21,7 +21,18 @@ def test_run_once_command_invokes_successfully():
     assert "run-once placeholder" in result.stdout
 
 
-def test_schedule_command_invokes_successfully():
+def test_schedule_command_invokes_successfully(monkeypatch):
+    monkeypatch.setenv("PG_DSN", "postgresql://user:pass@localhost:5432/sec_filings")
+
+    class _StubScheduler:
+        def start(self) -> None:
+            print("schedule placeholder (task5 wiring)")
+
+    monkeypatch.setattr(
+        "src.cli.build_blocking_scheduler",
+        lambda interval_minutes, tick_callable: _StubScheduler(),
+    )
+
     result = runner.invoke(app, ["schedule"])
 
     assert result.exit_code == 0
