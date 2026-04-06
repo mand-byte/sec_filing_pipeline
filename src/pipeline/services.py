@@ -11,26 +11,24 @@ from src.pipeline.types import FilingRecord, RouteName
 @dataclass(slots=True, frozen=True)
 class FactInput:
     field_name: str
-    value_numeric: float | None
-    value_text: str | None
-    value_json: str | None
-    value_unit: str | None
-    confidence: float | None
-    extracted_at: datetime
+    value_numeric: float | None = None
+    value_text: str | None = None
+    value_json: str | None = None
+    value_unit: str | None = None
+    confidence: float | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class EvidenceInput:
     field_name: str
     locator_kind: str
-    source_section: str | None
-    source_item_no: str | None
-    source_xpath: str | None
-    xbrl_concept: str | None
     source_span: str
-    raw_value: str | None
-    normalized_value: str | None
-    created_at: datetime
+    source_section: str | None = None
+    source_item_no: str | None = None
+    source_xpath: str | None = None
+    xbrl_concept: str | None = None
+    raw_value: str | None = None
+    normalized_value: str | None = None
 
 
 class PersistenceService:
@@ -41,17 +39,19 @@ class PersistenceService:
         self,
         *,
         filing: FilingRecord,
-        route: RouteName,
+        route: RouteName | str,
         facts: list[FactInput],
         evidences: list[EvidenceInput],
     ) -> None:
         if facts and not evidences:
             raise ValueError("at least one evidence")
 
-        existing = self.session.scalar(
+        now = datetime.now(timezone.utc)
+
+        existing_doc = self.session.scalar(
             select(FilingDocument).where(FilingDocument.accession_no == filing.accession_no)
         )
-        if existing is None:
+        if existing_doc is None:
             self.session.add(
                 FilingDocument(
                     accession_no=filing.accession_no,
@@ -63,24 +63,40 @@ class PersistenceService:
                     period_end=filing.period_end,
                     is_amendment=filing.is_amendment,
                     amendment_no=filing.amendment_no,
-                    created_at=datetime.now(timezone.utc),
+                    created_at=now,
                 )
             )
 
         for fact in facts:
-            self.session.add(
-                ExtractedFact(
-                    accession_no=filing.accession_no,
-                    route=route,
-                    field_name=fact.field_name,
-                    value_numeric=fact.value_numeric,
-                    value_text=fact.value_text,
-                    value_json=fact.value_json,
-                    value_unit=fact.value_unit,
-                    confidence=fact.confidence,
-                    extracted_at=fact.extracted_at,
+            existing_fact = self.session.scalar(
+                select(ExtractedFact).where(
+                    ExtractedFact.accession_no == filing.accession_no,
+                    ExtractedFact.route == route,
+                    ExtractedFact.field_name == fact.field_name,
                 )
             )
+
+            if existing_fact is None:
+                self.session.add(
+                    ExtractedFact(
+                        accession_no=filing.accession_no,
+                        route=route,
+                        field_name=fact.field_name,
+                        value_numeric=fact.value_numeric,
+                        value_text=fact.value_text,
+                        value_json=fact.value_json,
+                        value_unit=fact.value_unit,
+                        confidence=fact.confidence,
+                        extracted_at=now,
+                    )
+                )
+            else:
+                existing_fact.value_numeric = fact.value_numeric
+                existing_fact.value_text = fact.value_text
+                existing_fact.value_json = fact.value_json
+                existing_fact.value_unit = fact.value_unit
+                existing_fact.confidence = fact.confidence
+                existing_fact.extracted_at = now
 
             if fact.confidence is not None and fact.confidence < 0.5:
                 self.session.add(
@@ -89,9 +105,9 @@ class PersistenceService:
                         route=route,
                         field_name=fact.field_name,
                         status="open",
-                        priority="normal",
+                        priority="high",
                         assignee=None,
-                        created_at=datetime.now(timezone.utc),
+                        created_at=now,
                         resolved_at=None,
                     )
                 )
@@ -110,7 +126,7 @@ class PersistenceService:
                     source_span=evidence.source_span,
                     raw_value=evidence.raw_value,
                     normalized_value=evidence.normalized_value,
-                    created_at=evidence.created_at,
+                    created_at=now,
                 )
             )
 
