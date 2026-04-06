@@ -175,6 +175,42 @@ def test_persist_filing_bundle_fact_persistence_is_idempotent(db_session: Sessio
     assert len(filings) == 1
 
 
+def test_persist_filing_bundle_treats_amendment_as_new_document_by_accession_no(
+    db_session: Session,
+):
+    service = PersistenceService(db_session)
+
+    service.persist_filing_bundle(
+        filing=_filing("0000000001-25-000007", form_type="8-K"),
+        route="issuer",
+        facts=[],
+        evidences=[
+            EvidenceInput(
+                field_name="dummy",
+                locator_kind="html_span",
+                source_span="base filing",
+            )
+        ],
+    )
+
+    service.persist_filing_bundle(
+        filing=_filing("0000000001-25-000008", form_type="8-K/A"),
+        route="issuer",
+        facts=[],
+        evidences=[
+            EvidenceInput(
+                field_name="dummy",
+                locator_kind="html_span",
+                source_span="amendment filing",
+            )
+        ],
+    )
+
+    filing_count = db_session.scalar(select(func.count()).select_from(FilingDocument))
+
+    assert filing_count == 2
+
+
 def test_persist_filing_bundle_keeps_route_string_compatible(db_session: Session):
     service = PersistenceService(db_session)
 
