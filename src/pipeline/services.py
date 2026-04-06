@@ -46,6 +46,14 @@ class PersistenceService:
         if facts and not evidences:
             raise ValueError("at least one evidence")
 
+        if facts:
+            evidence_field_names = {evidence.field_name for evidence in evidences}
+            missing_evidence = [
+                fact.field_name for fact in facts if fact.field_name not in evidence_field_names
+            ]
+            if missing_evidence:
+                raise ValueError("at least one evidence")
+
         now = datetime.now(timezone.utc)
 
         existing_doc = self.session.scalar(

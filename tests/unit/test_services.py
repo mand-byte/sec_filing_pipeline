@@ -55,6 +55,27 @@ def test_persist_filing_bundle_rejects_facts_without_evidence(db_session: Sessio
         )
 
 
+def test_persist_filing_bundle_rejects_facts_missing_per_field_evidence(db_session: Session):
+    service = PersistenceService(db_session)
+
+    with pytest.raises(ValueError, match="at least one evidence"):
+        service.persist_filing_bundle(
+            filing=_filing("0000000001-25-000010"),
+            route="issuer",
+            facts=[
+                FactInput(field_name="shares_outstanding", value_numeric=100.0),
+                FactInput(field_name="market_cap", value_numeric=500.0),
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name="shares_outstanding",
+                    locator_kind="html_span",
+                    source_span="100 shares",
+                )
+            ],
+        )
+
+
 def test_persist_filing_bundle_uses_internal_timestamps_and_commits_once(db_session: Session):
     service = PersistenceService(db_session)
 
