@@ -4,7 +4,9 @@ from typing import get_args
 
 import pytest
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.sql.dml import Insert
 
 from src.db.base import Base
 from src.db.models import DelistedRouteCompletion, PipelineLog, RouteWatermark
@@ -49,6 +51,25 @@ def _as_naive_utc(value: datetime) -> datetime:
         return value
 
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _force_postgresql_dialect(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(session.bind.dialect, "name", "postgresql")
+
+
+def _install_execute_spy(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    calls: dict[str, object] = {"count": 0, "statements": []}
+
+    def execute_wrapper(statement, *args, **kwargs):
+        calls["count"] = int(calls["count"]) + 1
+        calls["statements"].append(statement)
+        return None
+
+    monkeypatch.setattr(session, "execute", execute_wrapper)
+    return calls
 
 
 @pytest.fixture
@@ -192,6 +213,65 @@ def test_upsert_route_watermark_handles_mixed_aware_and_naive_datetimes_in_fallb
     assert _as_naive_utc(final_value) == newer_naive
 
 
+def test_upsert_route_watermark_uses_postgres_on_conflict_stmt_and_commits(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = PipelineRepository(db_session)
+    _force_postgresql_dialect(repo.session, monkeypatch)
+    execute_calls = _install_execute_spy(repo.session, monkeypatch)
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
+
+    older = datetime(2025, 1, 1, 10, 0, 0)
+    newer = datetime(2025, 1, 2, 10, 0, 0)
+
+    repo.upsert_route_watermark(cik="0000000003", route="issuer", accepted_at=older)
+    repo.upsert_route_watermark(cik="0000000003", route="issuer", accepted_at=newer)
+
+    assert execute_calls["count"] == 2
+    assert commit_calls["count"] == 2
+
+    statements = execute_calls["statements"]
+    first_stmt = statements[0]
+    second_stmt = statements[1]
+
+    assert isinstance(first_stmt, Insert)
+    assert isinstance(second_stmt, Insert)
+
+    first_sql = str(first_stmt.compile(dialect=postgresql.dialect()))
+    second_sql = str(second_stmt.compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT ON CONSTRAINT uq_route_watermark_cik_route DO UPDATE" in first_sql
+    assert "excluded.last_accepted_at > route_watermark.last_accepted_at" in first_sql
+    assert "ON CONFLICT ON CONSTRAINT uq_route_watermark_cik_route DO UPDATE" in second_sql
+
+
+def test_mark_delisted_route_completed_uses_postgres_on_conflict_stmt_and_commits(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = PipelineRepository(db_session)
+    _force_postgresql_dialect(repo.session, monkeypatch)
+    execute_calls = _install_execute_spy(repo.session, monkeypatch)
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
+
+    repo.mark_delisted_route_completed(
+        composite_figi="BBG000000009",
+        cik="0000000009",
+        route="owner",
+        delisted_utc_snapshot=datetime(2025, 2, 1, 9, 0, 0),
+        last_seen_accepted_at=datetime(2025, 1, 31, 23, 59, 0),
+    )
+
+    assert execute_calls["count"] == 1
+    assert commit_calls["count"] == 1
+
+    stmt = execute_calls["statements"][0]
+    assert isinstance(stmt, Insert)
+
+    sql = str(stmt.compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT ON CONSTRAINT uq_delisted_completion_key DO UPDATE" in sql
+
+
 def test_mark_delisted_route_completed_upserts_completion_state_and_commits(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -305,6 +385,40 @@ def test_write_log_inserts_pipeline_log_row_and_commits(
     assert row.message == "ok"
     assert row.error_type is None
     assert _as_naive_utc(before) <= _as_naive_utc(row.created_at) <= _as_naive_utc(after)
+
+
+def test_postgres_upsert_paths_rollback_on_commit_failure(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = PipelineRepository(db_session)
+    _force_postgresql_dialect(repo.session, monkeypatch)
+    execute_calls = _install_execute_spy(repo.session, monkeypatch)
+    calls = _install_failing_commit_with_rollback_spy(repo.session, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        repo.upsert_route_watermark(
+            cik="0000000010",
+            route="issuer",
+            accepted_at=datetime(2025, 1, 2, 10, 0, 0),
+        )
+
+    assert execute_calls["count"] == 1
+    assert calls["commit"] == 1
+    assert calls["rollback"] == 1
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        repo.mark_delisted_route_completed(
+            composite_figi="BBG000000010",
+            cik="0000000010",
+            route="owner",
+            delisted_utc_snapshot=datetime(2025, 2, 1, 9, 0, 0),
+            last_seen_accepted_at=datetime(2025, 1, 31, 23, 59, 0),
+        )
+
+    assert execute_calls["count"] == 2
+    assert calls["commit"] == 2
+    assert calls["rollback"] == 2
 
 
 @pytest.mark.parametrize(
