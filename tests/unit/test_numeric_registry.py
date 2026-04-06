@@ -67,7 +67,9 @@ def test_numeric_registry_covers_all_phase2_fields() -> None:
 def test_registry_is_numeric_only_and_has_fixed_locator_order() -> None:
     specs = all_numeric_field_specs()
     assert specs
+    field_names = [spec.field_name for spec in specs]
+    assert len(field_names) == len(set(field_names))
     for spec in specs:
         assert spec.value_type in {"int", "float", "decimal"}
-        assert spec.locators == ["obj", "xbrl_xml", "sections_search", "parse_text"]
+        assert spec.locators == ("obj", "xbrl_xml", "sections_search", "parse_text")
         assert not spec.field_name.endswith("_quant")

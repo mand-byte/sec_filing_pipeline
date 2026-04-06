@@ -1,15 +1,15 @@
-from src.pipeline.extraction.contracts import NumericFieldSpec
+from src.pipeline.extraction.contracts import LocatorKind, NumericFieldSpec, RouteName
 
-_DEFAULT_LOCATORS = ["obj", "xbrl_xml", "sections_search", "parse_text"]
+_DEFAULT_LOCATORS: tuple[LocatorKind, ...] = ("obj", "xbrl_xml", "sections_search", "parse_text")
 
 
-def _spec(field_name: str, route: str, forms: tuple[str, ...]) -> NumericFieldSpec:
+def _spec(field_name: str, route: RouteName, forms: tuple[str, ...]) -> NumericFieldSpec:
     return NumericFieldSpec(
         field_name=field_name,
         route=route,
         form_families=forms,
         value_type="float",
-        locators=list(_DEFAULT_LOCATORS),
+        locators=_DEFAULT_LOCATORS,
         qa_rules={},
     )
 

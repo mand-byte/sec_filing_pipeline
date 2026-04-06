@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 RouteName = Literal["issuer", "owner", "holding"]
 ValueType = Literal["int", "float", "decimal"]
@@ -12,8 +13,12 @@ class NumericFieldSpec:
     route: RouteName
     form_families: tuple[str, ...]
     value_type: ValueType
-    locators: list[LocatorKind]
-    qa_rules: dict[str, float | int | bool]
+    locators: tuple[LocatorKind, ...]
+    qa_rules: Mapping[str, float | int | bool]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "locators", tuple(self.locators))
+        object.__setattr__(self, "qa_rules", MappingProxyType(dict(self.qa_rules)))
 
 
 @dataclass(frozen=True)
