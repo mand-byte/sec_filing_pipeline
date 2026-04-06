@@ -45,7 +45,7 @@ class PipelineRepository:
         else:
             if row.last_accepted_at is None or accepted_at > row.last_accepted_at:
                 row.last_accepted_at = accepted_at
-            row.updated_at = now
+                row.updated_at = now
 
         self.session.commit()
 

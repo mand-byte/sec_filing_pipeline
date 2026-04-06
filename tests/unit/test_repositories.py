@@ -121,10 +121,23 @@ def test_upsert_route_watermark_inserts_updates_max_and_commits(
     )
     assert third_row is not None
 
-    assert commit_calls["count"] == 3
+    repo.upsert_route_watermark(cik="0000000001", route="issuer", accepted_at=newer)
+
+    fourth_row = db_session.scalar(
+        select(RouteWatermark).where(
+            RouteWatermark.cik == "0000000001",
+            RouteWatermark.route == "issuer",
+        )
+    )
+    assert fourth_row is not None
+
+    assert commit_calls["count"] == 4
     assert repo.get_route_watermark("0000000001", "issuer") == newer
     assert _as_naive_utc(second_updated_at) >= _as_naive_utc(first_updated_at)
-    assert _as_naive_utc(third_row.updated_at) >= _as_naive_utc(second_updated_at)
+    assert third_row.last_accepted_at == newer
+    assert fourth_row.last_accepted_at == newer
+    assert _as_naive_utc(third_row.updated_at) == _as_naive_utc(second_updated_at)
+    assert _as_naive_utc(fourth_row.updated_at) == _as_naive_utc(second_updated_at)
 
     row_count = db_session.scalar(
         select(func.count())
