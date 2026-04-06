@@ -9,10 +9,10 @@ from src.pipeline.types import RouteName
 
 class PipelineRepository:
     def __init__(self, session: Session):
-        self._session = session
+        self.session = session
 
     def get_route_watermark(self, cik: str, route: RouteName) -> datetime | None:
-        row = self._session.scalar(
+        row = self.session.scalar(
             select(RouteWatermark).where(
                 RouteWatermark.cik == cik,
                 RouteWatermark.route == route,
@@ -23,8 +23,8 @@ class PipelineRepository:
 
         return row.last_accepted_at
 
-    def upsert_route_watermark(self, cik: str, route: RouteName, accepted_at: datetime) -> None:
-        row = self._session.scalar(
+    def upsert_route_watermark(self, *, cik: str, route: RouteName, accepted_at: datetime) -> None:
+        row = self.session.scalar(
             select(RouteWatermark).where(
                 RouteWatermark.cik == cik,
                 RouteWatermark.route == route,
@@ -34,7 +34,7 @@ class PipelineRepository:
         now = datetime.now(timezone.utc)
 
         if row is None:
-            self._session.add(
+            self.session.add(
                 RouteWatermark(
                     cik=cik,
                     route=route,
@@ -47,19 +47,18 @@ class PipelineRepository:
                 row.last_accepted_at = accepted_at
             row.updated_at = now
 
-        self._session.commit()
+        self.session.commit()
 
     def mark_delisted_route_completed(
         self,
+        *,
         composite_figi: str,
         cik: str,
         route: RouteName,
         delisted_utc_snapshot: datetime | None,
         last_seen_accepted_at: datetime | None,
-        completed_at: datetime,
-        is_completed: bool = True,
     ) -> None:
-        row = self._session.scalar(
+        row = self.session.scalar(
             select(DelistedRouteCompletion).where(
                 DelistedRouteCompletion.composite_figi == composite_figi,
                 DelistedRouteCompletion.cik == cik,
@@ -70,40 +69,42 @@ class PipelineRepository:
         now = datetime.now(timezone.utc)
 
         if row is None:
-            self._session.add(
+            self.session.add(
                 DelistedRouteCompletion(
                     composite_figi=composite_figi,
                     cik=cik,
                     route=route,
                     delisted_utc_snapshot=delisted_utc_snapshot,
                     last_seen_accepted_at=last_seen_accepted_at,
-                    is_completed=is_completed,
-                    completed_at=completed_at,
+                    is_completed=True,
+                    completed_at=now,
                     updated_at=now,
                 )
             )
         else:
             row.delisted_utc_snapshot = delisted_utc_snapshot
             row.last_seen_accepted_at = last_seen_accepted_at
-            row.is_completed = is_completed
-            row.completed_at = completed_at
+            row.is_completed = True
+            row.completed_at = now
             row.updated_at = now
 
-        self._session.commit()
+        self.session.commit()
 
     def write_log(
         self,
+        *,
         run_id: str,
         route: RouteName,
-        cik: str | None,
-        accession_no: str | None,
         stage: str,
         level: str,
         message: str,
-        error_type: str | None,
-        created_at: datetime,
+        cik: str | None = None,
+        accession_no: str | None = None,
+        error_type: str | None = None,
     ) -> None:
-        self._session.add(
+        now = datetime.now(timezone.utc)
+
+        self.session.add(
             PipelineLog(
                 run_id=run_id,
                 route=route,
@@ -113,7 +114,7 @@ class PipelineRepository:
                 level=level,
                 message=message,
                 error_type=error_type,
-                created_at=created_at,
+                created_at=now,
             )
         )
-        self._session.commit()
+        self.session.commit()

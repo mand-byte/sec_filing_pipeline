@@ -1,4 +1,6 @@
-from datetime import datetime
+from dataclasses import fields
+from datetime import datetime, timezone
+from typing import get_args
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -7,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.db.base import Base
 from src.db.models import DelistedRouteCompletion, PipelineLog, RouteWatermark
 from src.db.repositories import PipelineRepository
+from src.pipeline.types import FilingRecord, RouteName
 
 
 def _install_commit_spy(session: Session, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
@@ -21,6 +24,13 @@ def _install_commit_spy(session: Session, monkeypatch: pytest.MonkeyPatch) -> di
     return calls
 
 
+def _as_naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @pytest.fixture
 def db_session() -> Session:
     import src.db.models  # noqa: F401
@@ -31,6 +41,36 @@ def db_session() -> Session:
 
     with session_factory() as session:
         yield session
+
+
+def test_filing_record_matches_task3_plan_shape():
+    assert get_args(RouteName) == ("issuer", "owner", "holding")
+    assert [field.name for field in fields(FilingRecord)] == [
+        "accession_no",
+        "cik",
+        "ticker",
+        "form_type",
+        "filed_at",
+        "accepted_at",
+        "period_end",
+        "is_amendment",
+        "amendment_no",
+    ]
+
+
+def test_repository_exposes_session_and_keyword_only_contract(db_session: Session):
+    repo = PipelineRepository(db_session)
+
+    assert repo.session is db_session
+
+    with pytest.raises(TypeError):
+        repo.upsert_route_watermark("0000000001", "issuer", datetime(2025, 1, 1, 10, 0, 0))
+
+    with pytest.raises(TypeError):
+        repo.mark_delisted_route_completed("BBG000000001", "0000000001", "owner", None, None)
+
+    with pytest.raises(TypeError):
+        repo.write_log("run-001", "issuer", "extract", "info", "ok")
 
 
 def test_get_route_watermark_returns_none_when_row_missing(db_session: Session):
@@ -44,17 +84,47 @@ def test_upsert_route_watermark_inserts_updates_max_and_commits(
     monkeypatch: pytest.MonkeyPatch,
 ):
     repo = PipelineRepository(db_session)
-    commit_calls = _install_commit_spy(db_session, monkeypatch)
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
 
     older = datetime(2025, 1, 1, 10, 0, 0)
     newer = datetime(2025, 1, 2, 10, 0, 0)
 
-    repo.upsert_route_watermark("0000000001", "issuer", older)
-    repo.upsert_route_watermark("0000000001", "issuer", newer)
-    repo.upsert_route_watermark("0000000001", "issuer", older)
+    repo.upsert_route_watermark(cik="0000000001", route="issuer", accepted_at=older)
+
+    first_row = db_session.scalar(
+        select(RouteWatermark).where(
+            RouteWatermark.cik == "0000000001",
+            RouteWatermark.route == "issuer",
+        )
+    )
+    assert first_row is not None
+    first_updated_at = first_row.updated_at
+
+    repo.upsert_route_watermark(cik="0000000001", route="issuer", accepted_at=newer)
+
+    second_row = db_session.scalar(
+        select(RouteWatermark).where(
+            RouteWatermark.cik == "0000000001",
+            RouteWatermark.route == "issuer",
+        )
+    )
+    assert second_row is not None
+    second_updated_at = second_row.updated_at
+
+    repo.upsert_route_watermark(cik="0000000001", route="issuer", accepted_at=older)
+
+    third_row = db_session.scalar(
+        select(RouteWatermark).where(
+            RouteWatermark.cik == "0000000001",
+            RouteWatermark.route == "issuer",
+        )
+    )
+    assert third_row is not None
 
     assert commit_calls["count"] == 3
     assert repo.get_route_watermark("0000000001", "issuer") == newer
+    assert _as_naive_utc(second_updated_at) >= _as_naive_utc(first_updated_at)
+    assert _as_naive_utc(third_row.updated_at) >= _as_naive_utc(second_updated_at)
 
     row_count = db_session.scalar(
         select(func.count())
@@ -69,32 +139,43 @@ def test_mark_delisted_route_completed_upserts_completion_state_and_commits(
     monkeypatch: pytest.MonkeyPatch,
 ):
     repo = PipelineRepository(db_session)
-    commit_calls = _install_commit_spy(db_session, monkeypatch)
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
 
     first_snapshot = datetime(2025, 2, 1, 9, 0, 0)
     first_last_seen = datetime(2025, 1, 31, 23, 59, 0)
-    first_completed_at = datetime(2025, 2, 1, 9, 30, 0)
 
-    second_snapshot = datetime(2025, 2, 2, 9, 0, 0)
-    second_last_seen = datetime(2025, 2, 1, 18, 0, 0)
-    second_completed_at = datetime(2025, 2, 2, 9, 30, 0)
-
+    before_first = datetime.now(timezone.utc)
     repo.mark_delisted_route_completed(
         composite_figi="BBG000000001",
         cik="0000000001",
         route="owner",
         delisted_utc_snapshot=first_snapshot,
         last_seen_accepted_at=first_last_seen,
-        completed_at=first_completed_at,
     )
+    after_first = datetime.now(timezone.utc)
+
+    first_row = db_session.scalar(
+        select(DelistedRouteCompletion).where(
+            DelistedRouteCompletion.composite_figi == "BBG000000001",
+            DelistedRouteCompletion.cik == "0000000001",
+            DelistedRouteCompletion.route == "owner",
+        )
+    )
+    assert first_row is not None
+    first_completed_at = first_row.completed_at
+
+    second_snapshot = datetime(2025, 2, 2, 9, 0, 0)
+    second_last_seen = datetime(2025, 2, 1, 18, 0, 0)
+
+    before_second = datetime.now(timezone.utc)
     repo.mark_delisted_route_completed(
         composite_figi="BBG000000001",
         cik="0000000001",
         route="owner",
         delisted_utc_snapshot=second_snapshot,
         last_seen_accepted_at=second_last_seen,
-        completed_at=second_completed_at,
     )
+    after_second = datetime.now(timezone.utc)
 
     assert commit_calls["count"] == 2
 
@@ -109,7 +190,13 @@ def test_mark_delisted_route_completed_upserts_completion_state_and_commits(
     assert row.is_completed is True
     assert row.delisted_utc_snapshot == second_snapshot
     assert row.last_seen_accepted_at == second_last_seen
-    assert row.completed_at == second_completed_at
+    assert row.completed_at is not None
+    assert row.updated_at is not None
+    assert row.completed_at == row.updated_at
+
+    assert _as_naive_utc(before_first) <= _as_naive_utc(first_completed_at) <= _as_naive_utc(after_first)
+    assert _as_naive_utc(before_second) <= _as_naive_utc(row.completed_at) <= _as_naive_utc(after_second)
+    assert _as_naive_utc(row.completed_at) >= _as_naive_utc(first_completed_at)
 
     row_count = db_session.scalar(
         select(func.count())
@@ -128,10 +215,9 @@ def test_write_log_inserts_pipeline_log_row_and_commits(
     monkeypatch: pytest.MonkeyPatch,
 ):
     repo = PipelineRepository(db_session)
-    commit_calls = _install_commit_spy(db_session, monkeypatch)
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
 
-    created_at = datetime(2025, 3, 1, 12, 0, 0)
-
+    before = datetime.now(timezone.utc)
     repo.write_log(
         run_id="run-001",
         route="holding",
@@ -141,8 +227,8 @@ def test_write_log_inserts_pipeline_log_row_and_commits(
         level="info",
         message="ok",
         error_type=None,
-        created_at=created_at,
     )
+    after = datetime.now(timezone.utc)
 
     assert commit_calls["count"] == 1
 
@@ -160,4 +246,4 @@ def test_write_log_inserts_pipeline_log_row_and_commits(
     assert row.level == "info"
     assert row.message == "ok"
     assert row.error_type is None
-    assert row.created_at == created_at
+    assert _as_naive_utc(before) <= _as_naive_utc(row.created_at) <= _as_naive_utc(after)

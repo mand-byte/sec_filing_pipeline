@@ -8,11 +8,12 @@ RouteName = Literal["issuer", "owner", "holding"]
 
 @dataclass(slots=True, frozen=True)
 class FilingRecord:
-    composite_figi: str
+    accession_no: str
     cik: str
     ticker: str | None
-    accession_no: str
-    route: RouteName
+    form_type: str
+    filed_at: datetime | None
     accepted_at: datetime
-    active: bool
-    delisted_utc: datetime | None
+    period_end: datetime | None
+    is_amendment: bool
+    amendment_no: int | None
