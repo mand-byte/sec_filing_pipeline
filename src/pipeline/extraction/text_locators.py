@@ -164,6 +164,21 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
                 "window_base": start,
             }
 
+    if isinstance(sections, Sequence):
+        for anchor in anchors:
+            for index, section in enumerate(sections):
+                section_text = str(section)
+                hit = _window_around_anchor(section_text, anchor)
+                if hit is None:
+                    continue
+                window, start, _ = hit
+                return {
+                    "value": window,
+                    "locator_kind": "section_window",
+                    "locator_path": f"sections[{index}]",
+                    "window_base": start,
+                }
+
     return None
 
 
@@ -178,7 +193,7 @@ def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLoca
         except Exception:
             parsed_text = None
 
-    if parsed_text is None:
+    if not isinstance(parsed_text, str):
         text_method = _get_zero_arg_method(filing, "text")
         if text_method is not None:
             try:

@@ -226,6 +226,59 @@ def test_text_engine_reports_deterministic_failure_priority_when_all_patterns_fa
     assert outcome["error_code"] == "QA_FAILED"
 
 
+def test_section_window_extracts_from_list_sections_with_deterministic_locator_path() -> None:
+    spec = TextFieldSpec(
+        field_name="intent_text",
+        route="owner",
+        form_families=("13D",),
+        locators=("section_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        sections_value=[
+            "Cover page and summary content only.",
+            "Purpose of Transaction: Board Seat Representation through engagement.",
+        ]
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_kind"] == "section_window"
+    assert outcome["locator_path"] == "sections[1]"
+
+
+def test_parse_text_window_falls_back_to_text_when_parse_returns_non_string() -> None:
+    spec = TextFieldSpec(
+        field_name="intent_text",
+        route="owner",
+        form_families=("13D",),
+        locators=("parse_text_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+
+    class _ParsedDocument:
+        pass
+
+    filing = _Filing(
+        parse_value=_ParsedDocument(),
+        text_value="Purpose of Transaction: Board Seat Representation through engagement.",
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_path"] == "text"
+
+
 def test_parse_text_window_falls_back_to_text_with_text_locator_path() -> None:
     spec = TextFieldSpec(
         field_name="intent_text",
