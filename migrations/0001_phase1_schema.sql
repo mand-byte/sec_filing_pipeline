@@ -12,7 +12,7 @@ CREATE TABLE security_master (
 CREATE INDEX ix_security_master_cik ON security_master (cik);
 
 CREATE TABLE route_watermark (
-    id BIGSERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     cik VARCHAR(10) NOT NULL,
     route VARCHAR(16) NOT NULL,
     last_accepted_at TIMESTAMPTZ,
@@ -22,7 +22,7 @@ CREATE TABLE route_watermark (
 );
 
 CREATE TABLE delisted_route_completion (
-    id BIGSERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     composite_figi VARCHAR(12) NOT NULL,
     cik VARCHAR(10) NOT NULL,
     route VARCHAR(16) NOT NULL,
@@ -52,7 +52,7 @@ CREATE INDEX ix_filing_document_cik ON filing_document (cik);
 CREATE INDEX ix_filing_document_accepted_at ON filing_document (accepted_at);
 
 CREATE TABLE extracted_fact (
-    id BIGSERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     accession_no VARCHAR(32) NOT NULL,
     route VARCHAR(16) NOT NULL,
     field_name VARCHAR(128) NOT NULL,
@@ -72,7 +72,7 @@ CREATE TABLE extracted_fact (
 CREATE INDEX ix_extracted_fact_accession_no ON extracted_fact (accession_no);
 
 CREATE TABLE extraction_evidence (
-    id BIGSERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     accession_no VARCHAR(32) NOT NULL,
     route VARCHAR(16) NOT NULL,
     field_name VARCHAR(128) NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE extraction_evidence (
 CREATE INDEX ix_extraction_evidence_accession_no ON extraction_evidence (accession_no);
 
 CREATE TABLE pipeline_log (
-    id BIGSERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     run_id VARCHAR(64) NOT NULL,
     route VARCHAR(16) NOT NULL,
     cik VARCHAR(10),
@@ -108,7 +108,7 @@ CREATE TABLE pipeline_log (
 CREATE INDEX ix_pipeline_log_run_id ON pipeline_log (run_id);
 
 CREATE TABLE review_task (
-    task_id BIGSERIAL PRIMARY KEY,
+    task_id SERIAL PRIMARY KEY,
     accession_no VARCHAR(32) NOT NULL,
     route VARCHAR(16) NOT NULL,
     field_name VARCHAR(128) NOT NULL,
@@ -125,8 +125,8 @@ CREATE TABLE review_task (
 CREATE INDEX ix_review_task_accession_no ON review_task (accession_no);
 
 CREATE TABLE review_decision (
-    id BIGSERIAL PRIMARY KEY,
-    task_id BIGINT NOT NULL,
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL,
     decision VARCHAR(16) NOT NULL,
     corrected_value_json TEXT,
     comment TEXT,

@@ -253,3 +253,20 @@ def test_review_decision_reviewer_is_non_nullable_string_64():
     assert isinstance(review_decision.c.reviewer.type, String)
     assert review_decision.c.reviewer.type.length == 64
     assert review_decision.c.reviewer.nullable is False
+
+
+def test_task2_selected_pk_fk_columns_use_integer_widths():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    route_watermark = Base.metadata.tables["route_watermark"]
+    delisted_route_completion = Base.metadata.tables["delisted_route_completion"]
+    extracted_fact = Base.metadata.tables["extracted_fact"]
+    review_task = Base.metadata.tables["review_task"]
+    review_decision = Base.metadata.tables["review_decision"]
+
+    assert isinstance(route_watermark.c.id.type, Integer)
+    assert isinstance(delisted_route_completion.c.id.type, Integer)
+    assert isinstance(extracted_fact.c.id.type, Integer)
+    assert isinstance(review_task.c.task_id.type, Integer)
+    assert isinstance(review_decision.c.task_id.type, Integer)
