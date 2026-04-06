@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping, Sequence
-from typing import Callable, TypedDict, cast
+from typing import Callable, NotRequired, TypedDict, cast
 
 from src.pipeline.extraction.text_contracts import TextLocatorKind
 
@@ -12,6 +12,7 @@ class TextLocatorHit(TypedDict):
     locator_kind: TextLocatorKind
     locator_path: str
     window_base: int
+    item_body_offset: NotRequired[int]
 
 
 LocatorHandler = Callable[[object, tuple[str, ...]], TextLocatorHit | None]
@@ -34,24 +35,68 @@ def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | No
     return cast(Callable[[], object], candidate)
 
 
+def _score_anchor_occurrence(text: str, *, anchor_start: int, anchor_end: int) -> int:
+    line_start = text.rfind("\n", 0, anchor_start) + 1
+    line_end = text.find("\n", anchor_end)
+    if line_end < 0:
+        line_end = len(text)
+
+    line_text = text[line_start:line_end]
+    lowered_line = line_text.lower()
+    anchor_line_start = anchor_start - line_start
+    anchor_line_end = anchor_end - line_start
+
+    before_anchor = lowered_line[:anchor_line_start]
+    after_anchor = lowered_line[anchor_line_end:]
+
+    score = 0
+
+    if not before_anchor.strip():
+        score += 4
+    if after_anchor.lstrip().startswith(":"):
+        score += 3
+    elif after_anchor.lstrip().startswith("-"):
+        score += 1
+    if len(line_text.strip()) <= 140:
+        score += 1
+
+    nearby_before = text[max(0, anchor_start - 120):anchor_start].lower()
+    nearby_window = text[max(0, anchor_start - 120):min(len(text), anchor_end + 120)].lower()
+
+    if "table of contents" in nearby_window:
+        score -= 8
+    if "index only" in nearby_window or "for index" in nearby_window:
+        score -= 4
+    if "table of contents" in nearby_before and after_anchor.lstrip().startswith(":"):
+        score -= 3
+
+    return score
+
+
 def _window_around_anchor(text: str, anchor: str, radius: int = 220) -> tuple[str, int, int] | None:
     lowered_text = text.lower()
     lowered_anchor = anchor.lower()
 
-    idx = lowered_text.find(lowered_anchor)
-    if idx < 0:
+    if not lowered_anchor:
         return None
 
-    search_from = idx + 1
-    while search_from < len(lowered_text):
-        next_idx = lowered_text.find(lowered_anchor, search_from)
-        if next_idx < 0:
-            break
-        idx = next_idx
-        search_from = next_idx + 1
+    best_idx: int | None = None
+    best_score: int | None = None
 
-    start = max(0, idx - radius)
-    end = min(len(text), idx + len(anchor) + radius)
+    idx = lowered_text.find(lowered_anchor)
+    while idx >= 0:
+        anchor_end = idx + len(anchor)
+        score = _score_anchor_occurrence(text, anchor_start=idx, anchor_end=anchor_end)
+        if best_score is None or score > best_score or (score == best_score and (best_idx is None or idx < best_idx)):
+            best_idx = idx
+            best_score = score
+        idx = lowered_text.find(lowered_anchor, idx + 1)
+
+    if best_idx is None:
+        return None
+
+    start = max(0, best_idx - radius)
+    end = min(len(text), best_idx + len(anchor) + radius)
     return text[start:end], start, end
 
 
@@ -72,6 +117,7 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
                 "locator_kind": "item_window",
                 "locator_path": f"items[{key_text}]",
                 "window_base": 0,
+                "item_body_offset": len(key_text) + 1,
             }
 
     return None

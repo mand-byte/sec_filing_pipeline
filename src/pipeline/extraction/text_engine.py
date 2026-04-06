@@ -82,13 +82,24 @@ class TextExtractionEngine:
             source_start = window_hit["window_base"] + span_start
             source_end = window_hit["window_base"] + span_end
 
+            source_span = f"{source_start}:{source_end}"
+            if window_hit["locator_kind"] == "item_window":
+                item_body_offset = window_hit.get("item_body_offset")
+                if isinstance(item_body_offset, int):
+                    if span_end <= item_body_offset:
+                        source_span = f"header:{span_start}:{span_end}"
+                    else:
+                        body_start = max(0, span_start - item_body_offset)
+                        body_end = max(0, span_end - item_body_offset)
+                        source_span = f"{body_start}:{body_end}"
+
             return {
                 "status": "ok",
                 "value_text": value_text,
                 "value_json": None,
                 "locator_kind": window_hit["locator_kind"],
                 "locator_path": window_hit["locator_path"],
-                "source_span": f"{source_start}:{source_end}",
+                "source_span": source_span,
             }
 
         return {"status": "error", "error_code": best_failure}

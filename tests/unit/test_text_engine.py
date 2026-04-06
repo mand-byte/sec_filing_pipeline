@@ -324,7 +324,7 @@ def test_text_engine_does_not_crash_when_parse_sections_and_text_raise() -> None
     assert outcome["error_code"] == "WINDOW_NOT_FOUND"
 
 
-def test_parse_text_window_prefers_later_anchor_occurrence() -> None:
+def test_parse_text_window_prefers_section_like_anchor_over_later_mention() -> None:
     spec = TextFieldSpec(
         field_name="intent_text",
         route="owner",
@@ -336,13 +336,12 @@ def test_parse_text_window_prefers_later_anchor_occurrence() -> None:
         qa_rules={},
     )
     engine = TextExtractionEngine()
-    filing = _Filing(
-        parse_value=(
-            "Table of Contents: Purpose of Transaction appears for index only. "
-            + ("X" * 600)
-            + "Purpose of Transaction: Board Seat Representation is sought through engagement."
-        )
+    parse_text = (
+        "Purpose of Transaction: Board Seat Representation is sought through engagement.\n"
+        + ("X" * 500)
+        + "The filing references the Purpose of Transaction section later for context only."
     )
+    filing = _Filing(parse_value=parse_text)
 
     outcome = engine.extract_field(filing=filing, field_spec=spec)
 
@@ -350,6 +349,11 @@ def test_parse_text_window_prefers_later_anchor_occurrence() -> None:
     assert outcome["value_text"].lower() == "board seat representation"
     assert outcome["locator_kind"] == "parse_text_window"
     assert outcome["locator_path"] == "parse"
+
+    full_match = re.search(r"(?i)(board seat representation)", parse_text)
+    assert full_match is not None
+    expected_start, expected_end = full_match.span(1)
+    assert outcome["source_span"] == f"{expected_start}:{expected_end}"
 
 
 def test_item_window_includes_header_for_regex_matching() -> None:
@@ -376,3 +380,37 @@ def test_item_window_includes_header_for_regex_matching() -> None:
     assert outcome["value_text"].lower() == "item 5.02"
     assert outcome["locator_kind"] == "item_window"
     assert outcome["locator_path"] == "items[Item 5.02 Departure of Directors or Certain Officers]"
+    assert outcome["source_span"] == "header:0:9"
+
+
+def test_item_window_reports_body_relative_source_span() -> None:
+    spec = TextFieldSpec(
+        field_name="item_body_text",
+        route="issuer",
+        form_families=("8-K",),
+        locators=("item_window",),
+        anchor_terms=("item 5.02",),
+        regex_patterns=(r"(?i)(chief financial officer)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    body_text = "The board appointed a new Chief Financial Officer effective immediately."
+    filing = _Filing(
+        items={
+            "Item 5.02 Departure of Directors or Certain Officers": body_text,
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_text"].lower() == "chief financial officer"
+    assert outcome["locator_kind"] == "item_window"
+    assert outcome["source_span"].count(":") == 1
+    assert not outcome["source_span"].startswith("header:")
+
+    body_match = re.search(r"(?i)(chief financial officer)", body_text)
+    assert body_match is not None
+    expected_start, expected_end = body_match.span(1)
+    assert outcome["source_span"] == f"{expected_start}:{expected_end}"
