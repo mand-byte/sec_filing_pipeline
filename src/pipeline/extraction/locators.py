@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Sequence
 from typing import Literal, TypedDict, cast
 
@@ -21,6 +22,14 @@ def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | No
     candidate = getattr(target, name, None)
     if not callable(candidate):
         return None
+
+    try:
+        inspect.signature(candidate).bind()
+    except TypeError:
+        return None
+    except ValueError:
+        return None
+
     return cast(Callable[[], object], candidate)
 
 

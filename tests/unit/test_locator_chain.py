@@ -62,6 +62,19 @@ class _OnlyTextFiling:
         return "from-text"
 
 
+class _ArgObjFiling:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def obj(self, required: object) -> object:
+        self.calls.append("obj")
+        return required
+
+    def xbrl(self) -> str:
+        self.calls.append("xbrl_xml")
+        return "xbrl-hit"
+
+
 def test_locator_chain_uses_fixed_order_and_stops_on_first_hit() -> None:
     filing = _FakeFiling(obj_value=None, xbrl_value={"value": 10}, sections_value=[1], parse_value=999)
 
@@ -85,6 +98,19 @@ def test_locator_chain_skips_missing_and_non_callable_methods() -> None:
 
     assert result == {
         "value": {"value": 7},
+        "locator_kind": "xbrl_xml",
+        "locator_path": "xbrl",
+    }
+    assert filing.calls == ["xbrl_xml"]
+
+
+def test_locator_chain_skips_required_arg_callables_without_crashing() -> None:
+    filing = _ArgObjFiling()
+
+    result = run_locator_chain(filing=filing, locators=["obj", "xbrl_xml"])
+
+    assert result == {
+        "value": "xbrl-hit",
         "locator_kind": "xbrl_xml",
         "locator_path": "xbrl",
     }
