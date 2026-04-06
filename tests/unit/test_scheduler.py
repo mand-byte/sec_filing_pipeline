@@ -15,10 +15,20 @@ class _RecordingRouter:
         self._calls = calls
         self._should_raise = should_raise
 
-    def run(self, *, security: _Security) -> None:
+    def run(self, *, security: _Security, context) -> None:
         self._calls.append((self.name, security.cik))
         if self._should_raise:
             raise RuntimeError("boom")
+
+
+class _ContextAssertingRouter:
+    def __init__(self):
+        self.name = "issuer"
+        self.captured = None
+
+    def run(self, *, security: _Security, context) -> None:
+        del security
+        self.captured = context
 
 
 class _RecordingRepo:
@@ -61,6 +71,22 @@ def test_run_single_tick_calls_routers_in_order_for_each_security():
         ("owner", "0000789019"),
         ("holding", "0000789019"),
     ]
+
+
+def test_run_single_tick_passes_router_context():
+    router = _ContextAssertingRouter()
+
+    run_single_tick(
+        run_id="run-ctx-001",
+        securities=[_Security(cik="0000320193")],
+        routers=[router],
+        repo=_RecordingRepo(),
+    )
+
+    assert router.captured is not None
+    assert router.captured["run_id"] == "run-ctx-001"
+    assert router.captured["route"] == "issuer"
+    assert "repo" in router.captured
 
 
 def test_run_single_tick_logs_router_failed_with_required_fields_and_continues():

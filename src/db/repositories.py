@@ -42,6 +42,21 @@ class PipelineRepository:
 
         return row.last_accepted_at
 
+    def get_delisted_route_completion(
+        self,
+        *,
+        composite_figi: str,
+        cik: str,
+        route: RouteName,
+    ) -> DelistedRouteCompletion | None:
+        return self.session.scalar(
+            select(DelistedRouteCompletion).where(
+                DelistedRouteCompletion.composite_figi == composite_figi,
+                DelistedRouteCompletion.cik == cik,
+                DelistedRouteCompletion.route == route,
+            )
+        )
+
     def upsert_route_watermark(self, *, cik: str, route: RouteName, accepted_at: datetime) -> None:
         now = datetime.now(timezone.utc)
 
@@ -149,6 +164,32 @@ class PipelineRepository:
                 row.completed_at = now
                 row.updated_at = now
 
+        self._commit_with_rollback()
+
+    def invalidate_delisted_route_completion(
+        self,
+        *,
+        composite_figi: str,
+        cik: str,
+        route: RouteName,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        row = self.session.scalar(
+            select(DelistedRouteCompletion).where(
+                DelistedRouteCompletion.composite_figi == composite_figi,
+                DelistedRouteCompletion.cik == cik,
+                DelistedRouteCompletion.route == route,
+            )
+        )
+
+        if row is None:
+            return
+
+        row.is_completed = False
+        row.delisted_utc_snapshot = None
+        row.last_seen_accepted_at = None
+        row.completed_at = None
+        row.updated_at = now
         self._commit_with_rollback()
 
     def write_log(

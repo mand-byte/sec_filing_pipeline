@@ -113,6 +113,9 @@ def test_repository_exposes_session_and_keyword_only_contract(db_session: Sessio
     with pytest.raises(TypeError):
         repo.write_log("run-001", "issuer", "extract", "info", "ok")
 
+    with pytest.raises(TypeError):
+        repo.invalidate_delisted_route_completion("BBG000000001", "0000000001", "owner")
+
 
 def test_get_route_watermark_returns_none_when_row_missing(db_session: Session):
     repo = PipelineRepository(db_session)
@@ -385,6 +388,67 @@ def test_write_log_inserts_pipeline_log_row_and_commits(
     assert row.message == "ok"
     assert row.error_type is None
     assert _as_naive_utc(before) <= _as_naive_utc(row.created_at) <= _as_naive_utc(after)
+
+
+def test_invalidate_delisted_route_completion_updates_existing_row_and_commits(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = PipelineRepository(db_session)
+
+    seed_time = datetime(2025, 1, 10, 8, 0, 0)
+    db_session.add(
+        DelistedRouteCompletion(
+            composite_figi="BBG000000011",
+            cik="0000000011",
+            route="issuer",
+            delisted_utc_snapshot=seed_time,
+            last_seen_accepted_at=seed_time,
+            is_completed=True,
+            completed_at=seed_time,
+            updated_at=seed_time,
+        )
+    )
+    db_session.commit()
+
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
+
+    repo.invalidate_delisted_route_completion(
+        composite_figi="BBG000000011",
+        cik="0000000011",
+        route="issuer",
+    )
+
+    assert commit_calls["count"] == 1
+
+    row = db_session.scalar(
+        select(DelistedRouteCompletion).where(
+            DelistedRouteCompletion.composite_figi == "BBG000000011",
+            DelistedRouteCompletion.cik == "0000000011",
+            DelistedRouteCompletion.route == "issuer",
+        )
+    )
+    assert row is not None
+    assert row.is_completed is False
+    assert row.delisted_utc_snapshot is None
+    assert row.last_seen_accepted_at is None
+    assert row.completed_at is None
+
+
+def test_invalidate_delisted_route_completion_noop_when_row_missing(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repo = PipelineRepository(db_session)
+    commit_calls = _install_commit_spy(repo.session, monkeypatch)
+
+    repo.invalidate_delisted_route_completion(
+        composite_figi="BBG999999999",
+        cik="0000000999",
+        route="owner",
+    )
+
+    assert commit_calls["count"] == 0
 
 
 def test_postgres_upsert_paths_rollback_on_commit_failure(

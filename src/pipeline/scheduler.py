@@ -9,10 +9,16 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 ROUTE_ORDER = ("issuer", "owner", "holding")
 
 
+class RouterContext(Protocol):
+    run_id: str
+    route: str
+    repo: Any
+
+
 class Router(Protocol):
     name: str
 
-    def run(self, *, security: Any) -> None: ...
+    def run(self, *, security: Any, context: RouterContext) -> None: ...
 
 
 def ordered_routers(router_map: dict[str, object]) -> list[object]:
@@ -28,7 +34,14 @@ def run_single_tick(
     for security in securities:
         for router in routers:
             try:
-                router.run(security=security)
+                router.run(
+                    security=security,
+                    context={
+                        "run_id": run_id,
+                        "route": getattr(router, "name", router.__class__.__name__),
+                        "repo": repo,
+                    },
+                )
             except Exception as exc:
                 try:
                     repo.write_log(
