@@ -13,12 +13,14 @@ class _FakeFiling:
         xbrl_value: Any = None,
         sections_value: Any = None,
         parse_value: Any = None,
+        text_value: Any = None,
     ) -> None:
         self.calls: list[str] = []
         self._obj_value = obj_value
         self._xbrl_value = xbrl_value
         self._sections_value = sections_value
         self._parse_value = parse_value
+        self._text_value = text_value
 
     def obj(self) -> Any:
         self.calls.append("obj")
@@ -33,8 +35,31 @@ class _FakeFiling:
         return self._sections_value
 
     def parse(self) -> Any:
-        self.calls.append("parse_text")
+        self.calls.append("parse")
         return self._parse_value
+
+    def text(self) -> Any:
+        self.calls.append("text")
+        return self._text_value
+
+
+class _SparseFiling:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.obj = "not-callable"  # validates callable guard
+
+    def xbrl(self) -> dict[str, int]:
+        self.calls.append("xbrl_xml")
+        return {"value": 7}
+
+
+class _OnlyTextFiling:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def text(self) -> str:
+        self.calls.append("text")
+        return "from-text"
 
 
 def test_locator_chain_uses_fixed_order_and_stops_on_first_hit() -> None:
@@ -53,17 +78,52 @@ def test_locator_chain_uses_fixed_order_and_stops_on_first_hit() -> None:
     assert filing.calls == ["obj", "xbrl_xml"]
 
 
-def test_locator_chain_falls_back_to_parse_text_in_order() -> None:
-    filing = _FakeFiling(obj_value=None, xbrl_value=None, sections_value=[], parse_value="42")
+def test_locator_chain_skips_missing_and_non_callable_methods() -> None:
+    filing = _SparseFiling()
+
+    result = run_locator_chain(filing=filing, locators=["obj", "xbrl_xml"])
+
+    assert result == {
+        "value": {"value": 7},
+        "locator_kind": "xbrl_xml",
+        "locator_path": "xbrl",
+    }
+    assert filing.calls == ["xbrl_xml"]
+
+
+def test_locator_chain_parse_text_falls_back_to_text_method() -> None:
+    filing = _OnlyTextFiling()
+
+    result = run_locator_chain(filing=filing, locators=["parse_text"])
+
+    assert result == {
+        "value": "from-text",
+        "locator_kind": "parse_text",
+        "locator_path": "parse/text",
+    }
+    assert filing.calls == ["text"]
+
+
+def test_locator_chain_ignores_unknown_locator_entries() -> None:
+    filing = _FakeFiling(obj_value="hit")
+
+    result = run_locator_chain(filing=filing, locators=["unknown", "obj"])
+
+    assert result == {
+        "value": "hit",
+        "locator_kind": "obj",
+        "locator_path": "obj",
+    }
+    assert filing.calls == ["obj"]
+
+
+def test_locator_chain_returns_none_when_all_locators_miss() -> None:
+    filing = _FakeFiling(obj_value=None, xbrl_value=None, sections_value=[], parse_value=None, text_value=None)
 
     result = run_locator_chain(
         filing=filing,
         locators=["obj", "xbrl_xml", "sections_search", "parse_text"],
     )
 
-    assert result == {
-        "value": "42",
-        "locator_kind": "parse_text",
-        "locator_path": "parse/text",
-    }
-    assert filing.calls == ["obj", "xbrl_xml", "sections_search", "parse_text"]
+    assert result is None
+    assert filing.calls == ["obj", "xbrl_xml", "sections_search", "parse", "text"]
