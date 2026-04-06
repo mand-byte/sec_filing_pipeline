@@ -26,11 +26,13 @@ def run_single_tick(
                 repo.write_log(
                     run_id=run_id,
                     route=getattr(router, "name", router.__class__.__name__),
-                    stage="router",
-                    level="error",
+                    cik=getattr(security, "cik", None),
+                    stage="extract",
+                    level="ERROR",
                     message="router failed",
                     error_type=exc.__class__.__name__,
                 )
+                continue
 
 
 def build_blocking_scheduler(
