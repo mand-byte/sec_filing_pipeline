@@ -36,7 +36,10 @@ def all_text_field_specs() -> list[TextFieldSpec]:
             qa_rules={
                 "require_stance_enum": True,
                 "require_group_flag": True,
-                "time_horizon_allowed": "short|medium|long|unclear",
+                "allow_short": True,
+                "allow_medium": True,
+                "allow_long": True,
+                "allow_unclear": True,
             },
         ),
         TextFieldSpec(
