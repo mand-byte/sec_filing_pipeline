@@ -29,6 +29,15 @@ class _RecordingRepo:
         self.logs.append(kwargs)
 
 
+class _FailingLogRepo:
+    def __init__(self):
+        self.write_attempts = 0
+
+    def write_log(self, **kwargs) -> None:
+        self.write_attempts += 1
+        raise RuntimeError("log sink down")
+
+
 def test_run_single_tick_calls_routers_in_order_for_each_security():
     calls: list[tuple[str, str]] = []
     routers = [
@@ -89,6 +98,28 @@ def test_run_single_tick_logs_router_failed_with_required_fields_and_continues()
     assert repo.logs[1]["stage"] == "extract"
     assert repo.logs[1]["level"] == "ERROR"
     assert repo.logs[1]["cik"] == "0000789019"
+
+
+def test_run_single_tick_continues_when_router_and_log_write_both_fail():
+    calls: list[tuple[str, str]] = []
+    routers = [
+        _RecordingRouter("issuer", calls),
+        _RecordingRouter("owner", calls, should_raise=True),
+        _RecordingRouter("holding", calls),
+    ]
+
+    run_single_tick(
+        run_id="run-003",
+        securities=[_Security(cik="0000320193")],
+        routers=routers,
+        repo=_FailingLogRepo(),
+    )
+
+    assert calls == [
+        ("issuer", "0000320193"),
+        ("owner", "0000320193"),
+        ("holding", "0000320193"),
+    ]
 
 
 def test_build_blocking_scheduler_registers_phase1_tick_job_id():

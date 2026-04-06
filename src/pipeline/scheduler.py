@@ -23,15 +23,18 @@ def run_single_tick(
             try:
                 router.run(security=security)
             except Exception as exc:
-                repo.write_log(
-                    run_id=run_id,
-                    route=getattr(router, "name", router.__class__.__name__),
-                    cik=getattr(security, "cik", None),
-                    stage="extract",
-                    level="ERROR",
-                    message="router failed",
-                    error_type=exc.__class__.__name__,
-                )
+                try:
+                    repo.write_log(
+                        run_id=run_id,
+                        route=getattr(router, "name", router.__class__.__name__),
+                        cik=getattr(security, "cik", None),
+                        stage="extract",
+                        level="ERROR",
+                        message="router failed",
+                        error_type=exc.__class__.__name__,
+                    )
+                except Exception:
+                    pass
                 continue
 
 
