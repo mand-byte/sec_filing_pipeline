@@ -1,7 +1,14 @@
+from typer.testing import CliRunner
+
 from src.cli import app
 
 
-def test_cli_has_expected_command_name():
-    command_names = [command.name for command in app.registered_commands]
+runner = CliRunner()
 
-    assert "run-once" in command_names
+
+def test_cli_help_includes_expected_commands():
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "run-once" in result.stdout
+    assert "schedule" in result.stdout
