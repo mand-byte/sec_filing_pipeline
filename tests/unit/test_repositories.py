@@ -167,6 +167,31 @@ def test_upsert_route_watermark_inserts_updates_max_and_commits(
     assert row_count == 1
 
 
+def test_upsert_route_watermark_handles_mixed_aware_and_naive_datetimes_in_fallback_path(
+    db_session: Session,
+):
+    repo = PipelineRepository(db_session)
+
+    first_aware = datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc)
+    same_naive = datetime(2025, 1, 1, 10, 0)
+    older_naive = datetime(2025, 1, 1, 9, 59)
+    newer_naive = datetime(2025, 1, 1, 10, 1)
+
+    repo.upsert_route_watermark(cik="0000000002", route="issuer", accepted_at=first_aware)
+    repo.upsert_route_watermark(cik="0000000002", route="issuer", accepted_at=same_naive)
+    repo.upsert_route_watermark(cik="0000000002", route="issuer", accepted_at=older_naive)
+
+    before_newer = repo.get_route_watermark("0000000002", "issuer")
+    assert before_newer is not None
+    assert _as_naive_utc(before_newer) == _as_naive_utc(first_aware)
+
+    repo.upsert_route_watermark(cik="0000000002", route="issuer", accepted_at=newer_naive)
+
+    final_value = repo.get_route_watermark("0000000002", "issuer")
+    assert final_value is not None
+    assert _as_naive_utc(final_value) == newer_naive
+
+
 def test_mark_delisted_route_completed_upserts_completion_state_and_commits(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,

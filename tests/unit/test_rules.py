@@ -23,6 +23,13 @@ def test_is_filing_eligible_rejects_inactive_filing_after_delisted_time():
     assert is_filing_eligible(False, delisted_utc, accepted_at) is False
 
 
+def test_is_filing_eligible_allows_mixed_aware_and_naive_datetimes_for_same_instant():
+    accepted_at = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+    delisted_utc = datetime(2025, 1, 15, 10, 0)
+
+    assert is_filing_eligible(False, delisted_utc, accepted_at) is True
+
+
 def test_should_skip_delisted_route_only_when_inactive_completed_and_snapshot_matches():
     snapshot = datetime(2025, 2, 1, 0, 0, tzinfo=timezone.utc)
 
@@ -38,3 +45,10 @@ def test_should_skip_delisted_route_only_when_inactive_completed_and_snapshot_ma
         )
         is False
     )
+
+
+def test_should_skip_delisted_route_matches_same_instant_with_mixed_tz_awareness():
+    snapshot = datetime(2025, 2, 1, 0, 0, tzinfo=timezone.utc)
+    current_delisted_utc = datetime(2025, 2, 1, 0, 0)
+
+    assert should_skip_delisted_route(False, True, snapshot, current_delisted_utc) is True

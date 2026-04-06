@@ -8,6 +8,13 @@ from src.db.models import DelistedRouteCompletion, PipelineLog, RouteWatermark
 from src.pipeline.types import RouteName
 
 
+def _normalize_to_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+
+    return value.astimezone(timezone.utc)
+
+
 class PipelineRepository:
     def __init__(self, session: Session):
         self.session = session
@@ -72,7 +79,9 @@ class PipelineRepository:
                         updated_at=now,
                     )
                 )
-            elif row.last_accepted_at is None or accepted_at > row.last_accepted_at:
+            elif row.last_accepted_at is None or (
+                _normalize_to_utc(accepted_at) > _normalize_to_utc(row.last_accepted_at)
+            ):
                 row.last_accepted_at = accepted_at
                 row.updated_at = now
 
