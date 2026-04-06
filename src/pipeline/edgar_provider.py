@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timezone
 from typing import Any
 
 from src.pipeline.extraction.registry import all_numeric_field_specs
+from src.pipeline.extraction.text_registry import all_text_field_specs
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,14 @@ def _route_forms(route: str) -> tuple[str, ...]:
         if spec.route == route
         for form in spec.form_families
     }
+    forms.update(
+        {
+            form
+            for spec in all_text_field_specs()
+            if spec.route == route
+            for form in spec.form_families
+        }
+    )
     return tuple(sorted(forms))
 
 

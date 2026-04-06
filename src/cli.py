@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
+from pathlib import Path
 from typing import Any, cast
 
 import typer
@@ -12,7 +13,12 @@ from src.db.session import get_session_factory
 from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
 from src.pipeline.extraction.engine import NumericExtractionEngine
 from src.pipeline.extraction.registry import all_numeric_field_specs
+from src.pipeline.extraction.text_engine import TextExtractionEngine
+from src.pipeline.extraction.text_registry import all_text_field_specs
+from src.pipeline.review.review_gate import ReviewGateInput, evaluate_review_gate
+from src.pipeline.review.stats import SqlAlchemyReviewStats
 from src.pipeline.offline_artifacts import write_run_artifacts
+from src.pipeline.offline_evaluator import OfflineEvalSelectors, run_offline_tier2_evaluation
 from src.pipeline.routers.holding import HoldingRouter
 from src.pipeline.routers.issuer import IssuerRouter
 from src.pipeline.routers.owner import OwnerRouter
@@ -50,8 +56,19 @@ def _as_utc_start_of_day(start_date: date) -> datetime:
     return datetime.combine(start_date, time.min, tzinfo=timezone.utc)
 
 
+def _bundle_sort_key(bundle: FilingBundle) -> tuple[datetime, str]:
+    return (_normalize_to_utc(bundle.filing.accepted_at), bundle.filing.accession_no)
+
+
 def _load_run_once_securities(session: Any) -> list[SecurityMaster]:
-    return list(session.scalars(select(SecurityMaster)).all())
+    return list(
+        session.scalars(
+            select(SecurityMaster).order_by(
+                SecurityMaster.cik.asc(),
+                SecurityMaster.composite_figi.asc(),
+            )
+        ).all()
+    )
 
 
 def _load_route_filing_bundles(
@@ -69,7 +86,10 @@ def _load_route_filing_bundles(
     if not isinstance(bundles, list):
         return []
 
-    return [bundle for bundle in bundles if isinstance(bundle, FilingBundle)]
+    return sorted(
+        [bundle for bundle in bundles if isinstance(bundle, FilingBundle)],
+        key=_bundle_sort_key,
+    )
 
 
 def _build_bundles_from_provider(
@@ -88,11 +108,26 @@ def _build_bundles_from_provider(
     if not envelopes:
         return []
 
-    engine = NumericExtractionEngine()
-    route_specs = tuple(spec for spec in all_numeric_field_specs() if spec.route == route)
+    numeric_engine = NumericExtractionEngine()
+    text_engine = TextExtractionEngine()
+    route_numeric_specs = tuple(
+        sorted(
+            (spec for spec in all_numeric_field_specs() if spec.route == route),
+            key=lambda spec: spec.field_name,
+        )
+    )
+    route_text_specs = tuple(
+        sorted(
+            (spec for spec in all_text_field_specs() if spec.route == route),
+            key=lambda spec: spec.field_name,
+        )
+    )
 
     bundles: list[FilingBundle] = []
-    for envelope in envelopes:
+    for envelope in sorted(
+        envelopes,
+        key=lambda env: (_normalize_to_utc(env.accepted_at), env.accession_no),
+    ):
         filing = FilingRecord(
             accession_no=envelope.accession_no,
             cik=envelope.cik,
@@ -109,11 +144,11 @@ def _build_bundles_from_provider(
         evidences: list[EvidenceInput] = []
         form_family = classify_form_family(envelope.form_type)
 
-        for spec in route_specs:
+        for spec in route_numeric_specs:
             if form_family not in spec.form_families:
                 continue
 
-            outcome = engine.extract_field(filing=envelope.filing, field_spec=spec)
+            outcome = numeric_engine.extract_field(filing=envelope.filing, field_spec=spec)
             if outcome["status"] != "ok":
                 _safe_write_log(
                     repo,
@@ -142,6 +177,44 @@ def _build_bundles_from_provider(
                     source_span=outcome["locator_path"],
                     raw_value=str(outcome["value_raw"]),
                     normalized_value=str(outcome["value_normalized"]),
+                )
+            )
+
+        for spec in route_text_specs:
+            if form_family not in spec.form_families:
+                continue
+
+            outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+            if outcome["status"] != "ok":
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="text field extraction failed",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type=outcome["error_code"],
+                )
+                continue
+
+            facts.append(
+                FactInput(
+                    field_name=spec.field_name,
+                    value_text=outcome["value_text"],
+                    value_json=outcome["value_json"],
+                    confidence=0.99,
+                )
+            )
+            evidences.append(
+                EvidenceInput(
+                    field_name=spec.field_name,
+                    locator_kind=outcome["locator_kind"],
+                    source_span=outcome["source_span"],
+                    source_xpath=outcome["locator_path"],
+                    raw_value=outcome["value_text"],
+                    normalized_value=outcome["value_text"],
                 )
             )
 
@@ -191,6 +264,62 @@ def _safe_write_log(
         )
     except Exception:
         pass
+
+
+def _review_metric_for_gate(fact: FactInput) -> float | None:
+    if isinstance(fact.value_numeric, (int, float)) and not isinstance(fact.value_numeric, bool):
+        return float(fact.value_numeric)
+
+    if isinstance(fact.value_text, str):
+        text_length = len(fact.value_text.strip())
+        if text_length > 0:
+            return float(text_length)
+
+    return None
+
+
+def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stats: SqlAlchemyReviewStats) -> None:
+    form_family = classify_form_family(bundle.filing.form_type)
+    text_field_names = {
+        spec.field_name
+        for spec in all_text_field_specs()
+        if spec.route == route and form_family in spec.form_families
+    }
+    if not text_field_names:
+        return
+
+    evidence_by_field: dict[str, EvidenceInput] = {}
+    for evidence in bundle.evidences:
+        if evidence.field_name not in evidence_by_field:
+            evidence_by_field[evidence.field_name] = evidence
+
+    for index, fact in enumerate(bundle.facts):
+        if fact.field_name not in text_field_names:
+            continue
+
+        evidence = evidence_by_field.get(fact.field_name)
+        metric = _review_metric_for_gate(fact)
+        review_decision = evaluate_review_gate(
+            candidate=ReviewGateInput(
+                cik=bundle.filing.cik,
+                route=route,
+                field_name=fact.field_name,
+                template_hash=evidence.source_xpath if evidence else None,
+                value_numeric=metric,
+            ),
+            stats=stats,
+        )
+
+        bundle.facts[index] = FactInput(
+            field_name=fact.field_name,
+            value_numeric=fact.value_numeric,
+            value_text=fact.value_text,
+            value_json=fact.value_json,
+            value_unit=fact.value_unit,
+            confidence=0.49 if review_decision["decision"] == "needs_review" else 0.99,
+            review_priority=review_decision["priority"],
+            review_reason=review_decision["reason"],
+        )
 
 
 def _process_security_route(
@@ -276,11 +405,15 @@ def _process_security_route(
             continue
         eligible_bundles.append(bundle)
 
+    eligible_bundles.sort(key=_bundle_sort_key)
+
     last_seen_accepted_at = watermark
     if eligible_bundles:
+        review_stats = SqlAlchemyReviewStats(repo.session)
         processed_bundles: list[FilingBundle] = []
         for bundle in eligible_bundles:
             try:
+                _apply_review_gate_to_bundle(bundle=bundle, route=route, stats=review_stats)
                 persistence_service.persist_filing_bundle(
                     filing=bundle.filing,
                     route=route,
@@ -456,7 +589,9 @@ def _run_once_pipeline() -> None:
                 base_dir=settings.offline_artifacts_dir,
                 run_id=run_id,
                 summary=summary_payload,
-                samples=sample_payload,
+                by_field={},
+                failures=[sample for sample in sample_payload if sample.get("level") == "ERROR"],
+                candidates=sample_payload,
                 diff_markdown=diff_markdown,
             )
 
@@ -465,6 +600,58 @@ def _run_once_pipeline() -> None:
 def run_once() -> None:
     """Run the phase-1 pipeline once."""
     _run_once_pipeline()
+
+
+@app.command("offline-eval")
+def offline_eval(
+    regex_config: str = typer.Option(
+        "configs/tier2/regex/default.yaml",
+        "--regex-config",
+        help="Path to Tier2 regex config yaml",
+    ),
+    golden_set: str = typer.Option(
+        "configs/tier2/golden_set/default.yaml",
+        "--golden-set",
+        help="Path to Tier2 golden set yaml",
+    ),
+    fixtures_dir: str = typer.Option(
+        "configs/tier2/fixtures",
+        "--fixtures-dir",
+        help="Directory of local fixture snapshots",
+    ),
+    artifacts_dir: str = typer.Option(
+        "artifacts/offline",
+        "--artifacts-dir",
+        help="Directory for offline evaluator artifacts",
+    ),
+    route: str | None = typer.Option(None, "--route", help="Optional route filter"),
+    form_family: str | None = typer.Option(None, "--form-family", help="Optional form family filter"),
+    field_name: str | None = typer.Option(None, "--field", help="Optional field filter"),
+    case_id: str | None = typer.Option(None, "--case-id", help="Optional case id filter"),
+    baseline: str | None = typer.Option(None, "--baseline", help="Optional baseline summary json"),
+    min_pass_rate: float = typer.Option(0.95, "--min-pass-rate", help="Minimum pass rate threshold"),
+) -> None:
+    """Run Tier2 offline evaluator using local fixtures and golden set."""
+    result = run_offline_tier2_evaluation(
+        regex_config_path=Path(regex_config),
+        golden_set_path=Path(golden_set),
+        fixtures_dir=Path(fixtures_dir),
+        artifacts_dir=Path(artifacts_dir),
+        selectors=OfflineEvalSelectors(
+            route=route,
+            form_family=form_family,
+            field_name=field_name,
+            case_id=case_id,
+        ),
+        baseline_path=Path(baseline) if baseline else None,
+        min_pass_rate=min_pass_rate,
+    )
+    typer.echo(f"offline run_id: {result.run_id}")
+    typer.echo(
+        "offline metrics: "
+        + f"passed={result.summary['metrics']['passed']} "
+        + f"failed={result.summary['metrics']['failed']}"
+    )
 
 
 @app.command("schedule")

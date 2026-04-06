@@ -1,0 +1,402 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from src.pipeline.edgar_provider import classify_form_family
+from src.pipeline.extraction.text_contracts import TextFieldSpec
+from src.pipeline.extraction.text_engine import TextExtractionEngine
+from src.pipeline.extraction.text_registry import all_text_field_specs
+from src.pipeline.offline_artifacts import write_run_artifacts
+from src.pipeline.scheduler import make_run_id
+
+try:
+    import yaml
+except Exception:  # pragma: no cover
+    yaml = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class OfflineEvalSelectors:
+    route: str | None = None
+    form_family: str | None = None
+    field_name: str | None = None
+    case_id: str | None = None
+
+
+@dataclass(frozen=True)
+class OfflineEvalResult:
+    run_id: str
+    summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _OfflineFixtureFiling:
+    parse_text: str
+    section_payload: object | None
+
+    def parse(self) -> str:
+        return self.parse_text
+
+    def text(self) -> str:
+        return self.parse_text
+
+    def sections(self) -> object | None:
+        return self.section_payload
+
+
+FieldKey = tuple[str, str]
+
+
+def _require_yaml() -> Any:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required for offline evaluator")
+    return yaml
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    parser = _require_yaml()
+    payload = parser.safe_load(path.read_text(encoding="utf-8"))
+    if payload is None:
+        return {}
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"YAML root must be a mapping: {path}")
+    return dict(payload)
+
+
+def _as_string_tuple(values: object) -> tuple[str, ...]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        raise ValueError("Expected sequence of strings")
+    return tuple(str(value) for value in values)
+
+
+def _apply_field_override(spec: TextFieldSpec, override: Mapping[str, Any]) -> TextFieldSpec:
+    route = str(override.get("route", spec.route))
+
+    form_families_value = override.get("form_families", spec.form_families)
+    form_families = tuple(form.upper() for form in _as_string_tuple(form_families_value))
+
+    locators_value = override.get("locators", spec.locators)
+    locators = _as_string_tuple(locators_value)
+
+    anchor_terms_value = override.get("anchor_terms", spec.anchor_terms)
+    anchor_terms = _as_string_tuple(anchor_terms_value)
+
+    regex_patterns_value = override.get("regex_patterns", spec.regex_patterns)
+    regex_patterns = _as_string_tuple(regex_patterns_value)
+
+    output_kind = str(override.get("output_kind", spec.output_kind))
+
+    qa_rules_raw = override.get("qa_rules", spec.qa_rules)
+    if not isinstance(qa_rules_raw, Mapping):
+        raise ValueError("qa_rules override must be a mapping")
+    qa_rules = dict(qa_rules_raw)
+
+    return TextFieldSpec(
+        field_name=spec.field_name,
+        route=route,  # type: ignore[arg-type]
+        form_families=form_families,
+        locators=locators,  # type: ignore[arg-type]
+        anchor_terms=anchor_terms,
+        regex_patterns=regex_patterns,
+        output_kind=output_kind,  # type: ignore[arg-type]
+        qa_rules=qa_rules,
+    )
+
+
+def _build_spec_map(regex_config: Mapping[str, Any]) -> dict[FieldKey, TextFieldSpec]:
+    base_specs = all_text_field_specs()
+    spec_map: dict[FieldKey, TextFieldSpec] = {(spec.route, spec.field_name): spec for spec in base_specs}
+
+    field_overrides_raw = regex_config.get("fields", {})
+    if not isinstance(field_overrides_raw, Mapping):
+        return spec_map
+
+    for field_name_raw, override_raw in field_overrides_raw.items():
+        field_name = str(field_name_raw)
+        if not isinstance(override_raw, Mapping):
+            continue
+
+        target_route_raw = override_raw.get("route")
+        if target_route_raw is not None:
+            key = (str(target_route_raw), field_name)
+            existing_spec = spec_map.get(key)
+            if existing_spec is not None:
+                spec_map[key] = _apply_field_override(existing_spec, override_raw)
+            continue
+
+        matching_keys = [key for key in spec_map.keys() if key[1] == field_name]
+        for key in matching_keys:
+            spec_map[key] = _apply_field_override(spec_map[key], override_raw)
+
+    return spec_map
+
+
+def _update_by_field(
+    *,
+    by_field: dict[str, dict[str, int]],
+    field_name: str,
+    matched: bool,
+    status: str,
+) -> None:
+    stats = by_field.setdefault(field_name, {"total": 0, "matched": 0, "failed": 0, "ok": 0, "error": 0})
+    stats["total"] += 1
+    if status == "ok":
+        stats["ok"] += 1
+    else:
+        stats["error"] += 1
+    if matched:
+        stats["matched"] += 1
+    else:
+        stats["failed"] += 1
+
+
+def _load_baseline(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise ValueError(f"baseline file not found: {path}")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"baseline root must be a mapping: {path}")
+    return dict(payload)
+
+
+def _matched_rate(field_stats: Mapping[str, Any]) -> float:
+    total = field_stats.get("total")
+    matched = field_stats.get("matched")
+    if not isinstance(total, int) or total <= 0:
+        return 0.0
+    if not isinstance(matched, int):
+        return 0.0
+    return matched / total
+
+
+def _build_diff_markdown(failures: list[dict[str, Any]], regressions: list[str]) -> str:
+    if not failures and not regressions:
+        return "# Diff\n- no failures\n- no regressions vs baseline"
+
+    lines = ["# Diff"]
+    for failure in failures:
+        lines.append(
+            "- "
+            + f"{failure.get('case_id')}::{failure.get('field_name')} "
+            + f"expected={failure.get('expected')} actual={failure.get('actual')}"
+        )
+
+    for regression in regressions:
+        lines.append(f"- baseline regression: {regression}")
+
+    return "\n".join(lines)
+
+
+def run_offline_tier2_evaluation(
+    *,
+    regex_config_path: Path,
+    golden_set_path: Path,
+    fixtures_dir: Path,
+    artifacts_dir: Path,
+    selectors: OfflineEvalSelectors | None = None,
+    run_id: str | None = None,
+    baseline_path: Path | None = None,
+    min_pass_rate: float = 0.95,
+) -> OfflineEvalResult:
+    selectors = selectors or OfflineEvalSelectors()
+    run_id_value = run_id or make_run_id()
+
+    regex_config = _load_yaml_mapping(regex_config_path)
+    golden_set = _load_yaml_mapping(golden_set_path)
+    spec_map = _build_spec_map(regex_config)
+    engine = TextExtractionEngine()
+
+    cases_raw = golden_set.get("cases", [])
+    if not isinstance(cases_raw, list):
+        raise ValueError("golden_set 'cases' must be a list")
+
+    selected_route = selectors.route
+    selected_form_family = selectors.form_family.upper() if selectors.form_family else None
+    selected_field = selectors.field_name
+    selected_case_id = selectors.case_id
+
+    candidates: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    by_field: dict[str, dict[str, int]] = {}
+
+    total_cases = 0
+
+    normalized_cases = [case_raw for case_raw in cases_raw if isinstance(case_raw, Mapping)]
+    normalized_cases.sort(key=lambda case: str(case.get("case_id", "")))
+
+    for case_raw in normalized_cases:
+
+        case_id = str(case_raw.get("case_id", ""))
+        route = str(case_raw.get("route", "")).strip()
+        form_type = str(case_raw.get("form_type", "")).strip()
+        form_family = classify_form_family(form_type)
+
+        if not case_id or not route or not form_type:
+            continue
+
+        if selected_case_id and case_id != selected_case_id:
+            continue
+        if selected_route and route != selected_route:
+            continue
+        if selected_form_family and form_family != selected_form_family:
+            continue
+
+        fixture_file = str(case_raw.get("fixture_file", "")).strip()
+        fixture_path = fixtures_dir / fixture_file
+        fixture_text = fixture_path.read_text(encoding="utf-8") if fixture_file and fixture_path.exists() else ""
+
+        filing = _OfflineFixtureFiling(
+            parse_text=fixture_text,
+            section_payload=case_raw.get("sections"),
+        )
+
+        expected_raw = case_raw.get("expected", {})
+        if not isinstance(expected_raw, Mapping):
+            continue
+
+        total_cases += 1
+
+        for field_name in sorted(str(field_name_raw) for field_name_raw in expected_raw.keys()):
+            expected_value_raw = expected_raw[field_name]
+            if selected_field and field_name != selected_field:
+                continue
+
+            expected_value: dict[str, Any] = (
+                dict(expected_value_raw)
+                if isinstance(expected_value_raw, Mapping)
+                else {"status": "ok", "value_text": str(expected_value_raw)}
+            )
+
+            candidate: dict[str, Any] = {
+                "case_id": case_id,
+                "route": route,
+                "form_type": form_type,
+                "form_family": form_family,
+                "field_name": field_name,
+            }
+
+            spec = spec_map.get((route, field_name))
+            if spec is None or form_family not in spec.form_families:
+                candidate.update({"status": "error", "error_code": "SPEC_NOT_FOUND"})
+                expected_status = str(expected_value.get("status", "ok"))
+                expected_error = str(expected_value.get("error_code", ""))
+                matched = expected_status == "error" and expected_error == "SPEC_NOT_FOUND"
+            elif not fixture_text:
+                candidate.update({"status": "error", "error_code": "FIXTURE_NOT_FOUND"})
+                expected_status = str(expected_value.get("status", "ok"))
+                expected_error = str(expected_value.get("error_code", ""))
+                matched = expected_status == "error" and expected_error == "FIXTURE_NOT_FOUND"
+            else:
+                outcome = engine.extract_field(filing=filing, field_spec=spec)
+                if outcome["status"] == "ok":
+                    candidate.update(
+                        {
+                            "status": "ok",
+                            "value_text": outcome["value_text"],
+                            "value_json": outcome["value_json"],
+                            "locator_kind": outcome["locator_kind"],
+                            "locator_path": outcome["locator_path"],
+                            "source_span": outcome["source_span"],
+                        }
+                    )
+                else:
+                    candidate.update(
+                        {
+                            "status": "error",
+                            "error_code": outcome["error_code"],
+                        }
+                    )
+
+                expected_status = str(expected_value.get("status", "ok"))
+                if expected_status == "ok":
+                    expected_text = str(expected_value.get("value_text", "")).strip().casefold()
+                    actual_text = str(candidate.get("value_text", "")).strip().casefold()
+                    matched = candidate["status"] == "ok" and actual_text == expected_text
+                elif expected_status == "error":
+                    expected_error = str(expected_value.get("error_code", "")).strip()
+                    matched = candidate["status"] == "error" and str(candidate.get("error_code", "")) == expected_error
+                else:
+                    raise ValueError(f"Unsupported expected status: {expected_status}")
+
+            candidate["matched"] = matched
+            candidates.append(candidate)
+
+            _update_by_field(
+                by_field=by_field,
+                field_name=field_name,
+                matched=matched,
+                status=str(candidate.get("status", "error")),
+            )
+
+            if not matched:
+                failure = {
+                    "case_id": case_id,
+                    "field_name": field_name,
+                    "expected": expected_value,
+                    "actual": candidate,
+                }
+                failures.append(failure)
+
+    total_candidates = len(candidates)
+    total_failures = len(failures)
+    total_passed = total_candidates - total_failures
+
+    pass_rate = (total_passed / total_candidates) if total_candidates else 0.0
+
+    regressions: list[str] = []
+    baseline_summary_path = baseline_path
+    if baseline_summary_path is not None:
+        baseline_summary = _load_baseline(baseline_summary_path)
+        baseline_by_field_raw = baseline_summary.get("by_field", {})
+        if isinstance(baseline_by_field_raw, Mapping):
+            for field_name in sorted(by_field.keys()):
+                current_stats = by_field[field_name]
+                baseline_stats = baseline_by_field_raw.get(field_name)
+                if not isinstance(baseline_stats, Mapping):
+                    continue
+                if _matched_rate(current_stats) + 1e-12 < _matched_rate(baseline_stats):
+                    regressions.append(field_name)
+
+    summary = {
+        "run_id": run_id_value,
+        "selectors": {
+            "route": selectors.route,
+            "form_family": selectors.form_family,
+            "field_name": selectors.field_name,
+            "case_id": selectors.case_id,
+        },
+        "coverage": {
+            "total_cases": total_cases,
+            "total_candidates": total_candidates,
+        },
+        "metrics": {
+            "passed": total_passed,
+            "failed": total_failures,
+            "pass_rate": pass_rate,
+            "min_pass_rate": min_pass_rate,
+            "passes_threshold": pass_rate >= min_pass_rate,
+            "regressions": regressions,
+        },
+    }
+
+    write_run_artifacts(
+        base_dir=artifacts_dir,
+        run_id=run_id_value,
+        summary=summary,
+        by_field=by_field,
+        failures=failures,
+        candidates=candidates,
+        diff_markdown=_build_diff_markdown(failures, regressions),
+    )
+
+    if regressions:
+        raise ValueError(f"baseline regression detected for fields: {', '.join(regressions)}")
+    if pass_rate < min_pass_rate:
+        raise ValueError(f"pass_rate {pass_rate:.4f} below threshold {min_pass_rate:.4f}")
+
+    return OfflineEvalResult(run_id=run_id_value, summary=summary)

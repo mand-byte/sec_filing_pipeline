@@ -11,6 +11,7 @@ def test_cli_help_includes_expected_commands():
 
     assert result.exit_code == 0
     assert "run-once" in result.stdout
+    assert "offline-eval" in result.stdout
     assert "schedule" in result.stdout
 
 
@@ -36,6 +37,33 @@ def test_run_once_command_invokes_successfully(monkeypatch):
 
     assert result.exit_code == 0
     assert "route order: issuer -> owner -> holding" in result.stdout
+
+
+def test_offline_eval_command_invokes_successfully(monkeypatch, tmp_path):
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+
+    output_dir = tmp_path / "artifacts"
+
+    def _fake_run_offline_tier2_evaluation(**kwargs):
+        del kwargs
+        return type("_Result", (), {"run_id": "offline-run-001", "summary": {"metrics": {"passed": 1, "failed": 0}}})()
+
+    monkeypatch.setattr("src.cli.run_offline_tier2_evaluation", _fake_run_offline_tier2_evaluation)
+
+    result = runner.invoke(
+        app,
+        [
+            "offline-eval",
+            "--artifacts-dir",
+            str(output_dir),
+            "--min-pass-rate",
+            "0.95",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "offline run_id: offline-run-001" in result.stdout
+    assert "passed=1 failed=0" in result.stdout
 
 
 def test_schedule_command_invokes_successfully(monkeypatch):

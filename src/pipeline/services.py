@@ -16,6 +16,8 @@ class FactInput:
     value_json: str | None = None
     value_unit: str | None = None
     confidence: float | None = None
+    review_priority: str | None = None
+    review_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -154,7 +156,8 @@ class PersistenceService:
                             route=route,
                             field_name=fact.field_name,
                             status="open",
-                            priority="high",
+                            priority=fact.review_priority or "high",
+                            reason=fact.review_reason,
                             assignee=None,
                             created_at=now,
                             resolved_at=None,

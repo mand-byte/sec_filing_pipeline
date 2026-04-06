@@ -12,6 +12,7 @@ dependencies = [
     "psycopg[binary]",
     "pydantic",
     "pydantic-settings",
+    "pyyaml>=6.0.1",
     "sqlalchemy",
     "typer>=0.15.0",
 ]

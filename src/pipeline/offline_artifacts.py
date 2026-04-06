@@ -10,7 +10,9 @@ def write_run_artifacts(
     base_dir: Path,
     run_id: str,
     summary: dict[str, Any],
-    samples: list[dict[str, Any]],
+    by_field: dict[str, Any],
+    failures: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
     diff_markdown: str,
 ) -> None:
     run_dir = base_dir / run_id
@@ -21,8 +23,17 @@ def write_run_artifacts(
         encoding="utf-8",
     )
 
-    with (run_dir / "samples.ndjson").open("w", encoding="utf-8") as output:
-        for sample in samples:
-            output.write(json.dumps(sample, ensure_ascii=False) + "\n")
+    (run_dir / "by_field.json").write_text(
+        json.dumps(by_field, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    with (run_dir / "failures.ndjson").open("w", encoding="utf-8") as output:
+        for failure in failures:
+            output.write(json.dumps(failure, ensure_ascii=False) + "\n")
+
+    with (run_dir / "candidates.ndjson").open("w", encoding="utf-8") as output:
+        for candidate in candidates:
+            output.write(json.dumps(candidate, ensure_ascii=False) + "\n")
 
     (run_dir / "diff.md").write_text(diff_markdown, encoding="utf-8")

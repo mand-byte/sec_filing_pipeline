@@ -119,6 +119,7 @@ def test_models_include_required_task2_columns():
             "field_name",
             "status",
             "priority",
+            "reason",
             "assignee",
             "created_at",
             "resolved_at",

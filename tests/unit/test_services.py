@@ -138,6 +138,7 @@ def test_persist_filing_bundle_uses_internal_timestamps_and_commits_once(db_sess
     assert before_naive <= evidence.created_at <= after_naive
     assert len(review_tasks) == 1
     assert review_tasks[0].priority == "high"
+    assert review_tasks[0].reason is None
     assert commit_calls == 1
 
 
