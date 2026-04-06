@@ -16,13 +16,36 @@ class TextFieldSpec:
     anchor_terms: tuple[str, ...]
     regex_patterns: tuple[str, ...]
     output_kind: TextOutputKind
-    qa_rules: Mapping[str, str | float | int | bool | None]
+    qa_rules: Mapping[str, int | float | bool]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "form_families", tuple(form.upper() for form in self.form_families))
-        object.__setattr__(self, "locators", tuple(self.locators))
-        object.__setattr__(self, "anchor_terms", tuple(self.anchor_terms))
-        object.__setattr__(self, "regex_patterns", tuple(self.regex_patterns))
+        field_name = self.field_name.strip()
+        if not field_name:
+            raise ValueError("field_name must be non-empty after stripping")
+
+        form_families = tuple(form.upper() for form in self.form_families)
+        if not form_families:
+            raise ValueError("form_families must be non-empty")
+
+        locators = tuple(self.locators)
+        if not 1 <= len(locators) <= 3:
+            raise ValueError("locators must contain between 1 and 3 entries")
+
+        anchor_terms = tuple(self.anchor_terms)
+        if not anchor_terms:
+            raise ValueError("anchor_terms must be non-empty")
+
+        regex_patterns = tuple(self.regex_patterns)
+        if not regex_patterns:
+            raise ValueError("regex_patterns must be non-empty")
+        if any(not pattern.strip() for pattern in regex_patterns):
+            raise ValueError("regex_patterns must contain non-empty patterns")
+
+        object.__setattr__(self, "field_name", field_name)
+        object.__setattr__(self, "form_families", form_families)
+        object.__setattr__(self, "locators", locators)
+        object.__setattr__(self, "anchor_terms", anchor_terms)
+        object.__setattr__(self, "regex_patterns", regex_patterns)
         object.__setattr__(self, "qa_rules", MappingProxyType(dict(self.qa_rules)))
 
 
@@ -30,10 +53,10 @@ class TextFieldSpec:
 class TextCandidate:
     field_name: str
     value_text: str | None
-    value_json: Mapping[str, object] | None
+    value_json: str | None
     locator_kind: TextLocatorKind
     locator_path: str
-    source_span: str | None
+    source_span: str
 
 
 @dataclass(frozen=True)
