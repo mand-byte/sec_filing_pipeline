@@ -8,7 +8,7 @@ from src.db.models import ExtractedFact, ExtractionEvidence, FilingDocument, Rev
 from src.pipeline.types import FilingRecord, RouteName
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class FactInput:
     field_name: str
     value_numeric: float | None = None
@@ -18,7 +18,7 @@ class FactInput:
     confidence: float | None = None
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class EvidenceInput:
     field_name: str
     locator_kind: str
@@ -99,18 +99,27 @@ class PersistenceService:
                 existing_fact.extracted_at = now
 
             if fact.confidence is not None and fact.confidence < 0.5:
-                self.session.add(
-                    ReviewTask(
-                        accession_no=filing.accession_no,
-                        route=route,
-                        field_name=fact.field_name,
-                        status="open",
-                        priority="high",
-                        assignee=None,
-                        created_at=now,
-                        resolved_at=None,
+                existing_review_task = self.session.scalar(
+                    select(ReviewTask).where(
+                        ReviewTask.accession_no == filing.accession_no,
+                        ReviewTask.route == route,
+                        ReviewTask.field_name == fact.field_name,
+                        ReviewTask.status == "open",
                     )
                 )
+                if existing_review_task is None:
+                    self.session.add(
+                        ReviewTask(
+                            accession_no=filing.accession_no,
+                            route=route,
+                            field_name=fact.field_name,
+                            status="open",
+                            priority="high",
+                            assignee=None,
+                            created_at=now,
+                            resolved_at=None,
+                        )
+                    )
 
         for evidence in evidences:
             self.session.add(

@@ -226,3 +226,59 @@ def test_persist_filing_bundle_persists_evidence_rows(db_session: Session):
 
     evidence_count = db_session.scalar(select(func.count()).select_from(ExtractionEvidence))
     assert evidence_count == 2
+
+
+def test_persist_filing_bundle_does_not_duplicate_open_review_tasks(db_session: Session):
+    service = PersistenceService(db_session)
+    filing = _filing("0000000001-25-000006")
+
+    service.persist_filing_bundle(
+        filing=filing,
+        route="owner",
+        facts=[
+            FactInput(
+                field_name="ownership_pct",
+                value_numeric=2.5,
+                value_unit="percent",
+                confidence=0.49,
+            )
+        ],
+        evidences=[
+            EvidenceInput(
+                field_name="ownership_pct",
+                locator_kind="html_span",
+                source_span="Beneficial ownership is 2.5%.",
+            )
+        ],
+    )
+
+    service.persist_filing_bundle(
+        filing=filing,
+        route="owner",
+        facts=[
+            FactInput(
+                field_name="ownership_pct",
+                value_numeric=2.6,
+                value_unit="percent",
+                confidence=0.45,
+            )
+        ],
+        evidences=[
+            EvidenceInput(
+                field_name="ownership_pct",
+                locator_kind="html_span",
+                source_span="Beneficial ownership is 2.6%.",
+            )
+        ],
+    )
+
+    review_tasks = db_session.scalars(
+        select(ReviewTask).where(
+            ReviewTask.accession_no == "0000000001-25-000006",
+            ReviewTask.route == "owner",
+            ReviewTask.field_name == "ownership_pct",
+            ReviewTask.status == "open",
+        )
+    ).all()
+
+    assert len(review_tasks) == 1
