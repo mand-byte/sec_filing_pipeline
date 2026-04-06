@@ -20,7 +20,7 @@ class SecurityMaster(Base):
 
     composite_figi: Mapped[str] = mapped_column(String(12), primary_key=True)
     ticker: Mapped[str] = mapped_column(String(32), nullable=False)
-    cik: Mapped[str] = mapped_column(String(10), nullable=False)
+    cik: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     delisted_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_updated_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -9,6 +9,8 @@ CREATE TABLE security_master (
     last_updated_utc TIMESTAMPTZ
 );
 
+CREATE INDEX ix_security_master_cik ON security_master (cik);
+
 CREATE TABLE route_watermark (
     id BIGSERIAL PRIMARY KEY,
     cik VARCHAR(10) NOT NULL,

@@ -21,11 +21,19 @@ def _session_factory_for_dsn(pg_dsn: str) -> sessionmaker[Session]:
     )
 
 
-def get_engine(settings: Settings | None = None) -> Engine:
+def build_engine(settings: Settings | None = None) -> Engine:
     effective_settings = settings or Settings()
     return _engine_for_dsn(str(effective_settings.pg_dsn))
 
 
-def get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
+def build_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
     effective_settings = settings or Settings()
     return _session_factory_for_dsn(str(effective_settings.pg_dsn))
+
+
+def get_engine(settings: Settings | None = None) -> Engine:
+    return build_engine(settings)
+
+
+def get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
+    return build_session_factory(settings)

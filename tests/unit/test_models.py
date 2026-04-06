@@ -191,6 +191,19 @@ def test_security_master_contract_nullability_and_lengths():
     assert security_master.c.cik.nullable is False
 
 
+def test_security_master_has_index_on_cik():
+    from src.db.base import Base
+    import src.db.models  # noqa: F401
+
+    security_master = Base.metadata.tables["security_master"]
+    index_column_sets = {
+        tuple(column.name for column in index.columns)
+        for index in security_master.indexes
+    }
+
+    assert ("cik",) in index_column_sets
+
+
 def test_filing_document_accepted_at_is_non_nullable():
     from src.db.base import Base
     import src.db.models  # noqa: F401
