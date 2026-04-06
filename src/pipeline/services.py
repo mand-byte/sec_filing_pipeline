@@ -35,6 +35,38 @@ class PersistenceService:
     def __init__(self, session: Session):
         self.session = session
 
+    def persist_numeric_field(
+        self,
+        *,
+        filing: FilingRecord,
+        route: RouteName | str,
+        field_name: str,
+        value_numeric: float | int,
+        locator_kind: str,
+        locator_path: str,
+        raw_value: str | float | int,
+    ) -> None:
+        self.persist_filing_bundle(
+            filing=filing,
+            route=route,
+            facts=[
+                FactInput(
+                    field_name=field_name,
+                    value_numeric=float(value_numeric),
+                    confidence=0.99,
+                )
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name=field_name,
+                    locator_kind=locator_kind,
+                    source_span=locator_path,
+                    raw_value=str(raw_value),
+                    normalized_value=str(value_numeric),
+                )
+            ],
+        )
+
     def persist_filing_bundle(
         self,
         *,

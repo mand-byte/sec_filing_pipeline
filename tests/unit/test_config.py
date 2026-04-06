@@ -22,3 +22,12 @@ def test_settings_requires_pg_dsn(monkeypatch):
         Settings(_env_file=None)
 
     assert any(error["loc"][0] in {"PG_DSN", "pg_dsn"} for error in exc_info.value.errors())
+
+
+def test_settings_includes_offline_artifact_fields(monkeypatch):
+    monkeypatch.setenv("PG_DSN", "postgresql://postgres:postgres@localhost:5432/sec")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.offline_artifacts_dir.name == "artifacts"
+    assert settings.write_offline_artifacts is True
