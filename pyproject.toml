@@ -2,9 +2,10 @@
 name = "sec-filing-pipeline"
 version = "0.1.0"
 description = "SEC Filing Backend - Phase 1"
-readme = "README.md"
+readme = "DEMANDS.md"
 requires-python = ">=3.12"
 dependencies = [
+    "apscheduler>=3.10.4",
     "clickhouse-connect",
     "edgartools",
     "lxml>=5.2.0",
