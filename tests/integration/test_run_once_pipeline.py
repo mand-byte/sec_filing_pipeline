@@ -77,7 +77,7 @@ def test_run_once_filters_delisted_filings_using_is_filing_eligible(monkeypatch)
     ]
 
 
-def test_run_once_continues_to_subsequent_router_when_router_fails(monkeypatch):
+def test_run_once_emits_error_and_continues_when_router_fails(monkeypatch):
     calls: list[tuple[str, str]] = []
 
     class _IssuerRouter(_RecordingRouter):
@@ -99,6 +99,7 @@ def test_run_once_continues_to_subsequent_router_when_router_fails(monkeypatch):
     securities = [
         SimpleNamespace(
             cik="0001652044",
+            accession_no="0001652044-25-000001",
             active=True,
             delisted_utc=None,
             accepted_at=datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc),
@@ -119,3 +120,9 @@ def test_run_once_continues_to_subsequent_router_when_router_fails(monkeypatch):
         ("owner", "0001652044"),
         ("holding", "0001652044"),
     ]
+    assert "route=owner" in result.stderr
+    assert "stage=extract" in result.stderr
+    assert "message=router failed" in result.stderr
+    assert "error_type=RuntimeError" in result.stderr
+    assert "cik=0001652044" in result.stderr
+    assert "accession_no=0001652044-25-000001" in result.stderr

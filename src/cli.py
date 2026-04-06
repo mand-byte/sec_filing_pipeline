@@ -36,15 +36,30 @@ def _run_once_pipeline() -> None:
             eligible_securities.append(security)
 
     class _RunOnceRepo:
-        @staticmethod
-        def write_log(**kwargs) -> None:
-            del kwargs
+        def __init__(self, securities: list[object]) -> None:
+            self._accession_by_cik = {
+                getattr(security, "cik", None): getattr(security, "accession_no", None)
+                for security in securities
+                if getattr(security, "cik", None) is not None
+            }
+
+        def write_log(self, **kwargs) -> None:
+            cik = kwargs.get("cik")
+            accession_no = kwargs.get("accession_no")
+            if accession_no is None and cik is not None:
+                accession_no = self._accession_by_cik.get(cik)
+
+            keys = ("route", "stage", "message", "error_type", "cik")
+            parts = [f"{key}={kwargs[key]}" for key in keys if kwargs.get(key) is not None]
+            if accession_no is not None:
+                parts.append(f"accession_no={accession_no}")
+            typer.echo("run-once error: " + " ".join(parts), err=True)
 
     run_single_tick(
         run_id=make_run_id(),
         securities=eligible_securities,
         routers=routers,
-        repo=_RunOnceRepo(),
+        repo=_RunOnceRepo(eligible_securities),
     )
 
 
