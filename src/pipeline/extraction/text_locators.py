@@ -11,6 +11,7 @@ class TextLocatorHit(TypedDict):
     value: str
     locator_kind: TextLocatorKind
     locator_path: str
+    window_base: int
 
 
 LocatorHandler = Callable[[object, tuple[str, ...]], TextLocatorHit | None]
@@ -57,6 +58,7 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
                 "value": value_text,
                 "locator_kind": "item_window",
                 "locator_path": f"items[{key_text}]",
+                "window_base": 0,
             }
 
     return None
@@ -83,6 +85,7 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
                     "value": section_text,
                     "locator_kind": "section_window",
                     "locator_path": f"sections[{section_name_text}]",
+                    "window_base": 0,
                 }
 
     if isinstance(sections, str):
@@ -90,11 +93,12 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
             hit = _window_around_anchor(sections, anchor)
             if hit is None:
                 continue
-            window, _, _ = hit
+            window, start, _ = hit
             return {
                 "value": window,
                 "locator_kind": "section_window",
                 "locator_path": "sections",
+                "window_base": start,
             }
 
     return None
@@ -103,10 +107,12 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
 def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit | None:
     parse_method = _get_zero_arg_method(filing, "parse")
     parsed_text: object | None = parse_method() if parse_method is not None else None
+    source_path = "parse"
 
     if parsed_text is None:
         text_method = _get_zero_arg_method(filing, "text")
         parsed_text = text_method() if text_method is not None else None
+        source_path = "text"
 
     if not isinstance(parsed_text, str):
         return None
@@ -115,11 +121,12 @@ def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLoca
         hit = _window_around_anchor(parsed_text, anchor)
         if hit is None:
             continue
-        window, _, _ = hit
+        window, start, _ = hit
         return {
             "value": window,
             "locator_kind": "parse_text_window",
-            "locator_path": "parse",
+            "locator_path": source_path,
+            "window_base": start,
         }
 
     return None

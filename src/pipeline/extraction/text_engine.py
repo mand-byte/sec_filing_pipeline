@@ -38,6 +38,9 @@ class TextExtractionEngine:
         return None
 
     def extract_field(self, *, filing: object, field_spec: TextFieldSpec) -> TextExtractionOutcome:
+        if field_spec.output_kind != "text":
+            return {"status": "error", "error_code": "NORMALIZATION_FAILED"}
+
         window_hit = run_text_locator_chain(filing=filing, locators=field_spec.locators, anchors=field_spec.anchor_terms)
         if window_hit is None:
             return {"status": "error", "error_code": "WINDOW_NOT_FOUND"}
@@ -69,6 +72,8 @@ class TextExtractionEngine:
 
             source_group = 1 if source_match.lastindex else 0
             span_start, span_end = source_match.span(source_group)
+            source_start = window_hit["window_base"] + span_start
+            source_end = window_hit["window_base"] + span_end
 
             return {
                 "status": "ok",
@@ -76,7 +81,7 @@ class TextExtractionEngine:
                 "value_json": None,
                 "locator_kind": window_hit["locator_kind"],
                 "locator_path": window_hit["locator_path"],
-                "source_span": f"{span_start}:{span_end}",
+                "source_span": f"{source_start}:{source_end}",
             }
 
         return {"status": "error", "error_code": "PATTERN_NOT_MATCHED"}
