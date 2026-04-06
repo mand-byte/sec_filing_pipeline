@@ -105,13 +105,27 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
     if not isinstance(items, Mapping):
         return None
 
+    normalized_items = [(str(key), str(value)) for key, value in items.items()]
+
     for anchor in anchors:
-        for key, value in items.items():
-            key_text = str(key)
-            value_text = str(value)
-            candidate = f"{key_text}\n{value_text}"
-            if anchor.lower() not in candidate.lower():
+        lowered_anchor = anchor.lower()
+
+        for key_text, value_text in normalized_items:
+            if lowered_anchor not in key_text.lower():
                 continue
+            candidate = f"{key_text}\n{value_text}"
+            return {
+                "value": candidate,
+                "locator_kind": "item_window",
+                "locator_path": f"items[{key_text}]",
+                "window_base": 0,
+                "item_body_offset": len(key_text) + 1,
+            }
+
+        for key_text, value_text in normalized_items:
+            if lowered_anchor not in value_text.lower():
+                continue
+            candidate = f"{key_text}\n{value_text}"
             return {
                 "value": candidate,
                 "locator_kind": "item_window",
@@ -137,12 +151,23 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
         return None
 
     if isinstance(sections, Mapping):
+        normalized_sections = [(str(section_name), str(section_value)) for section_name, section_value in sections.items()]
+
         for anchor in anchors:
-            for section_name, section_value in sections.items():
-                section_name_text = str(section_name)
-                section_text = str(section_value)
-                combined = f"{section_name_text}\n{section_text}"
-                if anchor.lower() not in combined.lower():
+            lowered_anchor = anchor.lower()
+
+            for section_name_text, section_text in normalized_sections:
+                if lowered_anchor not in section_name_text.lower():
+                    continue
+                return {
+                    "value": section_text,
+                    "locator_kind": "section_window",
+                    "locator_path": f"sections[{section_name_text}]",
+                    "window_base": 0,
+                }
+
+            for section_name_text, section_text in normalized_sections:
+                if lowered_anchor not in section_text.lower():
                     continue
                 return {
                     "value": section_text,

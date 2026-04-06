@@ -252,6 +252,64 @@ def test_section_window_extracts_from_list_sections_with_deterministic_locator_p
     assert outcome["locator_path"] == "sections[1]"
 
 
+def test_item_window_prefers_header_anchor_over_earlier_body_reference() -> None:
+    spec = TextFieldSpec(
+        field_name="item_shadowing_text",
+        route="issuer",
+        form_families=("8-K",),
+        locators=("item_window",),
+        anchor_terms=("item 5.02",),
+        regex_patterns=(r"(?i)(chief financial officer)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        items={
+            "Item 1.01 Entry into a Material Definitive Agreement": (
+                "This section references Item 5.02 for officer changes but contains no officer title."
+            ),
+            "Item 5.02 Departure of Directors or Certain Officers": (
+                "The board appointed a new Chief Financial Officer effective immediately."
+            ),
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_kind"] == "item_window"
+    assert outcome["locator_path"] == "items[Item 5.02 Departure of Directors or Certain Officers]"
+    assert outcome["value_text"].lower() == "chief financial officer"
+
+
+def test_section_window_prefers_name_anchor_over_earlier_body_reference() -> None:
+    spec = TextFieldSpec(
+        field_name="section_shadowing_text",
+        route="owner",
+        form_families=("13D",),
+        locators=("section_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        sections_value={
+            "Cover Page": "This cover page references Purpose of Transaction for context only.",
+            "Purpose of Transaction": "The reporting person seeks Board Seat Representation.",
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_kind"] == "section_window"
+    assert outcome["locator_path"] == "sections[Purpose of Transaction]"
+    assert outcome["value_text"].lower() == "board seat representation"
+
+
 def test_parse_text_window_falls_back_to_text_when_parse_returns_non_string() -> None:
     spec = TextFieldSpec(
         field_name="intent_text",
