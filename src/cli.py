@@ -7,7 +7,7 @@ from src.pipeline.routers.holding import HoldingRouter
 from src.pipeline.routers.issuer import IssuerRouter
 from src.pipeline.routers.owner import OwnerRouter
 from src.pipeline.rules import is_filing_eligible
-from src.pipeline.scheduler import build_blocking_scheduler, ordered_routers
+from src.pipeline.scheduler import build_blocking_scheduler, make_run_id, ordered_routers, run_single_tick
 
 
 app = typer.Typer(help="SEC filing pipeline CLI for running phase 1 tasks.")
@@ -27,15 +27,25 @@ def _run_once_pipeline() -> None:
     routers = ordered_routers(router_map)
     typer.echo("route order: " + " -> ".join(router.name for router in routers))
 
+    eligible_securities = []
     for security in _load_run_once_securities():
         active = bool(getattr(security, "active", True))
         delisted_utc = getattr(security, "delisted_utc", None)
         accepted_at = getattr(security, "accepted_at", datetime.min)
-        if not is_filing_eligible(active, delisted_utc, accepted_at):
-            continue
+        if is_filing_eligible(active, delisted_utc, accepted_at):
+            eligible_securities.append(security)
 
-        for router in routers:
-            router.run(security=security)
+    class _RunOnceRepo:
+        @staticmethod
+        def write_log(**kwargs) -> None:
+            del kwargs
+
+    run_single_tick(
+        run_id=make_run_id(),
+        securities=eligible_securities,
+        routers=routers,
+        repo=_RunOnceRepo(),
+    )
 
 
 @app.command("run-once")

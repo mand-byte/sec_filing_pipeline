@@ -75,3 +75,47 @@ def test_run_once_filters_delisted_filings_using_is_filing_eligible(monkeypatch)
         ("owner", "0000320193"),
         ("holding", "0000320193"),
     ]
+
+
+def test_run_once_continues_to_subsequent_router_when_router_fails(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    class _IssuerRouter(_RecordingRouter):
+        def __init__(self):
+            super().__init__("issuer", calls)
+
+    class _OwnerRouter(_RecordingRouter):
+        def __init__(self):
+            super().__init__("owner", calls)
+
+        def run(self, *, security: SimpleNamespace) -> None:
+            self._calls.append((self.name, security.cik))
+            raise RuntimeError("owner router exploded")
+
+    class _HoldingRouter(_RecordingRouter):
+        def __init__(self):
+            super().__init__("holding", calls)
+
+    securities = [
+        SimpleNamespace(
+            cik="0001652044",
+            active=True,
+            delisted_utc=None,
+            accepted_at=datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc),
+        )
+    ]
+
+    monkeypatch.setattr(cli, "IssuerRouter", _IssuerRouter, raising=False)
+    monkeypatch.setattr(cli, "OwnerRouter", _OwnerRouter, raising=False)
+    monkeypatch.setattr(cli, "HoldingRouter", _HoldingRouter, raising=False)
+    monkeypatch.setattr(cli, "_load_run_once_securities", lambda: securities, raising=False)
+
+    result = runner.invoke(app, ["run-once"])
+
+    assert result.exit_code == 0
+    assert "route order: issuer -> owner -> holding" in result.stdout
+    assert calls == [
+        ("issuer", "0001652044"),
+        ("owner", "0001652044"),
+        ("holding", "0001652044"),
+    ]
