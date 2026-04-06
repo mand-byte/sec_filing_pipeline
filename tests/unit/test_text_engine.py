@@ -19,12 +19,18 @@ class _Filing:
         self._text_value = text_value
 
     def sections(self) -> object:
+        if isinstance(self._sections_value, Exception):
+            raise self._sections_value
         return self._sections_value
 
     def parse(self) -> object:
+        if isinstance(self._parse_value, Exception):
+            raise self._parse_value
         return self._parse_value
 
     def text(self) -> object:
+        if isinstance(self._text_value, Exception):
+            raise self._text_value
         return self._text_value
 
 
@@ -146,6 +152,80 @@ def test_text_engine_returns_qa_failed() -> None:
     assert outcome["error_code"] == "QA_FAILED"
 
 
+def test_text_engine_falls_back_after_ambiguous_pattern() -> None:
+    spec = TextFieldSpec(
+        field_name="fallback_ambiguous",
+        route="issuer",
+        form_families=("8-K",),
+        locators=("item_window",),
+        anchor_terms=("item 1.01",),
+        regex_patterns=(r"(?i)(alpha|beta)", r"(?i)(board seat representation)"),
+        output_kind="text",
+        qa_rules={"min_len": 5},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        items={
+            "Item 1.01": "Item 1.01 disclosure includes alpha, beta, and board seat representation.",
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_text"].lower() == "board seat representation"
+
+
+def test_text_engine_falls_back_after_qa_failure() -> None:
+    spec = TextFieldSpec(
+        field_name="fallback_qa",
+        route="owner",
+        form_families=("13D",),
+        locators=("parse_text_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation)", r"(?i)(constructive)",),
+        output_kind="text",
+        qa_rules={"max_len": 12},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        parse_value=(
+            "Purpose of Transaction: Board Seat Representation through constructive engagement."
+        )
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_text"].lower() == "constructive"
+
+
+def test_text_engine_reports_deterministic_failure_priority_when_all_patterns_fail() -> None:
+    spec = TextFieldSpec(
+        field_name="all_failures",
+        route="owner",
+        form_families=("13D",),
+        locators=("parse_text_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(
+            r"(?i)(alpha|beta)",
+            r"(?i)(board seat representation)",
+            r"(?i)(nope)",
+        ),
+        output_kind="text",
+        qa_rules={"max_len": 5},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        parse_value="Purpose of Transaction: alpha, beta, and Board Seat Representation were discussed."
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "error"
+    assert outcome["error_code"] == "QA_FAILED"
+
+
 def test_parse_text_window_falls_back_to_text_with_text_locator_path() -> None:
     spec = TextFieldSpec(
         field_name="intent_text",
@@ -218,3 +298,27 @@ def test_text_engine_rejects_json_output_kind_deterministically() -> None:
 
     assert outcome["status"] == "error"
     assert outcome["error_code"] == "NORMALIZATION_FAILED"
+
+
+def test_text_engine_does_not_crash_when_parse_sections_and_text_raise() -> None:
+    spec = TextFieldSpec(
+        field_name="resilient_locator_chain",
+        route="owner",
+        form_families=("13D",),
+        locators=("section_window", "parse_text_window"),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        sections_value=RuntimeError("sections failed"),
+        parse_value=RuntimeError("parse failed"),
+        text_value=RuntimeError("text failed"),
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "error"
+    assert outcome["error_code"] == "WINDOW_NOT_FOUND"

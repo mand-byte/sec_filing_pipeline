@@ -47,6 +47,9 @@ class TextExtractionEngine:
 
         window_text = window_hit["value"]
 
+        best_failure: str = "PATTERN_NOT_MATCHED"
+        failure_priority = {"PATTERN_NOT_MATCHED": 0, "MULTIPLE_CANDIDATES": 1, "QA_FAILED": 2}
+
         for pattern in field_spec.regex_patterns:
             matches = list(re.finditer(pattern, window_text))
             if not matches:
@@ -63,12 +66,16 @@ class TextExtractionEngine:
                 continue
 
             if len(distinct_matches) > 1:
-                return {"status": "error", "error_code": "MULTIPLE_CANDIDATES"}
+                if failure_priority["MULTIPLE_CANDIDATES"] > failure_priority[best_failure]:
+                    best_failure = "MULTIPLE_CANDIDATES"
+                continue
 
             value_text, source_match = next(iter(distinct_matches.items()))
             qa_error = self._qa_check(value_text, field_spec.qa_rules)
             if qa_error is not None:
-                return {"status": "error", "error_code": qa_error}
+                if failure_priority[qa_error] > failure_priority[best_failure]:
+                    best_failure = qa_error
+                continue
 
             source_group = 1 if source_match.lastindex else 0
             span_start, span_end = source_match.span(source_group)
@@ -84,4 +91,4 @@ class TextExtractionEngine:
                 "source_span": f"{source_start}:{source_end}",
             }
 
-        return {"status": "error", "error_code": "PATTERN_NOT_MATCHED"}
+        return {"status": "error", "error_code": best_failure}

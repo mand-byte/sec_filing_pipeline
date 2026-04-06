@@ -18,7 +18,11 @@ LocatorHandler = Callable[[object, tuple[str, ...]], TextLocatorHit | None]
 
 
 def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | None:
-    candidate = getattr(target, name, None)
+    try:
+        candidate = getattr(target, name, None)
+    except Exception:
+        return None
+
     if not callable(candidate):
         return None
 
@@ -69,7 +73,11 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
     if sections_method is None:
         return None
 
-    sections = sections_method()
+    try:
+        sections = sections_method()
+    except Exception:
+        return None
+
     if sections is None:
         return None
 
@@ -106,13 +114,24 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
 
 def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit | None:
     parse_method = _get_zero_arg_method(filing, "parse")
-    parsed_text: object | None = parse_method() if parse_method is not None else None
+    parsed_text: object | None = None
     source_path = "parse"
+
+    if parse_method is not None:
+        try:
+            parsed_text = parse_method()
+        except Exception:
+            parsed_text = None
 
     if parsed_text is None:
         text_method = _get_zero_arg_method(filing, "text")
-        parsed_text = text_method() if text_method is not None else None
-        source_path = "text"
+        if text_method is not None:
+            try:
+                parsed_text = text_method()
+                source_path = "text"
+            except Exception:
+                parsed_text = None
+                source_path = "text"
 
     if not isinstance(parsed_text, str):
         return None
