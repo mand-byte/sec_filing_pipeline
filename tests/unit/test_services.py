@@ -264,6 +264,44 @@ def test_persist_filing_bundle_persists_evidence_rows(db_session: Session):
     assert evidence_count == 2
 
 
+def test_persist_filing_bundle_evidence_persistence_is_idempotent(db_session: Session):
+    service = PersistenceService(db_session)
+    filing = _filing("0000000001-25-000009")
+
+    evidences = [
+        EvidenceInput(
+            field_name="ownership_pct",
+            locator_kind="html_span",
+            source_span="Beneficial ownership is 2.5%.",
+            source_section="Ownership",
+            source_item_no="Item 5",
+            source_xpath="/html/body/div[1]/p[4]",
+            xbrl_concept=None,
+            raw_value="2.5%",
+            normalized_value="2.5",
+        )
+    ]
+
+    service.persist_filing_bundle(
+        filing=filing,
+        route="owner",
+        facts=[],
+        evidences=evidences,
+    )
+    first_count = db_session.scalar(select(func.count()).select_from(ExtractionEvidence))
+
+    service.persist_filing_bundle(
+        filing=filing,
+        route="owner",
+        facts=[],
+        evidences=evidences,
+    )
+    second_count = db_session.scalar(select(func.count()).select_from(ExtractionEvidence))
+
+    assert first_count == 1
+    assert second_count == 1
+
+
 def test_persist_filing_bundle_does_not_duplicate_open_review_tasks(db_session: Session):
     service = PersistenceService(db_session)
     filing = _filing("0000000001-25-000006")

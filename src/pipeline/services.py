@@ -122,21 +122,37 @@ class PersistenceService:
                     )
 
         for evidence in evidences:
-            self.session.add(
-                ExtractionEvidence(
-                    accession_no=filing.accession_no,
-                    route=route,
-                    field_name=evidence.field_name,
-                    locator_kind=evidence.locator_kind,
-                    source_section=evidence.source_section,
-                    source_item_no=evidence.source_item_no,
-                    source_xpath=evidence.source_xpath,
-                    xbrl_concept=evidence.xbrl_concept,
-                    source_span=evidence.source_span,
-                    raw_value=evidence.raw_value,
-                    normalized_value=evidence.normalized_value,
-                    created_at=now,
+            existing_evidence = self.session.scalar(
+                select(ExtractionEvidence).where(
+                    ExtractionEvidence.accession_no == filing.accession_no,
+                    ExtractionEvidence.route == route,
+                    ExtractionEvidence.field_name == evidence.field_name,
+                    ExtractionEvidence.locator_kind == evidence.locator_kind,
+                    ExtractionEvidence.source_span == evidence.source_span,
+                    ExtractionEvidence.source_section == evidence.source_section,
+                    ExtractionEvidence.source_item_no == evidence.source_item_no,
+                    ExtractionEvidence.source_xpath == evidence.source_xpath,
+                    ExtractionEvidence.xbrl_concept == evidence.xbrl_concept,
+                    ExtractionEvidence.raw_value == evidence.raw_value,
+                    ExtractionEvidence.normalized_value == evidence.normalized_value,
                 )
             )
+            if existing_evidence is None:
+                self.session.add(
+                    ExtractionEvidence(
+                        accession_no=filing.accession_no,
+                        route=route,
+                        field_name=evidence.field_name,
+                        locator_kind=evidence.locator_kind,
+                        source_section=evidence.source_section,
+                        source_item_no=evidence.source_item_no,
+                        source_xpath=evidence.source_xpath,
+                        xbrl_concept=evidence.xbrl_concept,
+                        source_span=evidence.source_span,
+                        raw_value=evidence.raw_value,
+                        normalized_value=evidence.normalized_value,
+                        created_at=now,
+                    )
+                )
 
         self.session.commit()
