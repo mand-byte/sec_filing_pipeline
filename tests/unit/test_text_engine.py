@@ -322,3 +322,57 @@ def test_text_engine_does_not_crash_when_parse_sections_and_text_raise() -> None
 
     assert outcome["status"] == "error"
     assert outcome["error_code"] == "WINDOW_NOT_FOUND"
+
+
+def test_parse_text_window_prefers_later_anchor_occurrence() -> None:
+    spec = TextFieldSpec(
+        field_name="intent_text",
+        route="owner",
+        form_families=("13D",),
+        locators=("parse_text_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        parse_value=(
+            "Table of Contents: Purpose of Transaction appears for index only. "
+            + ("X" * 600)
+            + "Purpose of Transaction: Board Seat Representation is sought through engagement."
+        )
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_text"].lower() == "board seat representation"
+    assert outcome["locator_kind"] == "parse_text_window"
+    assert outcome["locator_path"] == "parse"
+
+
+def test_item_window_includes_header_for_regex_matching() -> None:
+    spec = TextFieldSpec(
+        field_name="item_header_text",
+        route="issuer",
+        form_families=("8-K",),
+        locators=("item_window",),
+        anchor_terms=("item 5.02",),
+        regex_patterns=(r"(?i)(item 5\.02)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        items={
+            "Item 5.02 Departure of Directors or Certain Officers": "The body text omits the anchor phrase.",
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_text"].lower() == "item 5.02"
+    assert outcome["locator_kind"] == "item_window"
+    assert outcome["locator_path"] == "items[Item 5.02 Departure of Directors or Certain Officers]"

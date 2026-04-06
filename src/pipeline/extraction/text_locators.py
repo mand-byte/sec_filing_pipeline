@@ -37,9 +37,18 @@ def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | No
 def _window_around_anchor(text: str, anchor: str, radius: int = 220) -> tuple[str, int, int] | None:
     lowered_text = text.lower()
     lowered_anchor = anchor.lower()
+
     idx = lowered_text.find(lowered_anchor)
     if idx < 0:
         return None
+
+    search_from = idx + 1
+    while search_from < len(lowered_text):
+        next_idx = lowered_text.find(lowered_anchor, search_from)
+        if next_idx < 0:
+            break
+        idx = next_idx
+        search_from = next_idx + 1
 
     start = max(0, idx - radius)
     end = min(len(text), idx + len(anchor) + radius)
@@ -59,7 +68,7 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
             if anchor.lower() not in candidate.lower():
                 continue
             return {
-                "value": value_text,
+                "value": candidate,
                 "locator_kind": "item_window",
                 "locator_path": f"items[{key_text}]",
                 "window_base": 0,
