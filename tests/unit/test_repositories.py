@@ -24,6 +24,26 @@ def _install_commit_spy(session: Session, monkeypatch: pytest.MonkeyPatch) -> di
     return calls
 
 
+def _install_failing_commit_with_rollback_spy(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, int]:
+    calls = {"commit": 0, "rollback": 0}
+    original_rollback = session.rollback
+
+    def commit_wrapper() -> None:
+        calls["commit"] += 1
+        raise RuntimeError("commit failed")
+
+    def rollback_wrapper() -> None:
+        calls["rollback"] += 1
+        original_rollback()
+
+    monkeypatch.setattr(session, "commit", commit_wrapper)
+    monkeypatch.setattr(session, "rollback", rollback_wrapper)
+    return calls
+
+
 def _as_naive_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
@@ -260,3 +280,51 @@ def test_write_log_inserts_pipeline_log_row_and_commits(
     assert row.message == "ok"
     assert row.error_type is None
     assert _as_naive_utc(before) <= _as_naive_utc(row.created_at) <= _as_naive_utc(after)
+
+
+@pytest.mark.parametrize(
+    ("method_name", "kwargs"),
+    [
+        (
+            "upsert_route_watermark",
+            {"cik": "0000000001", "route": "issuer", "accepted_at": datetime(2025, 1, 1, 10, 0, 0)},
+        ),
+        (
+            "mark_delisted_route_completed",
+            {
+                "composite_figi": "BBG000000001",
+                "cik": "0000000001",
+                "route": "owner",
+                "delisted_utc_snapshot": datetime(2025, 2, 1, 9, 0, 0),
+                "last_seen_accepted_at": datetime(2025, 1, 31, 23, 59, 0),
+            },
+        ),
+        (
+            "write_log",
+            {
+                "run_id": "run-rollback-001",
+                "route": "holding",
+                "cik": "0000000001",
+                "accession_no": "0000000001-25-000001",
+                "stage": "extract",
+                "level": "error",
+                "message": "boom",
+                "error_type": "CommitError",
+            },
+        ),
+    ],
+)
+def test_mutating_methods_rollback_on_commit_failure(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    kwargs: dict,
+):
+    repo = PipelineRepository(db_session)
+    calls = _install_failing_commit_with_rollback_spy(repo.session, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        getattr(repo, method_name)(**kwargs)
+
+    assert calls["commit"] == 1
+    assert calls["rollback"] == 1
