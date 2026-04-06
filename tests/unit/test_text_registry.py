@@ -19,6 +19,11 @@ def test_text_registry_has_unique_route_field_pairs() -> None:
     assert len(route_field_pairs) == len(set(route_field_pairs))
 
 
+def test_text_registry_starter_specs_use_text_output_kind() -> None:
+    for spec in all_text_field_specs():
+        assert spec.output_kind == "text"
+
+
 def test_text_registry_enforces_locator_limit() -> None:
     for spec in all_text_field_specs():
         assert 1 <= len(spec.locators) <= 3

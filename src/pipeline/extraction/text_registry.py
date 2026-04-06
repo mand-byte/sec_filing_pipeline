@@ -13,7 +13,7 @@ def all_text_field_specs() -> list[TextFieldSpec]:
                 r"(?i)\b(event|announcement|transaction|agreement)\b",
                 r"(?i)\b(material\s+definitive\s+agreement|results\s+of\s+operations|financial\s+condition)\b",
             ),
-            output_kind="json",
+            output_kind="text",
             qa_rules={
                 "materiality_score_min": 0,
                 "materiality_score_max": 5,
@@ -32,7 +32,7 @@ def all_text_field_specs() -> list[TextFieldSpec]:
                 r"(?i)\b(passive|engaged|activist|control)\b",
                 r"(?i)\b(board\s+seat|proxy\s+fight|group\s+formed|strategic\s+alternatives|merger)\b",
             ),
-            output_kind="json",
+            output_kind="text",
             qa_rules={
                 "require_stance_enum": True,
                 "require_group_flag": True,
@@ -52,7 +52,7 @@ def all_text_field_specs() -> list[TextFieldSpec]:
                 r"(?i)\b(amendment|restatement|correction|addition|deletion)\b",
                 r"(?i)\b(position\s+count\s+delta|value\s+delta|restatement\s+flag)\b",
             ),
-            output_kind="json",
+            output_kind="text",
             qa_rules={
                 "position_count_delta_nullable": True,
                 "value_delta_usd_nullable": True,
