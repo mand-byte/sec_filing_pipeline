@@ -33,15 +33,21 @@ CREATE TABLE IF NOT EXISTS us_stock_universe
 文件解析过程的日志入库，用于分析解析成功与失败，以及失败的原因。
 
 ## 程序入口规划
-  使用同步调度器，每次启动或定时执行3个入口，分别是isser,owner,holding的下载和解析。（前）
+  配置文件在.env，包含clickhouse，psql的连接信息,以及数据抓取起始时间
+  使用同步调度器，每次启动或定时执行3个入口，分别是isser,owner,holding的下载和解析。
   每次调度器执行，都会从us_stock_universe表中获取数据要下载的ticker集合，数据库是唯一的程序的状态存储，程序本身运行无状态。（使用接受文件的时间作为进步）
 
 ## 规划
   一期规划，设计数据库，覆盖所有字段和文本片段。
-  二期规划，EXTRACTOR_CORRECTNESS.md中的Tier 1，holding的数据实现，只存股票对象是在us_stock_universe中的。
-  三期规划，EXTRACTOR_CORRECTNESS.md中的Tier 2。
-  四期规划，完成tier1和tier2的自我纠错和人工审核机制。
-  五期规划，所有数据达到最高准确率后，再实现llm的抽取。LLM的输出不做审核，只对提取的文字片段的范围是否满足LLM输入做审核（在无法保证得到最大化准确率下使用llm输出只是浪费钱,文字截取范围影响评分）。
+  二期规划，EXTRACTOR_CORRECTNESS.md中的Tier 1 （数值类型全覆盖）。
+  三期规划，EXTRACTOR_CORRECTNESS.md中的Tier 2 （正则 ，收口， golden set）
+  四期规划，EXTRACTOR_CORRECTNESS.md中的Tier 3 (文字类型全覆盖，正则，收口，golden set ,及审核机制)
+  五期规划，所有数据达到最高准确率后，再实现llm的输出。LLM的输出不做审核（在无法保证得到最大化准确率下使用llm输出只是浪费钱,文字截取范围影响评分）。当 tier 3做出人工审核修正后，LLM也会重新读取并输出数据。
+## （提取特征时）数据读取读取顺序
+  按照时间线，从远到近，按数据深度，从深到浅读（有人工修正读人工修正，没有的读原始值）。/A的数据因为提交时间不同，当作新的一份数据，有值的会在特征提取的逻辑里重新计算，没有值的则不处理。
+## 人工审核
+  人工审核页面要展示原文和抽取结果，方便比对。否则人工审核的效率会很低。
+
 ## 需要抽取的文件类型和字段
   参考EXTRACTION_FILED.md
 
