@@ -6,10 +6,17 @@ from typing import Any, Callable, Iterable, Protocol
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 
+ROUTE_ORDER = ("issuer", "owner", "holding")
+
+
 class Router(Protocol):
     name: str
 
     def run(self, *, security: Any) -> None: ...
+
+
+def ordered_routers(router_map: dict[str, object]) -> list[object]:
+    return [router_map[route_name] for route_name in ROUTE_ORDER if route_name in router_map]
 
 
 def run_single_tick(
