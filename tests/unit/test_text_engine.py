@@ -525,3 +525,108 @@ def test_item_window_reports_body_relative_source_span() -> None:
     assert body_match is not None
     expected_start, expected_end = body_match.span(1)
     assert outcome["source_span"] == f"{expected_start}:{expected_end}"
+
+
+def test_text_engine_falls_back_to_second_locator_after_pattern_miss_on_first() -> None:
+    spec = TextFieldSpec(
+        field_name="locator_pattern_fallback",
+        route="owner",
+        form_families=("13D",),
+        locators=("item_window", "parse_text_window"),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(constructive)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        items={
+            "Purpose of Transaction": "The body text does not include the target token.",
+        },
+        parse_value="Purpose of Transaction: constructive engagement is expected.",
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_kind"] == "parse_text_window"
+    assert outcome["locator_path"] == "parse"
+    assert outcome["value_text"].lower() == "constructive"
+
+
+def test_text_engine_falls_back_to_second_locator_after_qa_failure_on_first() -> None:
+    spec = TextFieldSpec(
+        field_name="locator_qa_fallback",
+        route="owner",
+        form_families=("13D",),
+        locators=("item_window", "parse_text_window"),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(board seat representation|constructive)",),
+        output_kind="text",
+        qa_rules={"max_len": 12},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        items={
+            "Purpose of Transaction": "Board Seat Representation",
+        },
+        parse_value="Purpose of Transaction: constructive engagement is expected.",
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_kind"] == "parse_text_window"
+    assert outcome["locator_path"] == "parse"
+    assert outcome["value_text"].lower() == "constructive"
+
+
+def test_section_window_mapping_includes_header_for_header_only_matches() -> None:
+    spec = TextFieldSpec(
+        field_name="section_header_only",
+        route="owner",
+        form_families=("13D",),
+        locators=("section_window",),
+        anchor_terms=("purpose of transaction",),
+        regex_patterns=(r"(?i)(purpose of transaction)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        sections_value={
+            "Purpose of Transaction": "Body text omits the section title phrase.",
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["locator_kind"] == "section_window"
+    assert outcome["locator_path"] == "sections[Purpose of Transaction]"
+    assert outcome["value_text"].lower() == "purpose of transaction"
+    assert outcome["source_span"] == "header:0:22"
+
+
+def test_text_engine_dedupes_case_insensitive_candidates() -> None:
+    spec = TextFieldSpec(
+        field_name="casefold_dedupe",
+        route="issuer",
+        form_families=("8-K",),
+        locators=("item_window",),
+        anchor_terms=("item 1.01",),
+        regex_patterns=(r"(?i)(alpha)",),
+        output_kind="text",
+        qa_rules={},
+    )
+    engine = TextExtractionEngine()
+    filing = _Filing(
+        items={
+            "Item 1.01": "Item 1.01 disclosure includes Alpha and alpha references.",
+        }
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=spec)
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_text"].lower() == "alpha"

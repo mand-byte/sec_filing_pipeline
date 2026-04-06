@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Literal, TypedDict
 
 from src.pipeline.extraction.text_contracts import TextFieldSpec, TextLocatorKind
-from src.pipeline.extraction.text_locators import run_text_locator_chain
+from src.pipeline.extraction.text_locators import run_text_locator
 
 
 class TextExtractionOk(TypedDict):
@@ -41,65 +41,81 @@ class TextExtractionEngine:
         if field_spec.output_kind != "text":
             return {"status": "error", "error_code": "NORMALIZATION_FAILED"}
 
-        window_hit = run_text_locator_chain(filing=filing, locators=field_spec.locators, anchors=field_spec.anchor_terms)
-        if window_hit is None:
-            return {"status": "error", "error_code": "WINDOW_NOT_FOUND"}
-
-        window_text = window_hit["value"]
-
         best_failure: str = "PATTERN_NOT_MATCHED"
         failure_priority = {"PATTERN_NOT_MATCHED": 0, "MULTIPLE_CANDIDATES": 1, "QA_FAILED": 2}
+        saw_window = False
 
-        for pattern in field_spec.regex_patterns:
-            matches = list(re.finditer(pattern, window_text))
-            if not matches:
+        for locator in field_spec.locators:
+            window_hit = run_text_locator(filing=filing, locator=locator, anchors=field_spec.anchor_terms)
+            if window_hit is None:
                 continue
 
-            distinct_matches: dict[str, re.Match[str]] = {}
-            for match in matches:
-                group_index = 1 if match.lastindex else 0
-                extracted = match.group(group_index).strip()
-                if extracted and extracted not in distinct_matches:
-                    distinct_matches[extracted] = match
+            saw_window = True
+            window_text = window_hit["value"]
 
-            if not distinct_matches:
-                continue
+            for pattern in field_spec.regex_patterns:
+                matches = list(re.finditer(pattern, window_text))
+                if not matches:
+                    continue
 
-            if len(distinct_matches) > 1:
-                if failure_priority["MULTIPLE_CANDIDATES"] > failure_priority[best_failure]:
-                    best_failure = "MULTIPLE_CANDIDATES"
-                continue
+                distinct_matches: dict[str, tuple[str, re.Match[str]]] = {}
+                for match in matches:
+                    group_index = 1 if match.lastindex else 0
+                    extracted = match.group(group_index).strip()
+                    normalized_extracted = extracted.casefold()
+                    if extracted and normalized_extracted not in distinct_matches:
+                        distinct_matches[normalized_extracted] = (extracted, match)
 
-            value_text, source_match = next(iter(distinct_matches.items()))
-            qa_error = self._qa_check(value_text, field_spec.qa_rules)
-            if qa_error is not None:
-                if failure_priority[qa_error] > failure_priority[best_failure]:
-                    best_failure = qa_error
-                continue
+                if not distinct_matches:
+                    continue
 
-            source_group = 1 if source_match.lastindex else 0
-            span_start, span_end = source_match.span(source_group)
-            source_start = window_hit["window_base"] + span_start
-            source_end = window_hit["window_base"] + span_end
+                if len(distinct_matches) > 1:
+                    if failure_priority["MULTIPLE_CANDIDATES"] > failure_priority[best_failure]:
+                        best_failure = "MULTIPLE_CANDIDATES"
+                    continue
 
-            source_span = f"{source_start}:{source_end}"
-            if window_hit["locator_kind"] == "item_window":
-                item_body_offset = window_hit.get("item_body_offset")
-                if isinstance(item_body_offset, int):
-                    if span_end <= item_body_offset:
-                        source_span = f"header:{span_start}:{span_end}"
-                    else:
-                        body_start = max(0, span_start - item_body_offset)
-                        body_end = max(0, span_end - item_body_offset)
-                        source_span = f"{body_start}:{body_end}"
+                value_text, source_match = next(iter(distinct_matches.values()))
+                qa_error = self._qa_check(value_text, field_spec.qa_rules)
+                if qa_error is not None:
+                    if failure_priority[qa_error] > failure_priority[best_failure]:
+                        best_failure = qa_error
+                    continue
 
-            return {
-                "status": "ok",
-                "value_text": value_text,
-                "value_json": None,
-                "locator_kind": window_hit["locator_kind"],
-                "locator_path": window_hit["locator_path"],
-                "source_span": source_span,
-            }
+                source_group = 1 if source_match.lastindex else 0
+                span_start, span_end = source_match.span(source_group)
+                source_start = window_hit["window_base"] + span_start
+                source_end = window_hit["window_base"] + span_end
+
+                source_span = f"{source_start}:{source_end}"
+                if window_hit["locator_kind"] == "item_window":
+                    item_body_offset = window_hit.get("item_body_offset")
+                    if isinstance(item_body_offset, int):
+                        if span_end <= item_body_offset:
+                            source_span = f"header:{span_start}:{span_end}"
+                        else:
+                            body_start = max(0, span_start - item_body_offset)
+                            body_end = max(0, span_end - item_body_offset)
+                            source_span = f"{body_start}:{body_end}"
+                elif window_hit["locator_kind"] == "section_window":
+                    section_body_offset = window_hit.get("section_body_offset")
+                    if isinstance(section_body_offset, int):
+                        if span_end <= section_body_offset:
+                            source_span = f"header:{span_start}:{span_end}"
+                        else:
+                            body_start = max(0, span_start - section_body_offset)
+                            body_end = max(0, span_end - section_body_offset)
+                            source_span = f"{body_start}:{body_end}"
+
+                return {
+                    "status": "ok",
+                    "value_text": value_text,
+                    "value_json": None,
+                    "locator_kind": window_hit["locator_kind"],
+                    "locator_path": window_hit["locator_path"],
+                    "source_span": source_span,
+                }
+
+        if not saw_window:
+            return {"status": "error", "error_code": "WINDOW_NOT_FOUND"}
 
         return {"status": "error", "error_code": best_failure}

@@ -13,6 +13,7 @@ class TextLocatorHit(TypedDict):
     locator_path: str
     window_base: int
     item_body_offset: NotRequired[int]
+    section_body_offset: NotRequired[int]
 
 
 LocatorHandler = Callable[[object, tuple[str, ...]], TextLocatorHit | None]
@@ -159,21 +160,27 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
             for section_name_text, section_text in normalized_sections:
                 if lowered_anchor not in section_name_text.lower():
                     continue
+                section_header = section_name_text
+                candidate = f"{section_header}\n{section_text}"
                 return {
-                    "value": section_text,
+                    "value": candidate,
                     "locator_kind": "section_window",
                     "locator_path": f"sections[{section_name_text}]",
                     "window_base": 0,
+                    "section_body_offset": len(section_header) + 1,
                 }
 
             for section_name_text, section_text in normalized_sections:
                 if lowered_anchor not in section_text.lower():
                     continue
+                section_header = section_name_text
+                candidate = f"{section_header}\n{section_text}"
                 return {
-                    "value": section_text,
+                    "value": candidate,
                     "locator_kind": "section_window",
                     "locator_path": f"sections[{section_name_text}]",
                     "window_base": 0,
+                    "section_body_offset": len(section_header) + 1,
                 }
 
     if isinstance(sections, str):
@@ -246,7 +253,7 @@ def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLoca
     return None
 
 
-def run_text_locator_chain(*, filing: object, locators: Sequence[str], anchors: Sequence[str]) -> TextLocatorHit | None:
+def run_text_locator(*, filing: object, locator: str, anchors: Sequence[str]) -> TextLocatorHit | None:
     handlers: dict[str, LocatorHandler] = {
         "item_window": _try_item_window,
         "section_window": _try_section_window,
@@ -256,12 +263,16 @@ def run_text_locator_chain(*, filing: object, locators: Sequence[str], anchors: 
     if not normalized_anchors:
         return None
 
-    for locator in locators:
-        handler = handlers.get(locator)
-        if handler is None:
-            continue
+    handler = handlers.get(locator)
+    if handler is None:
+        return None
 
-        hit = handler(filing, normalized_anchors)
+    return handler(filing, normalized_anchors)
+
+
+def run_text_locator_chain(*, filing: object, locators: Sequence[str], anchors: Sequence[str]) -> TextLocatorHit | None:
+    for locator in locators:
+        hit = run_text_locator(filing=filing, locator=locator, anchors=anchors)
         if hit is not None:
             return hit
 
