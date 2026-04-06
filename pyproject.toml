@@ -5,6 +5,7 @@ description = "SEC Filing Backend - Phase 1"
 readme = "DEMANDS.md"
 requires-python = ">=3.12"
 dependencies = [
+    "apscheduler",
     "clickhouse-connect",
     "edgartools",
     "lxml>=5.2.0",
