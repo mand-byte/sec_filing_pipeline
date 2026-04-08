@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS us_stock_universe
   五期规划，所有数据达到最高准确率后，再实现llm的输出。LLM的输出不做审核（在无法保证得到最大化准确率下使用llm输出只是浪费钱,文字截取范围影响评分）。当 tier 3做出人工审核修正后，LLM也会重新读取并输出数据。
 
 ## golden set实现思路
-  参考GOLDEN_SET.md
+  参考GOLDEN_SET_PLAN.md
 
 
 ## （提取特征时）数据读取读取顺序
