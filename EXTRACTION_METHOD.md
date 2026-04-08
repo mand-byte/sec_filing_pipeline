@@ -180,6 +180,28 @@ This section defines extraction method — how spans are selected and validated 
 - `EXTRACTION_FIELDS.md`, which defines field registry metadata
 - `GOLDEN_SET.md`, which defines truth tiers and evaluation criteria
 
+### 5.8 Span evidence contract
+
+For every span-based extraction, the persisted artifact must capture sufficient evidence for human review and replay. This contract is about reviewability, not UI layout.
+
+The persisted span evidence must include at minimum:
+
+- **Selected span text**: the exact text string extracted as the candidate span.
+- **Source block identifiers**: block IDs or source character offsets (`start_char`, `end_char`) that enable re-location in the source filing.
+- **Heading path / item number / source section**: the structural context anchoring the span (e.g., heading path from block metadata, item number, section alias).
+- **Span locator kind**: which span-selection locator produced this candidate (for example `anchored_span`).
+- **Adequacy signals**: when `LlmSpanNormalizer` is used, persist runtime signals such as:
+  - `confidence`
+  - `sufficient_context`
+  - `multiple_candidate_targets`
+- **Retry history**: if the span was expanded or contracted due to adequacy checks, record the sequence of attempts (original span, expansion/contraction steps, final span).
+- **Review decision linkage**: reference to the final review outcome (`ACCEPT` / `NEEDS_REVIEW` / `REJECT`) and any associated correction metadata.
+
+This span evidence extends the general evidence/lineage requirements below and enables:
+- Reviewers to verify the span boundaries against source
+- Replay of the extraction with modified parameters
+- Audit trail from raw span to final normalized output
+
 ## 6) Correctness engineering boundaries (Tier 1/2/3)
 
 | Tier | Extractors | Trust level | Why trust differs | Representative failure modes | Primary mitigations |
@@ -278,7 +300,54 @@ def cold_start_review_gate(result, field_spec, stats):
     return "ACCEPT", None
 ```
 
-## 9) Fix-once regression loop
+## 9) Human review workflow contract
+
+### 9.1 Review states
+
+The extraction gate uses `ACCEPT`, `NEEDS_REVIEW`, and `REJECT` as routing decisions. Human review may then resolve the case with one of the following terminal dispositions:
+
+- **ACCEPT**: Candidate is confirmed and may proceed to persistence.
+- **CORRECTED**: Reviewer edits the payload; the corrected payload must re-enter QA validation before persistence.
+- **REJECT**: Candidate is rejected; extraction must reopen ordered fallback from the next eligible locator rather than persisting the rejected candidate.
+- **NOT_APPLICABLE**: Field does not apply to this filing/subject and should persist as not applicable where supported.
+
+`NEEDS_REVIEW` is the gate state that sends a candidate into human review; it is not itself a terminal review disposition.
+
+### 9.2 Reviewer-editable fields
+
+A reviewer may modify the following fields during review:
+
+- **Numeric value**: Corrected or override numeric output.
+- **Selected span**: Adjusted span boundaries for span-based extractions.
+- **Subject identity**: Corrected entity/subject reference (e.g., which registrant or segment).
+- **Applicability**: Mark field as applicable or not applicable.
+- **Error code**: Assign normalized failure class (e.g., `row_match_error`, `unit_scaling`, `locator_miss`).
+- **Note/rationale**: Free-text explanation for the review decision or correction.
+
+### 9.3 Persisted review output
+
+Each completed review must persist:
+
+- **Final decision**: One of the terminal review dispositions defined above.
+- **Corrected payload**: The final value and metadata after any reviewer edits (or original if unchanged).
+- **Evidence references**: Identifiers for both the original candidate evidence and the final corrected evidence when a correction occurred.
+- **Reviewer note**: The rationale or explanation provided by the reviewer.
+- **Timestamp**: When the review was completed.
+- **Reviewer identifier**: When available, the reviewer identity (user ID, system, or automated agent).
+
+### 9.4 Feedback-loop rules
+
+When a review identifies an extraction issue:
+
+- **Recurring errors**: If the same error pattern occurs across multiple filings, the fix must produce:
+  1. An `error_code` identifying the normalized failure class.
+  2. A `golden_case` added to regression/eval artifacts.
+  3. A targeted `patch` in registry/normalizer/review-gate/extractor logic.
+- **One-off anomalies**: If the error is a unique anomaly, it may remain as a reviewer override with explicit rationale and lineage rather than becoming a general rule.
+
+Operational principle: Generalize a fix only when it is repeated, generalizable, and low-risk. Reviewer corrections preserve original evidence, produce corrected evidence, and re-enter QA before final persistence.
+
+## 10) Fix-once regression loop
 
 Each corrected extraction issue must produce:
 
@@ -290,7 +359,7 @@ Operational rule:
 - Generalize a fix only when it is **repeated**, **generalizable**, and **low-risk**.
 - Otherwise keep it as a **one-off override** with explicit rationale and lineage.
 
-## 10) Document boundaries
+## 11) Document boundaries
 
 - **`DEMANDS.md`**: project goals, global principles, and roadmap.
 - **`EXTRACTION_METHOD.md` (this doc)**: extraction architecture, routing, correctness engineering, cold-start, and review process.

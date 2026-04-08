@@ -36,6 +36,71 @@ This document is the single authoritative **field dictionary** for the SEC filin
 | `filer_line` | Per-filer ownership summary |
 | `sale_notice` | Form 144 sale notice row |
 
+## Numeric Normalization Contract
+
+This section defines field-level contracts for numeric value semantics. These rules are independent of extraction method and do not replace evaluation tolerances defined elsewhere.
+
+### Canonical Unit Categories
+
+Each numeric field should bind to one canonical unit category:
+
+| Unit Type | Description |
+|---|---|
+| `money_reported_currency` | Monetary amount preserved in filing `reported_currency` |
+| `money_usd` | Monetary amount whose canonical semantics are explicitly USD |
+| `money_per_share_reported_currency` | Per-share monetary amount preserved in filing `reported_currency` |
+| `share_count` | Non-negative share quantity |
+| `share_delta` | Signed change in share quantity |
+| `percentage_points` | Percentage normalized to 0-100 points |
+| `integer_count` | Non-negative discrete count |
+
+### Scale Normalization
+
+| Unit Type | Normalization Rule |
+|---|---|
+| `money_reported_currency` | Normalize filing scale (full units, thousands, millions) into canonical full monetary units while preserving `reported_currency`. |
+| `money_usd` | Normalize filing scale into canonical full USD units. |
+| `money_per_share_reported_currency` | Preserve filed per-share scale in filing `reported_currency` unless field semantics explicitly require otherwise. |
+| `share_count` | Normalize share-unit scaling into canonical shares. |
+| `share_delta` | Normalize share-unit scaling into canonical signed share change. |
+| `percentage_points` | Normalize ratio or basis-point representations into 0-100 percentage points. |
+| `integer_count` | Normalize to canonical whole-count units only when the filing explicitly states the scale. |
+
+### Sign Conventions
+
+| Unit Type | Sign Rule |
+|---|---|
+| `money_reported_currency` | Preserve filing sign unless the field definition is inherently non-negative. |
+| `money_usd` | Preserve filing sign unless the field definition is inherently non-negative. |
+| `money_per_share_reported_currency` | Preserve filing sign unless the field definition is inherently non-negative. |
+| `share_count` | Always non-negative. |
+| `share_delta` | Signed: acquisitions positive, dispositions negative when canonicalized. |
+| `percentage_points` | Preserve sign only for inherently directional fields; ownership-style percentages are non-negative. |
+| `integer_count` | Always non-negative. |
+
+### Comparison Basis
+
+Exact tolerance values belong in evaluation config, not the field dictionary. The field dictionary defines the comparison family only:
+
+| Unit Type | Comparison Family |
+|---|---|
+| `money_reported_currency` | Monetary comparison after scale normalization with aligned currency metadata |
+| `money_usd` | Monetary comparison in canonical USD units |
+| `money_per_share_reported_currency` | Per-share monetary comparison with aligned currency metadata |
+| `share_count` | Share quantity comparison |
+| `share_delta` | Signed share-delta comparison |
+| `percentage_points` | Percentage-points comparison |
+| `integer_count` | Exact count comparison |
+
+### Representative Unit Bindings
+
+Representative bindings for current fields include:
+- `position_value_usd`, `info_table_value_total_usd` → `money_usd`
+- `offering_price_per_share`, `transaction_price_per_share`, `exercise_or_conversion_price`, `offer_price_per_share`, `diluted_eps` → `money_per_share_reported_currency`
+- `shares_acquired_or_disposed` → `share_delta`
+- `beneficial_ownership_pct`, `holder_beneficial_ownership_pct` → `percentage_points`
+- `proposal_votes_*`, `other_included_managers_count`, `info_table_entry_total`, `filing_delay_days` → `integer_count`
+
 ---
 
 ## Issuer Route: Numeric Field Dictionary
