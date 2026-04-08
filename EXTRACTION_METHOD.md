@@ -53,6 +53,7 @@ Registry contract per field:
 - ordered `locators`
 - `normalizer`
 - `qa`
+- optional `span_policy` for snippet-type fields that use span-based normalization
 
 ### 3.2 The six extractor types
 
@@ -88,7 +89,98 @@ Naming note: `6-K-financial` is the canonical `form_family` label for statement-
 - **144**: object/XML-first for notice fields and sale/acquisition quantities.
 - **13F**: holdings/info-table-first extraction with filing totals and row-level consistency checks.
 
-## 5) Correctness engineering boundaries (Tier 1/2/3)
+## 5) Text span selection rules
+
+This section defines how snippet-type fields determine their text span boundaries. It belongs in the method specification, not in field registry definitions (`EXTRACTION_FIELDS.md`) or in truth/evaluation documents (`GOLDEN_SET.md`).
+
+### 5.1 Core principle
+
+Spans are not selected by fixed character or token length. Instead, the extraction follows a **structure-first** approach: first identify the semantic block containing the target, then expand only as needed to provide sufficient context. The goal is **minimum sufficient context** — the smallest span that unambiguously contains the target with its key qualifiers.
+
+### 5.2 Structure-first segmentation
+
+Before span selection begins, the filing is segmented into `Block` units:
+
+```python
+@dataclass
+class Block:
+    kind: str               # heading, paragraph, table, footnote, exhibit
+    text: str
+    heading_path: list[str]
+    start_char: int
+    end_char: int
+```
+
+A span is then constructed as a sequence of one or more contiguous blocks, not as an arbitrary character window.
+
+### 5.3 SpanPolicy configuration
+
+Each snippet field can define an optional `SpanPolicy` in field metadata to guide span selection:
+
+```python
+@dataclass  # illustrative pseudocode
+class SpanPolicy:
+    field_name: str
+    anchor_headers: list[str]          # primary structural anchors
+    min_tokens: int                    # hard lower bound
+    max_tokens: int                    # hard upper bound
+    preferred_tokens: tuple[int, int]  # preferred scoring range
+    expand_steps: tuple[int, ...]      # block-expansion sequence
+    must_include: list[str]            # hard requirements if applicable
+    avoid: list[str]                   # over-selection indicators
+```
+
+These policies are declarative metadata, not runtime code. `anchor_headers`, `min_tokens`, and `max_tokens` are hard constraints; `preferred_tokens`, `must_include`, and `avoid` shape candidate scoring and acceptance heuristics.
+
+### 5.4 Candidate generation and scoring
+
+The span selection process works as follows:
+
+1. **Anchor identification**: Locate the primary `Block` anchored by the configured heading/item match. If multiple anchors match, prefer the earliest exact heading/item match within the nearest relevant section.
+2. **Candidate construction**: Generate candidate spans by expanding outward from the anchor in contiguous block steps defined by `expand_steps`.
+3. **Hard filtering**: Reject candidates that violate hard constraints (`min_tokens`, `max_tokens`, missing required anchor context, or missing `must_include` patterns when defined).
+4. **Scoring**: Score the remaining candidates on multiple dimensions:
+   - Token length falls within `preferred_tokens` range
+   - Contains the target heading/item
+   - Includes key qualifiers: units, currencies, negations, dates
+   - Contains only a single target object (not multiple proposals, events, or entities)
+   - Does not trigger `avoid` patterns (e.g., "other agreements", "see also")
+5. **Selection**: Among all passing candidates, select the shortest one.
+
+### 5.5 Too-small and too-large signals
+
+The extraction must detect when a span is inadequate:
+
+**Too-small signals:**
+- Extracted value is `unclear` or missing critical qualifiers
+- Confidence score from LLM normalization is low
+- Missing unit, currency, or negation that should be present
+- Subject pronoun reference cannot be resolved from context
+
+**Too-large signals:**
+- Output contains multiple distinct target objects (e.g., two separate proposals)
+- Output mixes unrelated events or tables
+- Rerun with same prompt shows high variance
+- Confidence drops significantly when span is expanded
+
+### 5.6 Adequacy check and retry policy
+
+This adequacy loop primarily applies to snippet fields that flow through `AnchoredSpanExtractor` into `LlmSpanNormalizer`.
+
+By default, the system performs **0 LLM pre-screen + 1 main extraction**. The first LLM call returns the normalized value along with adequacy signals (e.g., `confidence`, `multiple_candidate_targets`, `sufficient_context`). Only when these signals indicate the span is too small or too large does the system trigger a retry:
+
+- **Too small**: expand the span by one configured contiguous-block `expand_step` and re-extract.
+- **Too large**: contract the span by removing the outermost peripheral blocks symmetrically around the anchor when possible, then re-extract.
+
+This default-one-try policy avoids the inefficiency of always running two LLM calls when the first span is adequate.
+
+### 5.7 Boundary note
+
+This section defines extraction method — how spans are selected and validated — and is distinct from:
+- `EXTRACTION_FIELDS.md`, which defines field registry metadata
+- `GOLDEN_SET.md`, which defines truth tiers and evaluation criteria
+
+## 6) Correctness engineering boundaries (Tier 1/2/3)
 
 | Tier | Extractors | Trust level | Why trust differs | Representative failure modes | Primary mitigations |
 |---|---|---|---|---|---|
@@ -102,7 +194,7 @@ Boundary rule (fallback vs review semantics):
 - If a higher-trust candidate passes QA and review gate returns `REJECT` (candidate invalid or contradicted by stronger evidence), continue ordered fallback (remaining same-tier locators, then next locator/tier if configured).
 - A lower-trust tier must not replace a higher-trust QA-passing candidate unless that higher-trust candidate was explicitly `REJECT`ed.
 
-## 6) Runtime flow, QA gate, evidence lineage, anti-bloat rules
+## 7) Runtime flow, QA gate, evidence lineage, anti-bloat rules
 
 ### 6.1 Runtime flow
 
@@ -159,9 +251,9 @@ Each accepted/reviewed candidate must persist:
 - LLM input must be bounded to small pre-cut spans; never pass whole filings.
 - New extraction rules must be justified by recurring regression evidence.
 
-## 7) Cold-start progression and review gate
+## 8) Cold-start progression and review gate
 
-### 7.1 Phase progression
+### 8.1 Phase progression
 
 - **Phase 0 (seed truth build)**: create initial golden cases and baseline field coverage.
 - **Phase 1 (Tier 1 only)**: enable ObjPath/XbrlConcept/XmlPath; all new patterns heavily reviewed.
@@ -170,7 +262,7 @@ Each accepted/reviewed candidate must persist:
 
 Progression principle: **Tier 1 first, then Tier 2, then LLM**.
 
-### 7.2 Representative cold_start_review_gate logic
+### 8.2 Representative cold_start_review_gate logic
 
 ```python
 def cold_start_review_gate(result, field_spec, stats):
@@ -186,7 +278,7 @@ def cold_start_review_gate(result, field_spec, stats):
     return "ACCEPT", None
 ```
 
-## 8) Fix-once regression loop
+## 9) Fix-once regression loop
 
 Each corrected extraction issue must produce:
 
@@ -198,7 +290,7 @@ Operational rule:
 - Generalize a fix only when it is **repeated**, **generalizable**, and **low-risk**.
 - Otherwise keep it as a **one-off override** with explicit rationale and lineage.
 
-## 9) Document boundaries
+## 10) Document boundaries
 
 - **`DEMANDS.md`**: project goals, global principles, and roadmap.
 - **`EXTRACTION_METHOD.md` (this doc)**: extraction architecture, routing, correctness engineering, cold-start, and review process.

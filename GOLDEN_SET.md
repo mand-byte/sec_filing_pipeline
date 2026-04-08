@@ -34,6 +34,22 @@ Subject-type counts that must remain stable:
 - `(holding, holding_position)` = 5
 - `(holding, filing)` = 3
 
+## Field-dictionary grain to golden subject-type mapping
+
+Only the following grain-to-subject mappings are universally one-to-one:
+
+| Field Dictionary Grain | Golden Subject Type |
+|---|---|
+| `document` | `filing` |
+| `proposal_line` | `proposal` |
+| `exec_line` | `executive` |
+| `transaction_line` | `transaction_row` |
+| `filer_line` | `reporting_person` |
+| `sale_notice` | `form144_notice` |
+| `position_line` | `holding_position` |
+
+**Route-aware note:** `holder_line` maps to `holder_row` for issuer-route beneficial ownership rows. In the current frozen 53-field model, owner-route holdings-style rows resolve under `transaction_row` (there is no separate owner-route `holder_row` bucket). `security_line` and `derivative_line` are extraction-grain labels, not standalone golden subject types; they must resolve to the appropriate frozen subject type for the route/field (for example `filing` or `transaction_row`) without introducing new subject categories.
+
 ## Strict case/subject schema concepts
 
 - `golden_case` is point-in-time and amendment-aware (`accepted_at`, `is_amendment`, `amendment_no`, `truth_cutoff_at`, source accession/snapshot metadata).
@@ -67,6 +83,8 @@ Routing notes:
 - **8-K**: mixed route. Itemized votes (e.g., 5.07) are table/anchor-heavy; transaction terms are often narrative anchors.
 - **DEF 14A**: prioritize anchored compensation and ownership tables; do not treat filing-level aggregates as row truth when row subjects exist.
 - **S-1 / 424B4 / SC TO-I / SC 13E3**: split routing by section; financial statements use XBRL-first where available, offering/deal terms use anchored-table/text locators.
+
+**6-K policy note:** Generic `6-K` is not treated as a default statement-style numeric-truth filing family. Only `6-K-financial` cases with explicit financial statements or financial exhibits enter the statement-style numeric truth and evaluation path. Event-style `6-K` disclosures remain outside that default path, but explicitly modeled non-statement numeric fields may still participate in strict evaluation where applicable.
 
 ## Truth source reliability ranking
 
@@ -161,3 +179,15 @@ Stable phase gates:
 - Silver sources (`companyfacts`, object convenience values) are for bootstrap/surveillance and never counted as gold.
 - Decimal precision (`NUMERIC(38,10)` / `Decimal`) is required for strict golden-set data.
 - If independent gold truth is unavailable for a row, keep it silver or invariant-only rather than inflating gold coverage.
+
+## Versioned rule sources
+
+`GOLDEN_SET.md` is the authoritative specification for golden-set policy and model semantics. The authoritative executable rule surface is versioned config/code together with versioned tests and structured fixtures that enforce and validate those rules.
+
+For the categories below, executable rules must be defined in versioned config/code, and versioned tests or structured fixtures must enforce and validate them:
+
+- XBRL concept candidates and source priorities
+- Fallback derivation formulas and required inputs
+- Executable invariants and tolerances
+- Curated seed-ticker sets and rationale/metadata
+- Regression / validation cases used to prevent repeat failures
