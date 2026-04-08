@@ -6,7 +6,7 @@
 
 ## 二、架构选型与核心原则 (Architecture & Principles)
 1. **分层抽取策略**：`edgartools` (XBRL / Obj) 为绝对优先 (Tier 1) -> 定向 XML/HTML 解析次之 (Tier 2) -> 局部正则锚点兜底 -> LLM 仅作末端 JSON 序列化。禁止大模型在全文中盲猜找值，**不需要使用 spaCy**。详见 [EXTRACTION_METHOD.md](./EXTRACTION_METHOD.md) 与 [EXTRACTOR_CORRECTNESS.md](./EXTRACTOR_CORRECTNESS.md)。
-2. **严谨的基准集 (Golden Set V2)**：摒弃混合真值的统计方法。构建独立可审计的 Gold、Silver 和 Invariant 数据集与点对点的精准打标库，用确切的 SQL Denominators 计算提取正确率。所有具体的概念（Concepts）、公式、测试用例都必须以版本化配置（YAML）沉淀。详见 [GOLDEN_SET_PLAN.md](./GOLDEN_SET_PLAN.md)。
+2. **严谨的基准集 (Golden Set V2)**：摒弃混合真值的统计方法。构建独立可审计的 Gold、Silver 和 Invariant 数据集与点对点的精准打标库，用确切的 SQL Denominators 计算提取正确率。所有具体的概念（Concepts）、公式、测试用例都必须以版本化配置（YAML）沉淀。详见 [GOLDEN_SET.md](./GOLDEN_SET.md)。
 3. **“修一次不再重错”的修正闭环**：所有人工审核出的错误必须提取出对应 `error_code` + 计入 `golden_case` (回归测试集) + 单点修复 `patch`。回归测试挂掉则阻断系统发布。
 
 ## 三、目标集合与数据存储来源 (Data Source)
