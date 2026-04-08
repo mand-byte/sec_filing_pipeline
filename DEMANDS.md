@@ -39,10 +39,15 @@ CREATE TABLE IF NOT EXISTS us_stock_universe
 
 ## 规划
   一期规划，设计数据库，覆盖所有字段和文本片段。
-  二期规划，EXTRACTOR_CORRECTNESS.md中的Tier 1 （数值类型全覆盖）。
-  三期规划，EXTRACTOR_CORRECTNESS.md中的Tier 2 （正则 ，收口， golden set）
-  四期规划，EXTRACTOR_CORRECTNESS.md中的Tier 3 (文字类型全覆盖，正则，收口，golden set ,及审核机制)
+  二期规划，EXTRACTOR_CORRECTNESS.md中的Tier 1 （数据库的设计，数值类型全覆盖）。
+  三期规划，EXTRACTOR_CORRECTNESS.md中的Tier 2 （golden set, 正则收口）
+  四期规划，EXTRACTOR_CORRECTNESS.md中的Tier 3 (文字类型全覆盖，golden set, 正则，收口，及审核机制)
   五期规划，所有数据达到最高准确率后，再实现llm的输出。LLM的输出不做审核（在无法保证得到最大化准确率下使用llm输出只是浪费钱,文字截取范围影响评分）。当 tier 3做出人工审核修正后，LLM也会重新读取并输出数据。
+
+## golden set实现思路
+  参考GOLDEN_SET.md
+
+
 ## （提取特征时）数据读取读取顺序
   按照时间线，从远到近，按数据深度，从深到浅读（有人工修正读人工修正，没有的读原始值）。/A的数据因为提交时间不同，当作新的一份数据，有值的会在特征提取的逻辑里重新计算，没有值的则不处理。
 ## 人工审核

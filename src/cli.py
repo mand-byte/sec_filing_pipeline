@@ -19,6 +19,7 @@ from src.pipeline.review.review_gate import ReviewGateInput, evaluate_review_gat
 from src.pipeline.review.stats import SqlAlchemyReviewStats
 from src.pipeline.offline_artifacts import write_run_artifacts
 from src.pipeline.offline_evaluator import OfflineEvalSelectors, run_offline_tier2_evaluation
+from src.pipeline.golden_10q_numeric_batch import evaluate_10q_numeric_batch
 from src.pipeline.routers.holding import HoldingRouter
 from src.pipeline.routers.issuer import IssuerRouter
 from src.pipeline.routers.owner import OwnerRouter
@@ -654,6 +655,41 @@ def offline_eval(
     )
 
 
+@app.command("golden-10q-numeric-batch")
+def golden_10q_numeric_batch(
+    golden_path: str = typer.Option(
+        "configs/tier2/golden_set_10q/batch_001.yaml",
+        "--golden-path",
+        help="Path to the adjudicated 10-Q numeric batch golden set",
+    ),
+    snapshot_dir: str = typer.Option(
+        "configs/tier2/candidate_snapshots_10q/batch_001",
+        "--snapshot-dir",
+        help="Directory containing batch_001 candidate snapshots",
+    ),
+) -> None:
+    result = evaluate_10q_numeric_batch(
+        golden_path=Path(golden_path),
+        snapshot_dir=Path(snapshot_dir),
+    )
+    metrics = result.summary["metrics"]
+    typer.echo(
+        "golden metrics: "
+        + f"batches={metrics['total_batches']} "
+        + f"field_checks={metrics['total_field_checks']} "
+        + f"candidate_recall={metrics['candidate_recall']} "
+        + f"top1_accuracy={metrics['top1_accuracy']} "
+        + f"batch_all_match_rate={metrics['batch_all_match_rate']}"
+    )
+    for field_name, field_metrics in result.by_field.items():
+        typer.echo(
+            "field "
+            + f"{field_name}: "
+            + f"candidate_recall={field_metrics['candidate_recall']} "
+            + f"top1_accuracy={field_metrics['top1_accuracy']}"
+        )
+
+
 @app.command("schedule")
 def schedule() -> None:
     """Run the phase-1 scheduler loop."""
@@ -663,3 +699,7 @@ def schedule() -> None:
         tick_callable=run_once,
     )
     scheduler.start()
+
+
+if __name__ == "__main__":
+    app()
