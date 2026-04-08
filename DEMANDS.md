@@ -2,7 +2,7 @@
 
 ## 一、任务总目标
 构建一个 **Precision-First（高准度优先）**的 SEC 财报及公告结构化抽取后台。
-系统需支持冷启动 (Cold-Start) 全量拉取与增量同步 (Incremental Ingestion)，底层数据拉取和初级解析的核心依赖必须使用 `edgartools`。
+系统需支持冷启动 (Cold-Start) 全量拉取与增量同步 (Incremental Ingestion)，底层数据拉取和初级解析的核心依赖必须使用 `edgartools`。SEC 访问控制、节流与 fair-access 约束默认沿用 `edgartools` 的既有能力，本项目不额外定义独立抓取限流 contract。
 
 ## 二、架构选型与核心原则 (Architecture & Principles)
 1. **分层抽取策略**：`edgartools` (XBRL / Obj) -> XML/HTML -> anchored regex -> LLM 为核心链路，**不需要使用 spaCy**。详见 [EXTRACTION_METHOD.md](./EXTRACTION_METHOD.md)。
@@ -37,7 +37,7 @@ ORDER BY (composite_figi)
 **数据处理边界规则**：
 - 底库仅含普通股 (CS) 和 ADR，系统已从上游排除“多个 Ticker 共用 1 个 FIGI（如 GOOG/GOOGL）”的冗杂，FIGI 与 CIK 可以实现一对一确切映射。
 - **退市处理**：当 `active=0` 时，仅处理 SEC 文件提交时间（`accepted_at`）小于等于 `delisted_utc` 的 Filing；晚于退市时间的垃圾/注销报备跳过。
-- **解析监控**：解析过程的运行时数据、成功/失败标志与具体失败 Callstack 必须详细落盘存入 DB，以供分析。
+- **解析监控**：解析过程的运行时数据、成功/失败标志与具体失败 Callstack 必须详细落盘存入 DB，以供分析。当前监控要求以日志与运行记录留存为主，不在本需求文档内额外定义 freshness / SLA / alert contract。
 
 ## 四、程序调度与系统入口 (Entrypoints & State)
 - **配置与鉴权**：统一收敛在 `.env` 中，包含 ClickHouse、PostgreSQL 的连接信息及初始化数据抓取的首个时间戳。
@@ -46,15 +46,19 @@ ORDER BY (composite_figi)
   2. `owner`（内部人士持仓/交易变动线）
   3. `holding`（机构持仓主线）
 - **无状态设计**：解析拉取进程自身无状态。每次调度执行，程序只需查询数据库得出待拉取 Tickers 的最新进度，依靠文件的接收时间 (`accepted_at` 时间戳) 进行断点续传式的增量游标推移。
+- **下载边界与单文件识别**：单份 filing 的边界与唯一性以 SEC 原始文件元数据为准（如 filing 编号、接收时间等）；不同 filing 按独立文档切片处理，不因 rerun 或后续处理而跨 filing 覆盖。
+- **失败处理策略**：单份 filing 的下载或解析失败不得阻断本轮其余任务；失败信息落盘后直接 continue，由后续调度轮次继续处理。
 
 ## 五、提取对象与特征读取规则
 - **目标清单与字段**：本期重点突破核心的 53 个确定性数值字段以及特定锚区中的大段文本。详见 [EXTRACTION_FIELDS.md](./EXTRACTION_FIELDS.md)。
+- **输出粒度约束**：抽取结果的数据粒度必须与字段语义一致；除 filing 级 document 字段外，涉及 proposal、executive、holder、transaction、position、security 等多行对象的结果必须按主体/行级持久化，不得为方便消费而强行压平成单个 filing-level 记录。具体粒度定义见 [EXTRACTION_FIELDS.md](./EXTRACTION_FIELDS.md) 与 [GOLDEN_SET.md](./GOLDEN_SET.md)。
 - **/A 修正案处理 (Amendment)**： `/A` 修正案的文件视作当期信息的直接新切片。由于提交时间不同，处理时将其按新文档进行特征重新计算覆盖；如 /A 中缺失某值则视同该值本期未重述，不做硬性回溯。
 - **特征因子消费的优先级 (Timeline Fetching)**：
   向下游量化端吐出数据时，按照提交时间由远至近，选取深度最深的真值。**人工审查修正值 (Ground Truth) > 解析原生值**。
 
 ## 六、人工审核产品交互刚需 (UI/UX Requirement)
 - 高效的人工审核面板（UI）**必须并排展示原文 Span 区块 与 抽取结果**（Side-by-side），支持对长文档直接高亮对应锚点。若让审核人员脱离原文盲审 JSON，效率低且极易出现盲目确认。
+- **审核证据要求**：人工审核必须基于可定位的原文证据进行，系统需保留足以回放定位的 source span / locator / review linkage；具体 contract 见 [EXTRACTION_METHOD.md](./EXTRACTION_METHOD.md)。
 
 ## 七、研发里程碑与大包规划 (Roadmap)
 为了匹配 Golden Set V2 计划的落地，我们对此前的粗放规划进行了严谨整合重排：
