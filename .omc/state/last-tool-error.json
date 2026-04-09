@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"uv run pytest -q \\\"/Users/weihu/Coding/QuantSystem/sec_filing_pipeline/tests/db/test_persistence_service.py\\\"\",\"timeout\":600000,\"description\":\"Run row-grain persistence tests\"}",
-  "error": "Exit code 2\n\n==================================== ERRORS ====================================\n____________ ERROR collecting tests/db/test_persistence_service.py _____________\ntests/db/test_persistence_service.py:10: in <module>\n    from src.pipeline.services import EvidenceInput, FactInput, PersistenceService\nsrc/pipeline/services.py:24: in <module>\n    @dataclass(frozen=True)\n     ^^^^^^^^^^^^^^^^^^^^^^\n../../../.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/dataclasse...",
-  "timestamp": "2026-04-09T06:32:46.924Z",
-  "retry_count": 1
-}
