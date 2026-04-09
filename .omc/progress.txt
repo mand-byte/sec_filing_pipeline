@@ -1,0 +1,64 @@
+Ralph progress log
+
+Story US-001: issuer 10-Q XBRL extraction slice
+- Implemented issuer-route 10-Q / 10-Q/A XBRL-only extraction for total_revenue, operating_income, and net_income.
+- Added XBRL selection metadata to NumericFieldSpec and registry configuration.
+- Implemented XBRL candidate filtering, ranking, evidence emission, and explicit XBRL_QUERY_FAILED handling.
+- Preserved amendment handling through 10-Q/A form-family normalization.
+- Updated CLI bundle-building to preserve XBRL evidence and guard empty issuer 10-Q slice outcomes.
+- Aligned golden_10q_numeric_batch runtime filters/scoring/date coercion more closely with production logic.
+- Added regression tests for XBRL ranking, obj-vs-xbrl precedence, amendment success path, empty 10-Q bundles, XBRL query failures, and golden batch alias compatibility.
+
+Changed files
+- src/pipeline/extraction/contracts.py
+- src/pipeline/extraction/registry.py
+- src/pipeline/extraction/engine.py
+- src/pipeline/edgar_provider.py
+- src/cli.py
+- src/pipeline/golden_10q_numeric_batch.py
+- tests/pipeline/extraction/test_numeric_engine.py
+- tests/test_cli_numeric_bundles.py
+- tests/test_golden_10q_numeric_batch.py
+
+Latest validation snapshot
+- uv run pytest -q tests
+- uv run --with ruff ruff check src tests
+- uv run python -m compileall src tests
+
+Learnings
+- Slice-specific guards are easier to keep correct when encoded in both registry metadata and CLI/runtime gating.
+- Eval helpers must mirror runtime alias handling and candidate-key semantics, or top1 metrics drift from production behavior.
+- Extending beyond revenue/income requires two selection modes: duration-based YTD facts and instant balance-sheet facts.
+
+Story US-002: issuer 10-Q expanded deterministic field set
+- Added deterministic 10-Q support for diluted_eps, operating_cash_flow, cash_and_equivalents, capex, and shares_outstanding.
+- Extended the engine with instant-period detection and preferred-instant selection to support balance-sheet style facts.
+- Extended the engine with preferred duration days so Q2/Q3 10-Q cash-flow style metrics can prefer 180/270-day facts instead of only 90-day facts.
+- Added regression coverage for diluted EPS, operating cash flow, cash and equivalents, capex, and shares outstanding, plus bundle emission in amended 10-Q/A filings.
+- Current issuer deterministic 10-Q slice now covers 8 document-level fields.
+
+AI slop cleaner pass
+- Reviewed the session-changed files for needless wrappers, duplicate helpers, and scope drift.
+- Kept the bounded slice intact; final cleanup focused on removing duplicate helper definitions, tightening slice-specific gating, and aligning the golden batch helper with runtime alias/key behavior.
+- Re-ran regression checks after cleanup.
+
+Story US-003: owner route Form 4 slice
+- Added row-grain persistence foundation using subject_key on facts/evidence.
+- Updated persistence upsert/evidence matching to include subject_key.
+- Added owner-route Form 4 extraction path using filing.obj().transactions for three transaction-row fields: shares_acquired_or_disposed, transaction_price_per_share, and shares_owned_following_txn.
+- Restricted the owner provider route to Form 4 for this first deterministic slice.
+- Added focused tests for row-grain persistence and owner Form 4 bundle emission.
+- Full regression snapshot after owner slice: pytest 21 passed, ruff passed, compileall passed.
+
+Story US-004: owner route derivative transaction expansion
+- Added derivative_underlying_shares and exercise_or_conversion_price extraction from Form 4 derivative_table.transactions.data rows.
+- Used distinct derivative row subject keys (`dtxn:N`) so derivative rows do not collide with non-derivative transaction rows.
+- Added regression coverage for derivative transaction bundle emission while preserving the existing Form 4 non-derivative slice.
+- Full regression snapshot after derivative owner slice: pytest 21 passed, ruff passed, compileall passed.
+
+Story US-005: owner holdings slice
+- Expanded owner-route provider/build path to holdings extraction for Forms 3/4/5.
+- Added non_derivative_shares_owned extraction from non_derivative_table.holdings.data with stable `nhold:N` row keys.
+- Added derivative holdings extraction for derivative_underlying_shares and exercise_or_conversion_price from derivative_table.holdings.data with stable `dhold:N` row keys.
+- Added regression coverage for owner holdings bundle emission while preserving transaction-row extraction.
+- Full regression snapshot after owner holdings slice: pytest 22 passed, ruff passed, compileall passed.

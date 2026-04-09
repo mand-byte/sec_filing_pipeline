@@ -1,0 +1,372 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775677012465,
+  "projectRoot": "/Users/weihu/Coding/QuantSystem/sec_filing_pipeline",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "pytest",
+        "version": null,
+        "category": "testing"
+      }
+    ],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": "snake_case",
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "src"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 0,
+      "lastAccessed": 1775677012454,
+      "keyFiles": []
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 3,
+      "lastAccessed": 1775677012454,
+      "keyFiles": [
+        "__init__.py",
+        "cli.py",
+        "config.py"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "",
+      "accessCount": 212,
+      "lastAccessed": 1775722857077,
+      "type": "directory"
+    },
+    {
+      "path": "src/cli.py",
+      "accessCount": 86,
+      "lastAccessed": 1775722857042,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/engine.py",
+      "accessCount": 85,
+      "lastAccessed": 1775714461579,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/registry.py",
+      "accessCount": 84,
+      "lastAccessed": 1775723245231,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_cli_numeric_bundles.py",
+      "accessCount": 74,
+      "lastAccessed": 1775714481547,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 73,
+      "lastAccessed": 1775717107467,
+      "type": "directory"
+    },
+    {
+      "path": "src/pipeline/golden_10q_numeric_batch.py",
+      "accessCount": 58,
+      "lastAccessed": 1775714481436,
+      "type": "file"
+    },
+    {
+      "path": "tests/pipeline/extraction/test_numeric_engine.py",
+      "accessCount": 57,
+      "lastAccessed": 1775714481483,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/contracts.py",
+      "accessCount": 54,
+      "lastAccessed": 1775716438426,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/edgar_provider.py",
+      "accessCount": 50,
+      "lastAccessed": 1775723367908,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/services.py",
+      "accessCount": 41,
+      "lastAccessed": 1775722634615,
+      "type": "file"
+    },
+    {
+      "path": "tests",
+      "accessCount": 37,
+      "lastAccessed": 1775722857135,
+      "type": "directory"
+    },
+    {
+      "path": "src/pipeline/extraction/locators.py",
+      "accessCount": 20,
+      "lastAccessed": 1775689491618,
+      "type": "file"
+    },
+    {
+      "path": "src/db/models.py",
+      "accessCount": 19,
+      "lastAccessed": 1775723367855,
+      "type": "file"
+    },
+    {
+      "path": "pyproject.toml",
+      "accessCount": 18,
+      "lastAccessed": 1775709614359,
+      "type": "file"
+    },
+    {
+      "path": "DEMANDS.md",
+      "accessCount": 16,
+      "lastAccessed": 1775708857823,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/text_registry.py",
+      "accessCount": 13,
+      "lastAccessed": 1775690977995,
+      "type": "file"
+    },
+    {
+      "path": "EXTRACTION_FIELDS.md",
+      "accessCount": 11,
+      "lastAccessed": 1775723245196,
+      "type": "file"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/edgar",
+      "accessCount": 8,
+      "lastAccessed": 1775723367875,
+      "type": "directory"
+    },
+    {
+      "path": "EXTRACTION_METHOD.md",
+      "accessCount": 7,
+      "lastAccessed": 1775688480765,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction",
+      "accessCount": 7,
+      "lastAccessed": 1775689171690,
+      "type": "directory"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/edgar/xbrl/facts.py",
+      "accessCount": 7,
+      "lastAccessed": 1775690151680,
+      "type": "file"
+    },
+    {
+      "path": "GOLDEN_SET.md",
+      "accessCount": 7,
+      "lastAccessed": 1775712344124,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/offline_evaluator.py",
+      "accessCount": 6,
+      "lastAccessed": 1775690964184,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/types.py",
+      "accessCount": 5,
+      "lastAccessed": 1775716107039,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline",
+      "accessCount": 4,
+      "lastAccessed": 1775686519997,
+      "type": "directory"
+    },
+    {
+      "path": "src/pipeline/routers/issuer.py",
+      "accessCount": 3,
+      "lastAccessed": 1775680906762,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/scheduler.py",
+      "accessCount": 3,
+      "lastAccessed": 1775686852138,
+      "type": "file"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/edgar/xbrl",
+      "accessCount": 3,
+      "lastAccessed": 1775689644059,
+      "type": "directory"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/edgar/xbrl/xbrl.py",
+      "accessCount": 3,
+      "lastAccessed": 1775689704828,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-04-09-missing-contracts-restoration-design.md",
+      "accessCount": 3,
+      "lastAccessed": 1775712115093,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/review/review_gate.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680802696,
+      "type": "file"
+    },
+    {
+      "path": "src/db/repositories.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680819802,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/text_engine.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680837768,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/review/stats.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680837781,
+      "type": "file"
+    },
+    {
+      "path": "src/config.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680837837,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/routers/owner.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680906702,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/routers/holding.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680906710,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/rules.py",
+      "accessCount": 2,
+      "lastAccessed": 1775680956252,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/text_contracts.py",
+      "accessCount": 2,
+      "lastAccessed": 1775681108954,
+      "type": "file"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/edgar/_filings.py",
+      "accessCount": 2,
+      "lastAccessed": 1775689561839,
+      "type": "directory"
+    },
+    {
+      "path": "docs",
+      "accessCount": 2,
+      "lastAccessed": 1775712115108,
+      "type": "directory"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-04-09-missing-contracts-restoration.md",
+      "accessCount": 2,
+      "lastAccessed": 1775712115150,
+      "type": "file"
+    },
+    {
+      "path": "src/db/session.py",
+      "accessCount": 2,
+      "lastAccessed": 1775716107015,
+      "type": "file"
+    },
+    {
+      "path": ".mcp.json",
+      "accessCount": 1,
+      "lastAccessed": 1775678262682,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-04-08-demands-dedup-design.md",
+      "accessCount": 1,
+      "lastAccessed": 1775678696845,
+      "type": "file"
+    },
+    {
+      "path": "main.py",
+      "accessCount": 1,
+      "lastAccessed": 1775680460889,
+      "type": "file"
+    },
+    {
+      "path": "src/pipeline/extraction/text_locators.py",
+      "accessCount": 1,
+      "lastAccessed": 1775681108900,
+      "type": "file"
+    },
+    {
+      "path": "src/db",
+      "accessCount": 1,
+      "lastAccessed": 1775686664231,
+      "type": "directory"
+    },
+    {
+      "path": ".venv/lib/python3.13/site-packages/edgar/company_reports",
+      "accessCount": 1,
+      "lastAccessed": 1775689541700,
+      "type": "directory"
+    }
+  ],
+  "userDirectives": []
+}
