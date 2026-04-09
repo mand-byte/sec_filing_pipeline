@@ -235,6 +235,142 @@ def _owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBun
     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
+def _holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle | None:
+    obj_method = getattr(envelope.filing, "obj", None)
+    if not callable(obj_method):
+        return None
+
+    try:
+        holding_report = obj_method()
+    except Exception:
+        return None
+
+    infotable = getattr(holding_report, "infotable", None)
+    if not isinstance(infotable, pd.DataFrame):
+        return None
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+    row_value_total_usd = 0.0
+
+    if not infotable.empty:
+        for index, row in enumerate(infotable.itertuples(index=False), start=1):
+            subject_key = f"position:{index}"
+            position_specs = (
+                ("position_value_usd", getattr(row, "Value", None), "Value", 1000.0),
+                ("shares_or_principal_amount", getattr(row, "SharesPrnAmount", None), "SharesPrnAmount", 1.0),
+                ("sole_voting_auth_shares", getattr(row, "SoleVoting", None), "SoleVoting", 1.0),
+                ("shared_voting_auth_shares", getattr(row, "SharedVoting", None), "SharedVoting", 1.0),
+                ("none_voting_auth_shares", getattr(row, "NonVoting", None), "NonVoting", 1.0),
+            )
+            for field_name, raw_value, path_name, scale in position_specs:
+                numeric_value = _coerce_numeric_value(raw_value)
+                if numeric_value is None:
+                    continue
+                normalized_value = float(numeric_value * scale)
+                if field_name == "position_value_usd":
+                    row_value_total_usd += normalized_value
+                facts.append(
+                    FactInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        value_numeric=normalized_value,
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        locator_kind="obj",
+                        source_span=f"infotable[{index - 1}].{path_name}",
+                        raw_value=str(raw_value),
+                        normalized_value=str(normalized_value),
+                    )
+                )
+
+    summary_page = getattr(getattr(holding_report, "primary_form_information", None), "summary_page", None)
+    other_included_managers_raw = getattr(summary_page, "other_included_managers_count", None)
+    other_included_managers_count = _coerce_numeric_value(other_included_managers_raw)
+    if other_included_managers_count is not None:
+        facts.append(
+            FactInput(
+                field_name="other_included_managers_count",
+                subject_key="document",
+                value_numeric=float(other_included_managers_count),
+                confidence=0.99,
+            )
+        )
+        evidences.append(
+            EvidenceInput(
+                field_name="other_included_managers_count",
+                subject_key="document",
+                locator_kind="obj",
+                source_span="summary_page.otherIncludedManagersCount",
+                raw_value=str(other_included_managers_raw),
+                normalized_value=str(float(other_included_managers_count)),
+            )
+        )
+
+    total_holdings_raw = getattr(holding_report, "total_holdings", None)
+    total_holdings = _coerce_numeric_value(total_holdings_raw)
+    if total_holdings is None:
+        total_holdings = float(len(infotable.index))
+        total_holdings_raw = len(infotable.index)
+        total_holdings_span = "infotable.row_count"
+    else:
+        total_holdings = float(total_holdings)
+        total_holdings_span = "summary_page.tableEntryTotal"
+    facts.append(
+        FactInput(
+            field_name="info_table_entry_total",
+            subject_key="document",
+            value_numeric=total_holdings,
+            confidence=0.99,
+        )
+    )
+    evidences.append(
+        EvidenceInput(
+            field_name="info_table_entry_total",
+            subject_key="document",
+            locator_kind="obj",
+            source_span=total_holdings_span,
+            raw_value=str(total_holdings_raw),
+            normalized_value=str(total_holdings),
+        )
+    )
+
+    total_value_raw = getattr(holding_report, "total_value", None)
+    total_value = _coerce_numeric_value(total_value_raw)
+    if total_value is None:
+        total_value_usd = row_value_total_usd
+        total_value_raw = row_value_total_usd / 1000.0
+        total_value_span = "infotable.Value"
+    else:
+        total_value_usd = float(total_value * 1000.0)
+        total_value_span = "summary_page.tableValueTotal"
+    facts.append(
+        FactInput(
+            field_name="info_table_value_total_usd",
+            subject_key="document",
+            value_numeric=total_value_usd,
+            confidence=0.99,
+        )
+    )
+    evidences.append(
+        EvidenceInput(
+            field_name="info_table_value_total_usd",
+            subject_key="document",
+            locator_kind="obj",
+            source_span=total_value_span,
+            raw_value=str(total_value_raw),
+            normalized_value=str(total_value_usd),
+        )
+    )
+
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+
+
 def _load_run_once_securities(session: Any) -> list[SecurityMaster]:
     return list(
         session.scalars(
@@ -347,6 +483,122 @@ def _build_bundles_from_provider(
                 )
                 continue
             bundles.append(owner_bundle)
+            continue
+
+        if route == "holding" and form_family == "13F-HR/A":
+            holding_text_specs = tuple(
+                spec
+                for spec in route_text_specs
+                if form_family in spec.form_families
+            )
+            for spec in holding_text_specs:
+                outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+                if outcome["status"] != "ok":
+                    _safe_write_log(
+                        repo,
+                        run_id=run_id,
+                        route=route,
+                        stage="extract",
+                        level="ERROR",
+                        message="text field extraction failed",
+                        cik=envelope.cik,
+                        accession_no=envelope.accession_no,
+                        error_type=outcome["error_code"],
+                    )
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=spec.field_name,
+                        subject_key="document",
+                        value_text=outcome["value_text"],
+                        value_json=outcome["value_json"],
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=spec.field_name,
+                        subject_key="document",
+                        locator_kind=outcome["locator_kind"],
+                        source_span=outcome["source_span"],
+                        source_xpath=outcome["locator_path"],
+                        raw_value=outcome["value_text"],
+                        normalized_value=outcome["value_text"],
+                    )
+                )
+
+            holding_bundle = _holding_13f_bundle(envelope=envelope, filing=filing)
+            if holding_bundle is None:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="holding 13F extraction failed",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="HOLDING_OBJ_UNAVAILABLE",
+                )
+                continue
+            has_position_rows = any(
+                fact.subject_key.startswith("position:")
+                for fact in holding_bundle.facts
+            )
+            if not has_position_rows:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="holding 13F amendment extracted no position rows",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="NO_HOLDING_ROWS_EXTRACTED",
+                )
+                continue
+            merged_bundle = FilingBundle(
+                filing=holding_bundle.filing,
+                facts=[*holding_bundle.facts, *facts],
+                evidences=[*holding_bundle.evidences, *evidences],
+            )
+            bundles.append(merged_bundle)
+            continue
+
+        if route == "holding" and form_family == "13F-HR":
+            holding_bundle = _holding_13f_bundle(envelope=envelope, filing=filing)
+            if holding_bundle is None:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="holding 13F extraction failed",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="HOLDING_OBJ_UNAVAILABLE",
+                )
+                continue
+            has_position_rows = any(
+                fact.subject_key.startswith("position:")
+                for fact in holding_bundle.facts
+            )
+            if not has_position_rows:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="holding 13F extracted no rows",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="NO_HOLDING_ROWS_EXTRACTED",
+                )
+                continue
+            bundles.append(holding_bundle)
             continue
 
         filing_numeric_specs = route_numeric_specs

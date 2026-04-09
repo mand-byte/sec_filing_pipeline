@@ -111,3 +111,52 @@ def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:
     assert len(facts) == 1
     assert facts[0].subject_key == "txn:1"
     assert facts[0].value_numeric == 11.0
+
+
+def test_persist_filing_bundle_supports_holding_position_rows() -> None:
+    session = _session()
+    service = PersistenceService(session)
+
+    service.persist_filing_bundle(
+        filing=_filing(),
+        route="holding",
+        facts=[
+            FactInput(field_name="position_value_usd", subject_key="position:1", value_numeric=1250000.0),
+            FactInput(field_name="position_value_usd", subject_key="position:2", value_numeric=750000.0),
+            FactInput(field_name="info_table_entry_total", subject_key="document", value_numeric=2.0),
+        ],
+        evidences=[
+            EvidenceInput(
+                field_name="position_value_usd",
+                subject_key="position:1",
+                locator_kind="obj",
+                source_span="infotable[0].Value",
+                raw_value="1250",
+                normalized_value="1250000.0",
+            ),
+            EvidenceInput(
+                field_name="position_value_usd",
+                subject_key="position:2",
+                locator_kind="obj",
+                source_span="infotable[1].Value",
+                raw_value="750",
+                normalized_value="750000.0",
+            ),
+            EvidenceInput(
+                field_name="info_table_entry_total",
+                subject_key="document",
+                locator_kind="obj",
+                source_span="summary_page.tableEntryTotal",
+                raw_value="2",
+                normalized_value="2.0",
+            ),
+        ],
+    )
+
+    facts = session.query(ExtractedFact).order_by(ExtractedFact.subject_key, ExtractedFact.field_name).all()
+    assert len(facts) == 3
+    assert [fact.subject_key for fact in facts] == ["document", "position:1", "position:2"]
+
+    evidences = session.query(ExtractionEvidence).order_by(ExtractionEvidence.subject_key, ExtractionEvidence.field_name).all()
+    assert len(evidences) == 3
+    assert [evidence.subject_key for evidence in evidences] == ["document", "position:1", "position:2"]
