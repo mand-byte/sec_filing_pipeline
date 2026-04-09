@@ -112,6 +112,89 @@ def test_extract_field_rejects_dimensioned_and_wrong_duration_candidates() -> No
     assert outcome == {"status": "error", "error_code": "FIELD_NOT_FOUND"}
 
 
+def test_extract_field_rejects_dimensioned_and_duration_total_debt_candidates() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="10-Q/A",
+        records=[
+            {
+                "fact_key": "debt-dimensioned",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": True,
+                "instant": "2024-06-30",
+                "value": 999.0,
+            },
+            {
+                "fact_key": "debt-duration",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "period_start": "2024-04-01",
+                "period_end": "2024-06-30",
+                "value": 888.0,
+            },
+        ],
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_debt"))
+
+    assert outcome == {"status": "error", "error_code": "FIELD_NOT_FOUND"}
+
+
+def test_extract_field_rejects_negative_total_debt() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="10-Q",
+        records=[
+            {
+                "fact_key": "debt-negative",
+                "concept": "us-gaap:LongTermDebt",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-06-30",
+                "value": -10.0,
+            }
+        ],
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_debt"))
+
+    assert outcome == {"status": "error", "error_code": "VALUE_OUT_OF_RANGE"}
+
+
+def test_extract_field_prefers_primary_total_debt_concept() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="10-Q",
+        records=[
+            {
+                "fact_key": "debt-fallback",
+                "concept": "us-gaap:LongTermDebt",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-06-30",
+                "value": 700.0,
+            },
+            {
+                "fact_key": "debt-primary",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-06-30",
+                "value": 710.0,
+            },
+        ],
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_debt"))
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_normalized"] == 710.0
+    assert outcome["xbrl_concept"] == "us-gaap:LongTermDebtAndFinanceLeaseObligations"
+    assert outcome["source_xpath"] == "debt-primary"
+
+
 def test_extract_field_allows_negative_net_income() -> None:
     engine = NumericExtractionEngine()
     filing = FakeFiling(
@@ -404,3 +487,35 @@ def test_extract_field_selects_shares_outstanding_from_current_instant() -> None
     assert outcome["status"] == "ok"
     assert outcome["value_normalized"] == 5100000.0
     assert outcome["xbrl_concept"] == "dei:EntityCommonStockSharesOutstanding"
+
+
+def test_extract_field_selects_total_debt_from_current_instant_fact() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="10-Q",
+        records=[
+            {
+                "fact_key": "debt-current-best",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-06-30",
+                "value": 900.0,
+            },
+            {
+                "fact_key": "debt-prior",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-03-31",
+                "value": 850.0,
+            },
+        ],
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_debt"))
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_normalized"] == 900.0
+    assert outcome["xbrl_concept"] == "us-gaap:LongTermDebtAndFinanceLeaseObligations"
+    assert "instant=2024-06-30" in outcome["source_span"]

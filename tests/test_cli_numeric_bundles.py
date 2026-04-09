@@ -109,6 +109,14 @@ def test_build_bundles_from_provider_emits_numeric_xbrl_evidence(monkeypatch) ->
                 "instant": "2024-06-30",
                 "value": 5100000.0,
             },
+            {
+                "fact_key": "debt-q2",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-06-30",
+                "value": 900.0,
+            },
         ],
     )
     envelope = FilingEnvelope(
@@ -146,6 +154,7 @@ def test_build_bundles_from_provider_emits_numeric_xbrl_evidence(monkeypatch) ->
         "cash_and_equivalents",
         "capex",
         "shares_outstanding",
+        "total_debt",
     }
 
     evidence_by_field = {evidence.field_name: evidence for evidence in bundle.evidences}
@@ -155,6 +164,13 @@ def test_build_bundles_from_provider_emits_numeric_xbrl_evidence(monkeypatch) ->
     assert revenue_evidence.source_xpath == "revenue-q1"
     assert "duration_days=91" in revenue_evidence.source_span
     assert revenue_evidence.normalized_value == "1000.0"
+
+    debt_evidence = evidence_by_field["total_debt"]
+    assert debt_evidence.locator_kind == "xbrl_xml"
+    assert debt_evidence.xbrl_concept == "us-gaap:LongTermDebtAndFinanceLeaseObligations"
+    assert debt_evidence.source_xpath == "debt-q2"
+    assert "instant=2024-06-30" in debt_evidence.source_span
+    assert debt_evidence.normalized_value == "900.0"
 
     assert repo.logs == []
 
@@ -234,6 +250,14 @@ def test_build_bundles_from_provider_supports_10q_amendments(monkeypatch) -> Non
                 "instant": "2024-06-30",
                 "value": 5200000.0,
             },
+            {
+                "fact_key": "debt-q2a",
+                "concept": "us-gaap:LongTermDebtAndFinanceLeaseObligations",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-06-30",
+                "value": 910.0,
+            },
         ],
     )
     envelope = FilingEnvelope(
@@ -272,6 +296,7 @@ def test_build_bundles_from_provider_supports_10q_amendments(monkeypatch) -> Non
     assert facts_by_field["cash_and_equivalents"].value_numeric == 460.0
     assert facts_by_field["capex"].value_numeric == 91.0
     assert facts_by_field["shares_outstanding"].value_numeric == 5200000.0
+    assert facts_by_field["total_debt"].value_numeric == 910.0
     assert repo.logs == []
 
 
