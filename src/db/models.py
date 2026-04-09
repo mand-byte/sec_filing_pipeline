@@ -74,7 +74,7 @@ class FilingDocument(Base):
 class ExtractedFact(Base):
     __tablename__ = "extracted_fact"
     __table_args__ = (
-        UniqueConstraint("accession_no", "route", "field_name", name="uq_fact_accession_route_field"),
+        UniqueConstraint("accession_no", "route", "field_name", "subject_key", name="uq_fact_accession_route_field_subject"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -86,6 +86,7 @@ class ExtractedFact(Base):
     )
     route: Mapped[str] = mapped_column(String(16), nullable=False)
     field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False, default="document", server_default="document")
     value_numeric: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -106,6 +107,7 @@ class ExtractionEvidence(Base):
     )
     route: Mapped[str] = mapped_column(String(16), nullable=False)
     field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False, default="document", server_default="document")
     locator_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     source_section: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_item_no: Mapped[str | None] = mapped_column(String(32), nullable=True)

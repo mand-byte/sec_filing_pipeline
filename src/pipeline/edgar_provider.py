@@ -25,19 +25,28 @@ def classify_form_family(form_type: str) -> str:
 
 
 def _route_forms(route: str) -> tuple[str, ...]:
-    forms = {
-        form
-        for spec in all_numeric_field_specs()
-        if spec.route == route
-        for form in spec.form_families
-    }
-    forms.update(
-        {
+    if route == "owner":
+        base_forms = {"3", "4", "5"}
+    else:
+        base_forms = {
             form
-            for spec in all_text_field_specs()
+            for spec in all_numeric_field_specs()
             if spec.route == route
             for form in spec.form_families
         }
+        base_forms.update(
+            {
+                form
+                for spec in all_text_field_specs()
+                if spec.route == route
+                for form in spec.form_families
+            }
+        )
+
+    forms = set(base_forms)
+    forms.update(
+        form if form.endswith("/A") else f"{form}/A"
+        for form in base_forms
     )
     return tuple(sorted(forms))
 

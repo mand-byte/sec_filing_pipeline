@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
+
+import pandas as pd
 
 import typer
 from sqlalchemy import func, select
@@ -26,7 +29,6 @@ from src.pipeline.routers.owner import OwnerRouter
 from src.pipeline.rules import is_filing_eligible, should_skip_delisted_route
 from src.pipeline.scheduler import (
     ROUTE_ORDER,
-    RouterContext,
     build_blocking_scheduler,
     make_run_id,
     ordered_routers,
@@ -59,6 +61,175 @@ def _as_utc_start_of_day(start_date: date) -> datetime:
 
 def _bundle_sort_key(bundle: FilingBundle) -> tuple[datetime, str]:
     return (_normalize_to_utc(bundle.filing.accepted_at), bundle.filing.accession_no)
+
+
+def _coerce_numeric_value(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.strip().replace(",", "")
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
+def _owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle | None:
+    obj_method = getattr(envelope.filing, "obj", None)
+    if not callable(obj_method):
+        return None
+
+    try:
+        ownership_form = obj_method()
+    except Exception:
+        return None
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+
+    transactions = getattr(ownership_form, "transactions", None)
+    if transactions is not None:
+        if not isinstance(transactions, list):
+            try:
+                transactions = list(transactions)
+            except Exception:
+                transactions = []
+
+        field_specs = (
+            ("shares_acquired_or_disposed", ("shares", "shares_numeric"), "shares"),
+            ("transaction_price_per_share", ("price_per_share", "price_numeric"), "price_per_share"),
+            (
+                "shares_owned_following_txn",
+                ("shares_owned_following_transaction", "shares_owned_following_txn"),
+                "shares_owned_following_transaction",
+            ),
+        )
+
+        for index, transaction in enumerate(transactions, start=1):
+            subject_key = f"txn:{index}"
+            for field_name, attr_names, path_name in field_specs:
+                raw_value = None
+                for attr_name in attr_names:
+                    raw_value = getattr(transaction, attr_name, None)
+                    if raw_value is not None:
+                        break
+                numeric_value = _coerce_numeric_value(raw_value)
+                if numeric_value is None:
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        value_numeric=numeric_value,
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        locator_kind="obj",
+                        source_span=f"transactions[{index - 1}].{path_name}",
+                        raw_value=str(raw_value),
+                        normalized_value=str(numeric_value),
+                    )
+                )
+
+    derivative_table = getattr(ownership_form, "derivative_table", None)
+    derivative_transactions = getattr(getattr(derivative_table, "transactions", None), "data", None)
+    if isinstance(derivative_transactions, pd.DataFrame) and not derivative_transactions.empty:
+        for index, row in enumerate(derivative_transactions.itertuples(index=False), start=1):
+            subject_key = f"dtxn:{index}"
+            derivative_specs = (
+                ("derivative_underlying_shares", getattr(row, "UnderlyingShares", None), "UnderlyingShares"),
+                ("exercise_or_conversion_price", getattr(row, "ExercisePrice", None), "ExercisePrice"),
+            )
+            for field_name, raw_value, path_name in derivative_specs:
+                numeric_value = _coerce_numeric_value(raw_value)
+                if numeric_value is None:
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        value_numeric=numeric_value,
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        locator_kind="obj",
+                        source_span=f"derivative_table.transactions[{index - 1}].{path_name}",
+                        raw_value=str(raw_value),
+                        normalized_value=str(numeric_value),
+                    )
+                )
+
+    non_derivative_holdings = getattr(getattr(getattr(ownership_form, "non_derivative_table", None), "holdings", None), "data", None)
+    if isinstance(non_derivative_holdings, pd.DataFrame) and not non_derivative_holdings.empty:
+        for index, row in enumerate(non_derivative_holdings.itertuples(index=False), start=1):
+            numeric_value = _coerce_numeric_value(getattr(row, "Shares", None))
+            if numeric_value is None:
+                continue
+            subject_key = f"nhold:{index}"
+            facts.append(
+                FactInput(
+                    field_name="non_derivative_shares_owned",
+                    subject_key=subject_key,
+                    value_numeric=numeric_value,
+                    confidence=0.99,
+                )
+            )
+            evidences.append(
+                EvidenceInput(
+                    field_name="non_derivative_shares_owned",
+                    subject_key=subject_key,
+                    locator_kind="obj",
+                    source_span=f"non_derivative_table.holdings[{index - 1}].Shares",
+                    raw_value=str(getattr(row, 'Shares', '')),
+                    normalized_value=str(numeric_value),
+                )
+            )
+
+    derivative_holdings = getattr(getattr(getattr(ownership_form, "derivative_table", None), "holdings", None), "data", None)
+    if isinstance(derivative_holdings, pd.DataFrame) and not derivative_holdings.empty:
+        for index, row in enumerate(derivative_holdings.itertuples(index=False), start=1):
+            subject_key = f"dhold:{index}"
+            holding_specs = (
+                ("derivative_underlying_shares", getattr(row, "UnderlyingShares", None), "UnderlyingShares"),
+                ("exercise_or_conversion_price", getattr(row, "ExercisePrice", None), "ExercisePrice"),
+            )
+            for field_name, raw_value, path_name in holding_specs:
+                numeric_value = _coerce_numeric_value(raw_value)
+                if numeric_value is None:
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        value_numeric=numeric_value,
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        locator_kind="obj",
+                        source_span=f"derivative_table.holdings[{index - 1}].{path_name}",
+                        raw_value=str(raw_value),
+                        normalized_value=str(numeric_value),
+                    )
+                )
+
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
 def _load_run_once_securities(session: Any) -> list[SecurityMaster]:
@@ -144,29 +315,71 @@ def _build_bundles_from_provider(
         facts: list[FactInput] = []
         evidences: list[EvidenceInput] = []
         form_family = classify_form_family(envelope.form_type)
-
-        for spec in route_numeric_specs:
-            if form_family not in spec.form_families:
-                continue
-
-            outcome = numeric_engine.extract_field(filing=envelope.filing, field_spec=spec)
-            if outcome["status"] != "ok":
+        if route == "owner" and form_family in {"3", "4", "5"}:
+            owner_bundle = _owner_ownership_bundle(envelope=envelope, filing=filing)
+            if owner_bundle is None:
                 _safe_write_log(
                     repo,
                     run_id=run_id,
                     route=route,
                     stage="extract",
                     level="ERROR",
-                    message="numeric field extraction failed",
+                    message="owner ownership extraction failed",
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
-                    error_type=outcome["error_code"],
+                    error_type="OWNERSHIP_OBJ_UNAVAILABLE",
                 )
+                continue
+            if not owner_bundle.facts:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="owner ownership extracted no rows",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="NO_OWNER_ROWS_EXTRACTED",
+                )
+                continue
+            bundles.append(owner_bundle)
+            continue
+
+        filing_numeric_specs = route_numeric_specs
+        filing_text_specs = route_text_specs
+        if route == "issuer" and form_family == "10-Q":
+            filing_numeric_specs = tuple(
+                spec
+                for spec in route_numeric_specs
+                if spec.xbrl_enabled_form_families and form_family in spec.xbrl_enabled_form_families
+            )
+            filing_text_specs = ()
+
+        for spec in filing_numeric_specs:
+            if form_family not in spec.form_families:
+                continue
+
+            outcome = numeric_engine.extract_field(filing=envelope.filing, field_spec=spec)
+            if outcome["status"] != "ok":
+                if outcome["error_code"] != "FIELD_NOT_FOUND":
+                    _safe_write_log(
+                        repo,
+                        run_id=run_id,
+                        route=route,
+                        stage="extract",
+                        level="ERROR",
+                        message="numeric field extraction failed",
+                        cik=envelope.cik,
+                        accession_no=envelope.accession_no,
+                        error_type=outcome["error_code"],
+                    )
                 continue
 
             facts.append(
                 FactInput(
                     field_name=spec.field_name,
+                    subject_key="document",
                     value_numeric=float(outcome["value_normalized"]),
                     confidence=0.99,
                 )
@@ -174,14 +387,17 @@ def _build_bundles_from_provider(
             evidences.append(
                 EvidenceInput(
                     field_name=spec.field_name,
+                    subject_key="document",
                     locator_kind=outcome["locator_kind"],
-                    source_span=outcome["locator_path"],
+                    source_span=outcome.get("source_span", outcome["locator_path"]),
+                    source_xpath=outcome.get("source_xpath"),
+                    xbrl_concept=outcome.get("xbrl_concept"),
                     raw_value=str(outcome["value_raw"]),
                     normalized_value=str(outcome["value_normalized"]),
                 )
             )
 
-        for spec in route_text_specs:
+        for spec in filing_text_specs:
             if form_family not in spec.form_families:
                 continue
 
@@ -203,6 +419,7 @@ def _build_bundles_from_provider(
             facts.append(
                 FactInput(
                     field_name=spec.field_name,
+                    subject_key="document",
                     value_text=outcome["value_text"],
                     value_json=outcome["value_json"],
                     confidence=0.99,
@@ -211,6 +428,7 @@ def _build_bundles_from_provider(
             evidences.append(
                 EvidenceInput(
                     field_name=spec.field_name,
+                    subject_key="document",
                     locator_kind=outcome["locator_kind"],
                     source_span=outcome["source_span"],
                     source_xpath=outcome["locator_path"],
@@ -220,6 +438,20 @@ def _build_bundles_from_provider(
             )
 
         if not facts:
+            if route == "issuer" and form_family == "10-Q":
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="issuer 10-Q slice extracted no target fields",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="NO_TARGET_FIELDS_EXTRACTED",
+                )
+                continue
+
             bundles.append(
                 FilingBundle(
                     filing=filing,
@@ -313,6 +545,7 @@ def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stat
 
         bundle.facts[index] = FactInput(
             field_name=fact.field_name,
+            subject_key=fact.subject_key,
             value_numeric=fact.value_numeric,
             value_text=fact.value_text,
             value_json=fact.value_json,
@@ -658,12 +891,12 @@ def offline_eval(
 @app.command("golden-10q-numeric-batch")
 def golden_10q_numeric_batch(
     golden_path: str = typer.Option(
-        "configs/tier2/golden_set_10q/batch_001.yaml",
+        ...,
         "--golden-path",
         help="Path to the adjudicated 10-Q numeric batch golden set",
     ),
     snapshot_dir: str = typer.Option(
-        "configs/tier2/candidate_snapshots_10q/batch_001",
+        ...,
         "--snapshot-dir",
         help="Directory containing batch_001 candidate snapshots",
     ),

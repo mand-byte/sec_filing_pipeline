@@ -11,6 +11,7 @@ from src.pipeline.types import FilingRecord, RouteName
 @dataclass(frozen=True)
 class FactInput:
     field_name: str
+    subject_key: str = "document"
     value_numeric: float | None = None
     value_text: str | None = None
     value_json: str | None = None
@@ -25,6 +26,7 @@ class EvidenceInput:
     field_name: str
     locator_kind: str
     source_span: str
+    subject_key: str = "document"
     source_section: str | None = None
     source_item_no: str | None = None
     source_xpath: str | None = None
@@ -81,9 +83,11 @@ class PersistenceService:
             raise ValueError("at least one evidence")
 
         if facts:
-            evidence_field_names = {evidence.field_name for evidence in evidences}
+            evidence_keys = {(evidence.field_name, evidence.subject_key) for evidence in evidences}
             missing_evidence = [
-                fact.field_name for fact in facts if fact.field_name not in evidence_field_names
+                (fact.field_name, fact.subject_key)
+                for fact in facts
+                if (fact.field_name, fact.subject_key) not in evidence_keys
             ]
             if missing_evidence:
                 raise ValueError("at least one evidence")
@@ -115,6 +119,7 @@ class PersistenceService:
                     ExtractedFact.accession_no == filing.accession_no,
                     ExtractedFact.route == route,
                     ExtractedFact.field_name == fact.field_name,
+                    ExtractedFact.subject_key == fact.subject_key,
                 )
             )
 
@@ -124,6 +129,7 @@ class PersistenceService:
                         accession_no=filing.accession_no,
                         route=route,
                         field_name=fact.field_name,
+                        subject_key=fact.subject_key,
                         value_numeric=fact.value_numeric,
                         value_text=fact.value_text,
                         value_json=fact.value_json,
@@ -170,6 +176,7 @@ class PersistenceService:
                     ExtractionEvidence.accession_no == filing.accession_no,
                     ExtractionEvidence.route == route,
                     ExtractionEvidence.field_name == evidence.field_name,
+                    ExtractionEvidence.subject_key == evidence.subject_key,
                     ExtractionEvidence.locator_kind == evidence.locator_kind,
                     ExtractionEvidence.source_span == evidence.source_span,
                     ExtractionEvidence.source_section == evidence.source_section,
@@ -186,6 +193,7 @@ class PersistenceService:
                         accession_no=filing.accession_no,
                         route=route,
                         field_name=evidence.field_name,
+                        subject_key=evidence.subject_key,
                         locator_kind=evidence.locator_kind,
                         source_section=evidence.source_section,
                         source_item_no=evidence.source_item_no,

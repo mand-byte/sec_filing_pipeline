@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import json
 import math
 from pathlib import Path
@@ -18,6 +19,40 @@ _FIELD_CONCEPTS: dict[str, tuple[str, ...]] = {
     "operating_income": ("us-gaap:OperatingIncomeLoss",),
     "net_income": ("us-gaap:NetIncomeLoss", "us-gaap:ProfitLoss"),
 }
+
+
+def _normalize_concept(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+
+    if ":" in cleaned:
+        cleaned = cleaned.split(":", 1)[1]
+    return cleaned.casefold()
+
+
+def _record_concept(candidate: dict[str, Any]) -> str | None:
+    value = _record_get(candidate, "concept", "Concept", "qname", "name")
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _candidate_key(candidate: dict[str, Any]) -> str:
+    for key in ("fact_key", "id", "key"):
+        value = candidate.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    concept = _record_concept(candidate) or "unknown"
+    period_start = _record_get(candidate, "period_start", "periodStart", "start_date", "startDate")
+    period_end = _record_get(candidate, "period_end", "periodEnd", "end_date", "endDate")
+    dimensions = _record_get(candidate, "dimensions", "Dimensions", "dimension")
+    return f"{concept}|{period_start}|{period_end}|{dimensions}"
 
 
 @dataclass(frozen=True)
@@ -74,112 +109,6 @@ def load_10q_numeric_batch_cases(golden_path: Path) -> list[NumericBatchCase]:
     return cases
 
 
-def build_adjudication_packet(
-    *,
-    case_id: str,
-    field_name: str,
-    ticker: str,
-    form_type: str,
-    filing_period: str,
-    candidates: list[dict[str, Any]],
-) -> dict[str, Any]:
-    sorted_candidates = sorted(candidates, key=lambda candidate: str(candidate.get("fact_key") or ""))
-    return {
-        "case_id": case_id,
-        "field_name": field_name,
-        "ticker": ticker,
-        "form_type": form_type,
-        "filing_period": filing_period,
-        "candidates": [
-            {
-                "fact_key": candidate.get("fact_key"),
-                "value": candidate.get("value"),
-                "concept": candidate.get("concept"),
-                "statement_type": candidate.get("statement_type"),
-                "dimensioned": candidate.get("dimensioned"),
-                "evidence_snippet_text": candidate.get("evidence", {}).get("snippet_text"),
-            }
-            for candidate in sorted_candidates
-        ],
-    }
-
-
-def classify_disagreement(
-    *,
-    golden_candidate_key: str | None,
-    rule_candidate_key: str | None,
-    agent_candidate_key: str | None,
-) -> dict[str, str]:
-    if rule_candidate_key == golden_candidate_key and agent_candidate_key == golden_candidate_key:
-        return {"disagreement_type": "NONE", "review_recommendation": "keep_golden"}
-    if rule_candidate_key != golden_candidate_key and agent_candidate_key == golden_candidate_key:
-        return {"disagreement_type": "A", "review_recommendation": "review_rule"}
-    if rule_candidate_key == golden_candidate_key and agent_candidate_key != golden_candidate_key:
-        return {"disagreement_type": "B", "review_recommendation": "keep_golden"}
-    if (
-        rule_candidate_key == agent_candidate_key
-        and rule_candidate_key is not None
-        and rule_candidate_key != golden_candidate_key
-    ):
-        return {"disagreement_type": "D", "review_recommendation": "re_adjudicate_golden"}
-    if rule_candidate_key != golden_candidate_key and agent_candidate_key != golden_candidate_key:
-        return {"disagreement_type": "C", "review_recommendation": "review_rule"}
-    return {"disagreement_type": "NONE", "review_recommendation": "keep_golden"}
-
-
-def build_adjudication_packet(
-    *,
-    case_id: str,
-    field_name: str,
-    ticker: str,
-    form_type: str,
-    filing_period: str,
-    candidates: list[dict[str, Any]],
-) -> dict[str, Any]:
-    sorted_candidates = sorted(candidates, key=lambda candidate: str(candidate.get("fact_key") or ""))
-    return {
-        "case_id": case_id,
-        "field_name": field_name,
-        "ticker": ticker,
-        "form_type": form_type,
-        "filing_period": filing_period,
-        "candidates": [
-            {
-                "fact_key": candidate.get("fact_key"),
-                "value": candidate.get("value"),
-                "concept": candidate.get("concept"),
-                "statement_type": candidate.get("statement_type"),
-                "dimensioned": candidate.get("dimensioned"),
-                "evidence_snippet_text": candidate.get("evidence", {}).get("snippet_text"),
-            }
-            for candidate in sorted_candidates
-        ],
-    }
-
-
-def classify_disagreement(
-    *,
-    golden_candidate_key: str | None,
-    rule_candidate_key: str | None,
-    agent_candidate_key: str | None,
-) -> dict[str, str]:
-    if rule_candidate_key == golden_candidate_key and agent_candidate_key == golden_candidate_key:
-        return {"disagreement_type": "NONE", "review_recommendation": "keep_golden"}
-    if rule_candidate_key != golden_candidate_key and agent_candidate_key == golden_candidate_key:
-        return {"disagreement_type": "A", "review_recommendation": "review_rule"}
-    if rule_candidate_key == golden_candidate_key and agent_candidate_key != golden_candidate_key:
-        return {"disagreement_type": "B", "review_recommendation": "keep_golden"}
-    if (
-        rule_candidate_key == agent_candidate_key
-        and rule_candidate_key is not None
-        and rule_candidate_key != golden_candidate_key
-    ):
-        return {"disagreement_type": "D", "review_recommendation": "re_adjudicate_golden"}
-    if rule_candidate_key != golden_candidate_key and agent_candidate_key != golden_candidate_key:
-        return {"disagreement_type": "C", "review_recommendation": "review_rule"}
-    return {"disagreement_type": "NONE", "review_recommendation": "keep_golden"}
-
-
 def apply_adjudication_update(
     *,
     golden_path: Path,
@@ -212,40 +141,124 @@ def apply_adjudication_update(
     return False
 
 
+def _record_get(candidate: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in candidate:
+            return candidate[key]
+    return None
+
+
+def _coerce_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return date.fromisoformat(cleaned[:10])
+        except ValueError:
+            return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        try:
+            return _coerce_date(isoformat())
+        except Exception:
+            return None
+    return None
+
+
 def _duration_days(candidate: dict[str, Any]) -> int | None:
-    period_start = candidate.get("period_start")
-    period_end = candidate.get("period_end")
-    if not period_start or not period_end:
+    period_start = _coerce_date(
+        _record_get(candidate, "period_start", "periodStart", "start_date", "startDate")
+    )
+    period_end = _coerce_date(
+        _record_get(candidate, "period_end", "periodEnd", "end_date", "endDate")
+    )
+    if period_start is None or period_end is None:
         return None
-    try:
-        start = date.fromisoformat(str(period_start))
-        end = date.fromisoformat(str(period_end))
-    except ValueError:
-        return None
-    return (end - start).days + 1
+    return (period_end - period_start).days + 1
 
 
-def _candidate_score(*, field_name: str, candidate: dict[str, Any], filing_year: int, filing_period: str) -> int:
+def _record_statement_type(candidate: dict[str, Any]) -> str | None:
+    value = _record_get(candidate, "statement_type", "statementType", "statement")
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _record_dimensioned(candidate: dict[str, Any]) -> bool:
+    explicit = _record_get(candidate, "dimensioned", "is_dimensioned")
+    if isinstance(explicit, bool):
+        return explicit
+
+    dimensions = _record_get(candidate, "dimensions", "Dimensions", "dimension")
+    if isinstance(dimensions, Mapping):
+        return bool(dimensions)
+    if isinstance(dimensions, Sequence) and not isinstance(dimensions, (str, bytes)):
+        return len(dimensions) > 0
+    return False
+
+
+def _record_value(candidate: dict[str, Any]) -> Any:
+    value = _record_get(candidate, "value", "numeric_value", "amount")
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    return value
+
+
+def _passes_runtime_filters(*, field_name: str, candidate: dict[str, Any]) -> bool:
+    desired_concepts = {
+        _normalize_concept(concept)
+        for concept in _FIELD_CONCEPTS.get(field_name, ())
+        if _normalize_concept(concept) is not None
+    }
+    concept_key = _normalize_concept(_record_concept(candidate))
+    if concept_key is None or concept_key not in desired_concepts:
+        return False
+
+    statement_type = _record_statement_type(candidate)
+    if statement_type not in {None, "IncomeStatement"}:
+        return False
+
+    if _record_dimensioned(candidate):
+        return False
+
+    duration = _duration_days(candidate)
+    if duration is not None and not (70 <= duration <= 110):
+        return False
+
+    return _record_value(candidate) is not None
+
+
+def _candidate_score(*, field_name: str, candidate: dict[str, Any]) -> int:
     score = 0
-    if str(candidate.get("concept")) in _FIELD_CONCEPTS.get(field_name, ()):  # concept match
-        score += 6
-    if candidate.get("statement_type") == "IncomeStatement":
-        score += 5
-    if candidate.get("dimensioned") is False:
-        score += 4
-    if candidate.get("fiscal_year") == filing_year:
-        score += 4
-    if str(candidate.get("fiscal_period")) == filing_period:
-        score += 3
+
+    desired_concepts = {
+        _normalize_concept(concept): index
+        for index, concept in enumerate(_FIELD_CONCEPTS.get(field_name, ()))
+        if _normalize_concept(concept) is not None
+    }
+    concept_key = _normalize_concept(_record_concept(candidate))
+    if concept_key in desired_concepts:
+        score += 100 - desired_concepts[concept_key] * 10
+
+    if _record_statement_type(candidate) == "IncomeStatement":
+        score += 30
+    if not _record_dimensioned(candidate):
+        score += 20
 
     duration = _duration_days(candidate)
     if duration is not None and 70 <= duration <= 110:
-        score += 4
+        target_days = 90
+        score += max(0, 20 - abs(duration - target_days))
     elif duration is not None and duration >= 150:
-        score -= 2
+        score -= 10
 
-    if candidate.get("dimensioned") is True:
-        score -= 4
     return score
 
 
@@ -296,24 +309,29 @@ def evaluate_10q_numeric_batch(*, golden_path: Path, snapshot_dir: Path) -> Nume
             total_field_checks += 1
             candidates = snapshot_fields.get(field.field_name, [])
             selected_key = field.adjudication.get("selected_candidate_key")
-            available_keys = {candidate.get("fact_key") for candidate in candidates}
+            available_keys = {_candidate_key(candidate) for candidate in candidates}
             recall_hit = selected_key in available_keys
             if recall_hit:
                 candidate_recall_hits += 1
 
             ranked = sorted(
-                candidates,
+                [
+                    candidate
+                    for candidate in candidates
+                    if _passes_runtime_filters(
+                        field_name=field.field_name,
+                        candidate=candidate,
+                    )
+                ],
                 key=lambda candidate: (
                     -_candidate_score(
                         field_name=field.field_name,
                         candidate=candidate,
-                        filing_year=case.filing_year,
-                        filing_period=case.filing_period,
                     ),
-                    str(candidate.get("fact_key") or ""),
+                    _candidate_key(candidate),
                 ),
             )
-            top_key = ranked[0].get("fact_key") if ranked else None
+            top_key = _candidate_key(ranked[0]) if ranked else None
             top1_hit = top_key == selected_key
             if top1_hit:
                 top1_hits += 1
