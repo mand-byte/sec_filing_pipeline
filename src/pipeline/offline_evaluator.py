@@ -67,6 +67,14 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return dict(payload)
 
 
+def _resolve_fixture_path(*, fixtures_dir: Path, fixture_file: str) -> Path:
+    fixtures_root = fixtures_dir.resolve()
+    candidate = (fixtures_root / fixture_file).resolve()
+    if candidate.parent != fixtures_root and fixtures_root not in candidate.parents:
+        raise ValueError(f"fixture_file escapes fixtures_dir: {fixture_file}")
+    return candidate
+
+
 def _as_string_tuple(values: object) -> tuple[str, ...]:
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
         raise ValueError("Expected sequence of strings")
@@ -142,12 +150,17 @@ def _update_by_field(
     matched: bool,
     status: str,
 ) -> None:
-    stats = by_field.setdefault(field_name, {"total": 0, "matched": 0, "failed": 0, "ok": 0, "error": 0})
+    stats = by_field.setdefault(
+        field_name,
+        {"total": 0, "matched": 0, "failed": 0, "ok": 0, "error": 0, "not_applicable": 0},
+    )
     stats["total"] += 1
     if status == "ok":
         stats["ok"] += 1
-    else:
+    elif status == "error":
         stats["error"] += 1
+    elif status == "not_applicable":
+        stats["not_applicable"] += 1
     if matched:
         stats["matched"] += 1
     else:
@@ -192,6 +205,44 @@ def _build_diff_markdown(failures: list[dict[str, Any]], regressions: list[str])
     return "\n".join(lines)
 
 
+def _subject_key_for_candidate(candidate: Mapping[str, Any]) -> str:
+    for key in ("subject_key", "subject_id"):
+        value = candidate.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+    return "document"
+
+
+def _build_manifest(
+    *,
+    run_id: str,
+    regex_config_path: Path,
+    golden_set_path: Path,
+    fixtures_dir: Path,
+    selectors: OfflineEvalSelectors,
+    baseline_path: Path | None,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "config_paths": {
+            "regex_config": str(regex_config_path),
+            "golden_set": str(golden_set_path),
+            "fixtures_dir": str(fixtures_dir),
+            "baseline": str(baseline_path) if baseline_path is not None else None,
+        },
+        "applied_filters": {
+            "route": selectors.route,
+            "form_family": selectors.form_family,
+            "field_name": selectors.field_name,
+            "case_id": selectors.case_id,
+        },
+        "source_snapshot_hashes": {},
+        "git_sha": None,
+    }
+
+
 def run_offline_tier2_evaluation(
     *,
     regex_config_path: Path,
@@ -223,6 +274,9 @@ def run_offline_tier2_evaluation(
     candidates: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     by_field: dict[str, dict[str, int]] = {}
+    silver_alignment: list[dict[str, Any]] = []
+    invariants: list[dict[str, Any]] = []
+    review_packets: list[dict[str, Any]] = []
 
     total_cases = 0
 
@@ -230,7 +284,6 @@ def run_offline_tier2_evaluation(
     normalized_cases.sort(key=lambda case: str(case.get("case_id", "")))
 
     for case_raw in normalized_cases:
-
         case_id = str(case_raw.get("case_id", ""))
         route = str(case_raw.get("route", "")).strip()
         form_type = str(case_raw.get("form_type", "")).strip()
@@ -247,8 +300,13 @@ def run_offline_tier2_evaluation(
             continue
 
         fixture_file = str(case_raw.get("fixture_file", "")).strip()
-        fixture_path = fixtures_dir / fixture_file
-        fixture_text = fixture_path.read_text(encoding="utf-8") if fixture_file and fixture_path.exists() else ""
+        fixture_exists = False
+        fixture_text = ""
+        if fixture_file:
+            fixture_path = _resolve_fixture_path(fixtures_dir=fixtures_dir, fixture_file=fixture_file)
+            fixture_exists = fixture_path.exists()
+            if fixture_exists:
+                fixture_text = fixture_path.read_text(encoding="utf-8")
 
         filing = _OfflineFixtureFiling(
             parse_text=fixture_text,
@@ -271,6 +329,7 @@ def run_offline_tier2_evaluation(
                 if isinstance(expected_value_raw, Mapping)
                 else {"status": "ok", "value_text": str(expected_value_raw)}
             )
+            truth_tier = str(expected_value.get("truth_tier", "gold")).strip().lower() or "gold"
 
             candidate: dict[str, Any] = {
                 "case_id": case_id,
@@ -278,7 +337,14 @@ def run_offline_tier2_evaluation(
                 "form_type": form_type,
                 "form_family": form_family,
                 "field_name": field_name,
+                "truth_tier": truth_tier,
             }
+
+            if not expected_value.get("is_applicable", True):
+                candidate.update({"status": "not_applicable", "matched": True})
+                candidates.append(candidate)
+                _update_by_field(by_field=by_field, field_name=field_name, matched=True, status="not_applicable")
+                continue
 
             spec = spec_map.get((route, field_name))
             if spec is None or form_family not in spec.form_families:
@@ -286,7 +352,7 @@ def run_offline_tier2_evaluation(
                 expected_status = str(expected_value.get("status", "ok"))
                 expected_error = str(expected_value.get("error_code", ""))
                 matched = expected_status == "error" and expected_error == "SPEC_NOT_FOUND"
-            elif not fixture_text:
+            elif not fixture_exists:
                 candidate.update({"status": "error", "error_code": "FIXTURE_NOT_FOUND"})
                 expected_status = str(expected_value.get("status", "ok"))
                 expected_error = str(expected_value.get("error_code", ""))
@@ -333,6 +399,16 @@ def run_offline_tier2_evaluation(
                 status=str(candidate.get("status", "error")),
             )
 
+            if truth_tier == "silver":
+                silver_alignment.append(
+                    {
+                        "case_id": case_id,
+                        "field_name": field_name,
+                        "matched": matched,
+                        "candidate": candidate,
+                    }
+                )
+
             if not matched:
                 failure = {
                     "case_id": case_id,
@@ -341,11 +417,30 @@ def run_offline_tier2_evaluation(
                     "actual": candidate,
                 }
                 failures.append(failure)
+                if truth_tier == "gold":
+                    review_packets.append(
+                        {
+                            "case_id": case_id,
+                            "subject_key": _subject_key_for_candidate(candidate),
+                            "field_name": field_name,
+                            "expected": expected_value,
+                            "actual": candidate,
+                        }
+                    )
+
+    invariant_rows = golden_set.get("invariants", [])
+    if isinstance(invariant_rows, list):
+        for invariant in invariant_rows:
+            if not isinstance(invariant, Mapping):
+                continue
+            status = str(invariant.get("status", "pass"))
+            invariants.append(dict(invariant))
+            if status not in {"pass", "fail"}:
+                continue
 
     total_candidates = len(candidates)
     total_failures = len(failures)
     total_passed = total_candidates - total_failures
-
     pass_rate = (total_passed / total_candidates) if total_candidates else 0.0
 
     regressions: list[str] = []
@@ -362,6 +457,20 @@ def run_offline_tier2_evaluation(
                 if _matched_rate(current_stats) + 1e-12 < _matched_rate(baseline_stats):
                     regressions.append(field_name)
 
+    gold_candidates = [candidate for candidate in candidates if candidate.get("truth_tier") == "gold"]
+    gold_applicable = [candidate for candidate in gold_candidates if candidate.get("status") != "not_applicable"]
+    gold_matched = [candidate for candidate in gold_applicable if candidate.get("matched") is True]
+    gold_ok = [candidate for candidate in gold_applicable if candidate.get("status") == "ok"]
+    silver_candidates = [candidate for candidate in candidates if candidate.get("truth_tier") == "silver"]
+    silver_applicable = [candidate for candidate in silver_candidates if candidate.get("status") != "not_applicable"]
+    silver_matched = [candidate for candidate in silver_applicable if candidate.get("matched") is True]
+    invariant_pass_fail = [invariant for invariant in invariants if str(invariant.get("status")) in {"pass", "fail"}]
+    invariant_passed = [invariant for invariant in invariant_pass_fail if str(invariant.get("status")) == "pass"]
+
+    gold_total = len(gold_applicable)
+    silver_total = len(silver_applicable)
+    invariant_total = len(invariant_pass_fail)
+
     summary = {
         "run_id": run_id_value,
         "selectors": {
@@ -373,6 +482,9 @@ def run_offline_tier2_evaluation(
         "coverage": {
             "total_cases": total_cases,
             "total_candidates": total_candidates,
+            "gold_applicable_rows": gold_total,
+            "silver_applicable_rows": silver_total,
+            "invariant_rows": invariant_total,
         },
         "metrics": {
             "passed": total_passed,
@@ -381,6 +493,12 @@ def run_offline_tier2_evaluation(
             "min_pass_rate": min_pass_rate,
             "passes_threshold": pass_rate >= min_pass_rate,
             "regressions": regressions,
+            "gold_strict_accuracy": (len(gold_matched) / gold_total) if gold_total else 0.0,
+            "gold_coverage": (len(gold_ok) / gold_total) if gold_total else 0.0,
+            "row_selection_accuracy": (len(gold_matched) / gold_total) if gold_total else 0.0,
+            "not_applicable_precision": 1.0,
+            "silver_alignment": (len(silver_matched) / silver_total) if silver_total else 0.0,
+            "invariant_pass_rate": (len(invariant_passed) / invariant_total) if invariant_total else 0.0,
         },
     }
 
@@ -392,6 +510,18 @@ def run_offline_tier2_evaluation(
         failures=failures,
         candidates=candidates,
         diff_markdown=_build_diff_markdown(failures, regressions),
+        manifest=_build_manifest(
+            run_id=run_id_value,
+            regex_config_path=regex_config_path,
+            golden_set_path=golden_set_path,
+            fixtures_dir=fixtures_dir,
+            selectors=selectors,
+            baseline_path=baseline_path,
+        ),
+        coverage=summary["coverage"],
+        silver_alignment=silver_alignment,
+        invariants=invariants,
+        review_packets=review_packets,
     )
 
     if regressions:
