@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+import math
 from pathlib import Path
 from typing import Any, cast
 
@@ -67,15 +68,17 @@ def _coerce_numeric_value(value: object) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float, Decimal)):
-        return float(value)
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
     if isinstance(value, str):
         cleaned = value.strip().replace(",", "")
         if not cleaned:
             return None
         try:
-            return float(cleaned)
-        except ValueError:
+            numeric = float(cleaned)
+        except (ValueError, OverflowError):
             return None
+        return numeric if math.isfinite(numeric) else None
     return None
 
 
@@ -836,6 +839,46 @@ def run_once() -> None:
     _run_once_pipeline()
 
 
+def _run_strict_v2_eval(
+    *,
+    regex_config: str,
+    golden_set: str,
+    fixtures_dir: str,
+    artifacts_dir: str,
+    route: str | None,
+    form_family: str | None,
+    field_name: str | None,
+    case_id: str | None,
+    baseline: str | None,
+    min_pass_rate: float,
+) -> None:
+    if not 0.0 <= min_pass_rate <= 1.0:
+        raise typer.BadParameter("min_pass_rate must be between 0.0 and 1.0")
+
+    result = run_offline_tier2_evaluation(
+        regex_config_path=Path(regex_config),
+        golden_set_path=Path(golden_set),
+        fixtures_dir=Path(fixtures_dir),
+        artifacts_dir=Path(artifacts_dir),
+        selectors=OfflineEvalSelectors(
+            route=route,
+            form_family=form_family,
+            field_name=field_name,
+            case_id=case_id,
+        ),
+        baseline_path=Path(baseline) if baseline else None,
+        min_pass_rate=min_pass_rate,
+    )
+    typer.echo(f"strict-v2 run_id: {result.run_id}")
+    typer.echo(
+        "strict-v2 metrics: "
+        + f"passed={result.summary['metrics']['passed']} "
+        + f"failed={result.summary['metrics']['failed']} "
+        + f"gold_strict_accuracy={result.summary['metrics']['gold_strict_accuracy']:.4f} "
+        + f"silver_alignment={result.summary['metrics']['silver_alignment']:.4f}"
+    )
+
+
 @app.command("offline-eval")
 def offline_eval(
     regex_config: str = typer.Option(
@@ -863,28 +906,64 @@ def offline_eval(
     field_name: str | None = typer.Option(None, "--field", help="Optional field filter"),
     case_id: str | None = typer.Option(None, "--case-id", help="Optional case id filter"),
     baseline: str | None = typer.Option(None, "--baseline", help="Optional baseline summary json"),
-    min_pass_rate: float = typer.Option(0.95, "--min-pass-rate", help="Minimum pass rate threshold"),
+    min_pass_rate: float = typer.Option(0.95, "--min-pass-rate", min=0.0, max=1.0, help="Minimum pass rate threshold"),
 ) -> None:
     """Run Tier2 offline evaluator using local fixtures and golden set."""
-    result = run_offline_tier2_evaluation(
-        regex_config_path=Path(regex_config),
-        golden_set_path=Path(golden_set),
-        fixtures_dir=Path(fixtures_dir),
-        artifacts_dir=Path(artifacts_dir),
-        selectors=OfflineEvalSelectors(
-            route=route,
-            form_family=form_family,
-            field_name=field_name,
-            case_id=case_id,
-        ),
-        baseline_path=Path(baseline) if baseline else None,
+    _run_strict_v2_eval(
+        regex_config=regex_config,
+        golden_set=golden_set,
+        fixtures_dir=fixtures_dir,
+        artifacts_dir=artifacts_dir,
+        route=route,
+        form_family=form_family,
+        field_name=field_name,
+        case_id=case_id,
+        baseline=baseline,
         min_pass_rate=min_pass_rate,
     )
-    typer.echo(f"offline run_id: {result.run_id}")
-    typer.echo(
-        "offline metrics: "
-        + f"passed={result.summary['metrics']['passed']} "
-        + f"failed={result.summary['metrics']['failed']}"
+
+
+@app.command("strict-v2-eval")
+def strict_v2_eval(
+    regex_config: str = typer.Option(
+        "configs/tier2/regex/default.yaml",
+        "--regex-config",
+        help="Path to strict-v2 regex config yaml",
+    ),
+    golden_set: str = typer.Option(
+        "configs/tier2/golden_set/default.yaml",
+        "--golden-set",
+        help="Path to strict-v2 golden set yaml",
+    ),
+    fixtures_dir: str = typer.Option(
+        "configs/tier2/fixtures",
+        "--fixtures-dir",
+        help="Directory of local strict-v2 fixture snapshots",
+    ),
+    artifacts_dir: str = typer.Option(
+        "artifacts/golden",
+        "--artifacts-dir",
+        help="Directory for strict-v2 artifacts",
+    ),
+    route: str | None = typer.Option(None, "--route", help="Optional route filter"),
+    form_family: str | None = typer.Option(None, "--form-family", help="Optional form family filter"),
+    field_name: str | None = typer.Option(None, "--field", help="Optional field filter"),
+    case_id: str | None = typer.Option(None, "--case-id", help="Optional case id filter"),
+    baseline: str | None = typer.Option(None, "--baseline", help="Optional baseline summary json"),
+    min_pass_rate: float = typer.Option(0.95, "--min-pass-rate", min=0.0, max=1.0, help="Minimum pass rate threshold"),
+) -> None:
+    """Run strict-v2 evaluation and emit the golden artifact contract."""
+    _run_strict_v2_eval(
+        regex_config=regex_config,
+        golden_set=golden_set,
+        fixtures_dir=fixtures_dir,
+        artifacts_dir=artifacts_dir,
+        route=route,
+        form_family=form_family,
+        field_name=field_name,
+        case_id=case_id,
+        baseline=baseline,
+        min_pass_rate=min_pass_rate,
     )
 
 
