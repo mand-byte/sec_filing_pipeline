@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -6,6 +7,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -169,3 +171,239 @@ class ReviewDecision(Base):
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewer: Mapped[str] = mapped_column(String(64), nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenCase(Base):
+    __tablename__ = "golden_case"
+
+    case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    accession_no: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    cik: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    form_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    truth_cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_amendment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    amendment_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_accession_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_snapshot_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenSubject(Base):
+    __tablename__ = "golden_subject"
+    __table_args__ = (
+        UniqueConstraint("case_id", "subject_key", name="uq_golden_subject_case_subject_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_case.case_id"),
+        nullable=False,
+        index=True,
+    )
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    parent_subject_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ordinal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenTruth(Base):
+    __tablename__ = "golden_truth"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "subject_id",
+            "field_name",
+            "truth_tier",
+            "truth_source",
+            name="uq_golden_truth_case_subject_field_tier_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_case.case_id"),
+        nullable=False,
+        index=True,
+    )
+    subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("golden_subject.id"),
+        nullable=False,
+        index=True,
+    )
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    truth_tier: Mapped[str] = mapped_column(String(16), nullable=False)
+    truth_source: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_applicable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    value_numeric: Mapped[Decimal | None] = mapped_column(Numeric(38, 10), nullable=True)
+    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenInvariantResult(Base):
+    __tablename__ = "golden_invariant_result"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id",
+            "subject_id",
+            "invariant_name",
+            name="uq_golden_invariant_case_subject_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_case.case_id"),
+        nullable=False,
+        index=True,
+    )
+    subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("golden_subject.id"),
+        nullable=False,
+        index=True,
+    )
+    invariant_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    expected_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenCandidate(Base):
+    __tablename__ = "golden_candidate"
+    __table_args__ = (
+        UniqueConstraint(
+            "eval_run_id",
+            "case_id",
+            "subject_id",
+            "field_name",
+            "candidate_key",
+            name="uq_golden_candidate_run_case_subject_field_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    eval_run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_eval_run.run_id"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_case.case_id"),
+        nullable=False,
+        index=True,
+    )
+    subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("golden_subject.id"),
+        nullable=False,
+        index=True,
+    )
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    candidate_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    value_numeric: Mapped[Decimal | None] = mapped_column(Numeric(38, 10), nullable=True)
+    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provenance_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenEvalRun(Base):
+    __tablename__ = "golden_eval_run"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    config_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    git_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenEvalResult(Base):
+    __tablename__ = "golden_eval_result"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "case_id",
+            "subject_id",
+            "field_name",
+            name="uq_golden_eval_result_run_case_subject_field",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_eval_run.run_id"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_case.case_id"),
+        nullable=False,
+        index=True,
+    )
+    subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("golden_subject.id"),
+        nullable=False,
+        index=True,
+    )
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    matched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    truth_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    truth_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expected_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actual_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoldenReviewPacket(Base):
+    __tablename__ = "golden_review_packet"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "case_id",
+            "subject_id",
+            "field_name",
+            name="uq_golden_review_packet_run_case_subject_field",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_eval_run.run_id"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("golden_case.case_id"),
+        nullable=False,
+        index=True,
+    )
+    subject_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("golden_subject.id"),
+        nullable=False,
+        index=True,
+    )
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    packet_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
