@@ -26,6 +26,28 @@ class FakeObjBackedFiling(FakeFiling):
         return 777.0
 
 
+class FakeEightKReport:
+    def __init__(self, *, items: list[str], item_map: dict[str, str]):
+        self.items = items
+        self._item_map = item_map
+
+    def __getitem__(self, key: str) -> str:
+        return self._item_map[key]
+
+
+class FakeEightKFiling:
+    def __init__(self, *, form: str, report: FakeEightKReport, sections: list[str] | None = None):
+        self.form = form
+        self._report = report
+        self._sections = sections or []
+
+    def obj(self) -> FakeEightKReport:
+        return self._report
+
+    def sections(self) -> list[str]:
+        return self._sections
+
+
 class FakeRepo:
     def __init__(self) -> None:
         self.logs: list[dict[str, object]] = []
@@ -343,3 +365,148 @@ def test_build_bundles_from_provider_skips_empty_issuer_10q_bundles(monkeypatch)
     assert bundles == []
     assert len(repo.logs) == 1
     assert repo.logs[0]["error_type"] == "NO_TARGET_FIELDS_EXTRACTED"
+
+
+
+def test_build_bundles_from_provider_emits_8k_vote_rows(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": """
+Proposal 1 Election of Directors 1,000,000 200,000 30,000 50,000
+Proposal 2 Advisory Vote on Executive Compensation 900,000 250,000 20,000 110,000
+""",
+            },
+        ),
+        sections=["Current report\nvote event"],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000004",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-4",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert facts[("proposal_votes_for", "proposal:1")] == 1000000.0
+    assert facts[("proposal_votes_against", "proposal:1")] == 200000.0
+    assert facts[("proposal_votes_abstain", "proposal:1")] == 30000.0
+    assert facts[("proposal_broker_non_votes", "proposal:1")] == 50000.0
+    assert facts[("proposal_votes_for", "proposal:2")] == 900000.0
+    assert facts[("proposal_broker_non_votes", "proposal:2")] == 110000.0
+
+    evidence = {(item.field_name, item.subject_key): item for item in bundle.evidences}
+    assert evidence[("proposal_votes_for", "proposal:1")].source_item_no == "5.07"
+    assert evidence[("proposal_votes_for", "proposal:1")].source_span == "items[Item 5.07].line[1]"
+    assert repo.logs == []
+
+
+
+def test_build_bundles_from_provider_logs_missing_8k_vote_rows(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 5, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": "No tabulated vote counts were included in this item.",
+            },
+        ),
+        sections=["Current report\nvote event"],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000005",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-5",
+    )
+
+    assert len(bundles) == 1
+    vote_facts = [fact for fact in bundles[0].facts if fact.field_name.startswith("proposal_votes_") or fact.field_name == "proposal_broker_non_votes"]
+    assert vote_facts == []
+    assert any(log["error_type"] == "NO_VOTE_ROWS_EXTRACTED" for log in repo.logs)
+
+
+
+def test_build_bundles_from_provider_emits_8k_three_column_vote_rows(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 6, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": "Proposal 2024 Plan Approval 1,500,000 25 10",
+            },
+        ),
+        sections=["Current report\nvote event"],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000006",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-6",
+    )
+
+    assert len(bundles) == 1
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts}
+    assert facts[("proposal_votes_for", "proposal:1")] == 1500000.0
+    assert facts[("proposal_votes_against", "proposal:1")] == 25.0
+    assert facts[("proposal_votes_abstain", "proposal:1")] == 10.0
+    assert ("proposal_broker_non_votes", "proposal:1") not in facts
+    assert repo.logs == []

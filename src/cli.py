@@ -44,6 +44,14 @@ from src.pipeline.types import FilingRecord, RouteName
 app = typer.Typer(help="SEC filing pipeline CLI for running phase 1 tasks.")
 
 
+_ISSUER_VOTE_FIELDS = {
+    "proposal_votes_for",
+    "proposal_votes_against",
+    "proposal_votes_abstain",
+    "proposal_broker_non_votes",
+}
+
+
 @dataclass(frozen=True)
 class FilingBundle:
     filing: FilingRecord
@@ -653,6 +661,106 @@ def _owner_form144_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundl
     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
+def _issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> tuple[FilingBundle | None, bool]:
+    obj_method = getattr(envelope.filing, "obj", None)
+    if not callable(obj_method):
+        return None, False
+
+    try:
+        report = obj_method()
+    except Exception:
+        return None, False
+
+    items = getattr(report, "items", None)
+    item_key: str | None = None
+    if isinstance(items, list):
+        for candidate in items:
+            candidate_text = str(candidate)
+            normalized_candidate = candidate_text.upper().replace(" ", "")
+            if normalized_candidate in {"ITEM5.07", "5.07", "ITEM5.07."}:
+                item_key = candidate_text
+                break
+            if "5.07" in normalized_candidate:
+                item_key = candidate_text
+                break
+
+    item_present = item_key is not None
+    if not item_present:
+        return FilingBundle(filing=filing, facts=[], evidences=[]), False
+
+    try:
+        item_text = report[item_key]
+    except Exception:
+        return FilingBundle(filing=filing, facts=[], evidences=[]), True
+
+    if not isinstance(item_text, str) or not item_text.strip():
+        return FilingBundle(filing=filing, facts=[], evidences=[]), True
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+    lines = [line.strip() for line in item_text.splitlines() if line.strip()]
+    proposal_index = 0
+
+    for line_number, line in enumerate(lines, start=1):
+        trailing_vote_match = re.match(
+            r"^(?P<label>.*[A-Za-z].*)\s+(?P<n1>\d[\d,]*)\s+(?P<n2>\d[\d,]*)\s+(?P<n3>\d[\d,]*)(?:\s+(?P<n4>\d[\d,]*))?\s*$",
+            line,
+        )
+        if trailing_vote_match is None:
+            continue
+
+        label = trailing_vote_match.group("label").strip()
+        if not label or not re.search(r"[A-Za-z]", label):
+            continue
+
+        selected_numeric_values: list[float] = []
+        for group_name in ("n1", "n2", "n3", "n4"):
+            token = trailing_vote_match.group(group_name)
+            if token is None:
+                continue
+            numeric_value = _coerce_numeric_value(token)
+            if numeric_value is None:
+                selected_numeric_values = []
+                break
+            selected_numeric_values.append(float(numeric_value))
+
+        if len(selected_numeric_values) < 3:
+            continue
+
+        proposal_index += 1
+        subject_key = f"proposal:{proposal_index}"
+        field_values = [
+            ("proposal_votes_for", selected_numeric_values[0]),
+            ("proposal_votes_against", selected_numeric_values[1]),
+            ("proposal_votes_abstain", selected_numeric_values[2]),
+        ]
+        if len(selected_numeric_values) >= 4:
+            field_values.append(("proposal_broker_non_votes", selected_numeric_values[3]))
+
+        for field_name, numeric_value in field_values:
+            facts.append(
+                FactInput(
+                    field_name=field_name,
+                    subject_key=subject_key,
+                    value_numeric=numeric_value,
+                    confidence=0.99,
+                )
+            )
+            evidences.append(
+                EvidenceInput(
+                    field_name=field_name,
+                    subject_key=subject_key,
+                    locator_kind="obj",
+                    source_span=f"items[{item_key}].line[{line_number}]",
+                    source_item_no="5.07",
+                    raw_value=line,
+                    normalized_value=str(numeric_value),
+                )
+            )
+
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences), item_present
+
+
 def _load_run_once_securities(session: Any) -> list[SecurityMaster]:
     return list(
         session.scalars(
@@ -841,6 +949,32 @@ def _build_bundles_from_provider(
             bundles.append(form144_bundle)
             continue
 
+        if route == "issuer" and form_family == "8-K":
+            vote_bundle, vote_item_present = _issuer_8k_vote_bundle(
+                envelope=envelope,
+                filing=filing,
+            )
+            if vote_bundle is not None:
+                has_vote_rows = any(
+                    fact.subject_key.startswith("proposal:")
+                    for fact in vote_bundle.facts
+                )
+                if vote_item_present and not has_vote_rows:
+                    _safe_write_log(
+                        repo,
+                        run_id=run_id,
+                        route=route,
+                        stage="extract",
+                        level="ERROR",
+                        message="issuer 8-K vote extraction failed",
+                        cik=envelope.cik,
+                        accession_no=envelope.accession_no,
+                        error_type="NO_VOTE_ROWS_EXTRACTED",
+                    )
+                if has_vote_rows:
+                    facts.extend(vote_bundle.facts)
+                    evidences.extend(vote_bundle.evidences)
+
         if route == "holding" and form_family == "13F-HR/A":
             holding_text_specs = tuple(
                 spec
@@ -966,6 +1100,12 @@ def _build_bundles_from_provider(
                 if spec.xbrl_enabled_form_families and form_family in spec.xbrl_enabled_form_families
             )
             filing_text_specs = ()
+        elif route == "issuer" and form_family == "8-K":
+            filing_numeric_specs = tuple(
+                spec
+                for spec in route_numeric_specs
+                if spec.field_name not in _ISSUER_VOTE_FIELDS
+            )
 
         for spec in filing_numeric_specs:
             if form_family not in spec.form_families:
