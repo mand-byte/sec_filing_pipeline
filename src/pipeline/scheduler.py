@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import traceback
 from typing import Any, Callable, Iterable, Protocol
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -52,6 +53,7 @@ def run_single_tick(
                         level="ERROR",
                         message="router failed",
                         error_type=exc.__class__.__name__,
+                        error_detail="".join(traceback.TracebackException.from_exception(exc).format()).strip(),
                     )
                 except Exception:
                     pass

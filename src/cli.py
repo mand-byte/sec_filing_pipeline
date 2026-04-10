@@ -1,6 +1,8 @@
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from dataclasses import asdict
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from functools import partial
+import json
 import math
 from pathlib import Path
 import re
@@ -13,7 +15,7 @@ import typer
 from sqlalchemy import func, select
 
 from src.config import Settings
-from src.db.models import PipelineLog, SecurityMaster
+from src.db.models import PipelineLog
 from src.db.repositories import PipelineRepository
 from src.db.session import get_session_factory
 from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
@@ -21,15 +23,23 @@ from src.pipeline.extraction.engine import NumericExtractionEngine
 from src.pipeline.extraction.registry import all_numeric_field_specs
 from src.pipeline.extraction.text_engine import TextExtractionEngine
 from src.pipeline.extraction.text_registry import all_text_field_specs
-from src.pipeline.review.review_gate import ReviewGateInput, evaluate_review_gate
-from src.pipeline.review.stats import SqlAlchemyReviewStats
 from src.pipeline.offline_artifacts import write_run_artifacts
 from src.pipeline.offline_evaluator import OfflineEvalSelectors, run_offline_tier2_evaluation
 from src.pipeline.golden_10q_numeric_batch import evaluate_10q_numeric_batch
+from src.pipeline.route_runtime import (
+    BundleBuildOutcome,
+    FilingBundle,
+    RouteProcessor,
+    _bundle_sort_key,
+    _format_exception_detail,
+    _normalize_to_utc,
+    _safe_write_log,
+)
 from src.pipeline.routers.holding import HoldingRouter
 from src.pipeline.routers.issuer import IssuerRouter
 from src.pipeline.routers.owner import OwnerRouter
-from src.pipeline.rules import is_filing_eligible, should_skip_delisted_route
+from src.pipeline.review.dashboard import build_review_dashboard_packets, write_review_dashboard
+from src.pipeline.review.workflow import ReviewWorkflowError, ReviewWorkflowService, review_task_detail_asdict
 from src.pipeline.scheduler import (
     ROUTE_ORDER,
     build_blocking_scheduler,
@@ -39,6 +49,7 @@ from src.pipeline.scheduler import (
 )
 from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
 from src.pipeline.types import FilingRecord, RouteName
+from src.pipeline.universe import SecurityUniverseRow, load_security_universe
 
 
 app = typer.Typer(help="SEC filing pipeline CLI for running phase 1 tasks.")
@@ -50,28 +61,6 @@ _ISSUER_VOTE_FIELDS = {
     "proposal_votes_abstain",
     "proposal_broker_non_votes",
 }
-
-
-@dataclass(frozen=True)
-class FilingBundle:
-    filing: FilingRecord
-    facts: list[FactInput] = field(default_factory=list)
-    evidences: list[EvidenceInput] = field(default_factory=list)
-
-
-def _normalize_to_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-
-    return value.astimezone(timezone.utc)
-
-
-def _as_utc_start_of_day(start_date: date) -> datetime:
-    return datetime.combine(start_date, time.min, tzinfo=timezone.utc)
-
-
-def _bundle_sort_key(bundle: FilingBundle) -> tuple[datetime, str]:
-    return (_normalize_to_utc(bundle.filing.accepted_at), bundle.filing.accession_no)
 
 
 def _coerce_numeric_value(value: object) -> float | None:
@@ -92,15 +81,15 @@ def _coerce_numeric_value(value: object) -> float | None:
     return None
 
 
-def _owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle | None:
+def _owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     try:
         ownership_form = obj_method()
-    except Exception:
-        return None
+    except Exception as exc:
+        return BundleBuildOutcome(bundle=None, error_detail=_format_exception_detail(exc))
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
@@ -242,22 +231,22 @@ def _owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBun
                     )
                 )
 
-    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+    return BundleBuildOutcome(bundle=FilingBundle(filing=filing, facts=facts, evidences=evidences))
 
 
-def _holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle | None:
+def _holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     try:
         holding_report = obj_method()
-    except Exception:
-        return None
+    except Exception as exc:
+        return BundleBuildOutcome(bundle=None, error_detail=_format_exception_detail(exc))
 
     infotable = getattr(holding_report, "infotable", None)
     if not isinstance(infotable, pd.DataFrame):
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
@@ -378,7 +367,7 @@ def _holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle 
         )
     )
 
-    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+    return BundleBuildOutcome(bundle=FilingBundle(filing=filing, facts=facts, evidences=evidences))
 
 
 def _strip_namespace(tag: str) -> str:
@@ -463,22 +452,22 @@ def _extract_monetary_amount(text: str | None) -> float | None:
     return None
 
 
-def _owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, form_family: str) -> FilingBundle | None:
+def _owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, form_family: str) -> BundleBuildOutcome:
     xml_method = getattr(envelope.filing, "xml", None)
     if not callable(xml_method):
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     try:
         xml_text = xml_method()
-    except Exception:
-        return None
+    except Exception as exc:
+        return BundleBuildOutcome(bundle=None, error_detail=_format_exception_detail(exc))
 
     if not isinstance(xml_text, str) or not xml_text.strip():
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     root = _xml_root(xml_text)
     if root is None:
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     if form_family == "13G":
         person_blocks = _xml_findall(root, "coverPageHeaderReportingPersonDetails")
@@ -580,18 +569,18 @@ def _owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, form_fam
                 )
             )
 
-    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+    return BundleBuildOutcome(bundle=FilingBundle(filing=filing, facts=facts, evidences=evidences))
 
 
-def _owner_form144_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle | None:
+def _owner_form144_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
-        return None
+        return BundleBuildOutcome(bundle=None)
 
     try:
         form144 = obj_method()
-    except Exception:
-        return None
+    except Exception as exc:
+        return BundleBuildOutcome(bundle=None, error_detail=_format_exception_detail(exc))
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
@@ -658,18 +647,18 @@ def _owner_form144_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundl
                     )
                 )
 
-    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+    return BundleBuildOutcome(bundle=FilingBundle(filing=filing, facts=facts, evidences=evidences))
 
 
-def _issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> tuple[FilingBundle | None, bool]:
+def _issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
-        return None, False
+        return BundleBuildOutcome(bundle=None)
 
     try:
         report = obj_method()
-    except Exception:
-        return None, False
+    except Exception as exc:
+        return BundleBuildOutcome(bundle=None, error_detail=_format_exception_detail(exc))
 
     items = getattr(report, "items", None)
     item_key: str | None = None
@@ -686,15 +675,25 @@ def _issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> tuple[Fili
 
     item_present = item_key is not None
     if not item_present:
-        return FilingBundle(filing=filing, facts=[], evidences=[]), False
+        return BundleBuildOutcome(
+            bundle=FilingBundle(filing=filing, facts=[], evidences=[]),
+            item_present=False,
+        )
 
     try:
         item_text = report[item_key]
-    except Exception:
-        return FilingBundle(filing=filing, facts=[], evidences=[]), True
+    except Exception as exc:
+        return BundleBuildOutcome(
+            bundle=FilingBundle(filing=filing, facts=[], evidences=[]),
+            error_detail=_format_exception_detail(exc),
+            item_present=True,
+        )
 
     if not isinstance(item_text, str) or not item_text.strip():
-        return FilingBundle(filing=filing, facts=[], evidences=[]), True
+        return BundleBuildOutcome(
+            bundle=FilingBundle(filing=filing, facts=[], evidences=[]),
+            item_present=True,
+        )
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
@@ -772,39 +771,14 @@ def _issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> tuple[Fili
                 )
             )
 
-    return FilingBundle(filing=filing, facts=facts, evidences=evidences), item_present
-
-
-def _load_run_once_securities(session: Any) -> list[SecurityMaster]:
-    return list(
-        session.scalars(
-            select(SecurityMaster).order_by(
-                SecurityMaster.cik.asc(),
-                SecurityMaster.composite_figi.asc(),
-            )
-        ).all()
+    return BundleBuildOutcome(
+        bundle=FilingBundle(filing=filing, facts=facts, evidences=evidences),
+        item_present=item_present,
     )
 
 
-def _load_route_filing_bundles(
-    *,
-    security: Any,
-    route: RouteName,
-    start_accepted_at: datetime,
-) -> list[FilingBundle]:
-    del start_accepted_at
-    bundles_by_route = getattr(security, "filing_bundles_by_route", None)
-    if not isinstance(bundles_by_route, dict):
-        return []
-
-    bundles = bundles_by_route.get(route, [])
-    if not isinstance(bundles, list):
-        return []
-
-    return sorted(
-        [bundle for bundle in bundles if isinstance(bundle, FilingBundle)],
-        key=_bundle_sort_key,
-    )
+def _load_run_once_securities(session: Any, settings: Settings) -> list[SecurityUniverseRow]:
+    return load_security_universe(session=session, settings=settings)
 
 
 def _build_bundles_from_provider(
@@ -848,18 +822,19 @@ def _build_bundles_from_provider(
             cik=envelope.cik,
             ticker=getattr(security, "ticker", None),
             form_type=envelope.form_type,
-            filed_at=None,
+            filed_at=envelope.filed_at,
             accepted_at=envelope.accepted_at,
-            period_end=None,
+            period_end=envelope.period_end,
             is_amendment=envelope.form_type.endswith("/A"),
-            amendment_no=None,
+            amendment_no=envelope.amendment_no,
         )
 
         facts: list[FactInput] = []
         evidences: list[EvidenceInput] = []
         form_family = classify_form_family(envelope.form_type)
         if route == "owner" and form_family in {"3", "4", "5"}:
-            owner_bundle = _owner_ownership_bundle(envelope=envelope, filing=filing)
+            owner_outcome = _owner_ownership_bundle(envelope=envelope, filing=filing)
+            owner_bundle = owner_outcome.bundle
             if owner_bundle is None:
                 _safe_write_log(
                     repo,
@@ -871,6 +846,7 @@ def _build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="OWNERSHIP_OBJ_UNAVAILABLE",
+                    error_detail=owner_outcome.error_detail,
                 )
                 continue
             if not owner_bundle.facts:
@@ -890,11 +866,12 @@ def _build_bundles_from_provider(
             continue
 
         if route == "owner" and form_family in {"13D", "13G"}:
-            schedule_bundle = _owner_schedule_13dg_bundle(
+            schedule_outcome = _owner_schedule_13dg_bundle(
                 envelope=envelope,
                 filing=filing,
                 form_family=form_family,
             )
+            schedule_bundle = schedule_outcome.bundle
             if schedule_bundle is None:
                 _safe_write_log(
                     repo,
@@ -906,6 +883,7 @@ def _build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="OWNER_XML_UNAVAILABLE",
+                    error_detail=schedule_outcome.error_detail,
                 )
                 continue
             has_owner_rows = any(
@@ -929,7 +907,8 @@ def _build_bundles_from_provider(
             evidences.extend(schedule_bundle.evidences)
 
         if route == "owner" and form_family == "144":
-            form144_bundle = _owner_form144_bundle(envelope=envelope, filing=filing)
+            form144_outcome = _owner_form144_bundle(envelope=envelope, filing=filing)
+            form144_bundle = form144_outcome.bundle
             if form144_bundle is None:
                 _safe_write_log(
                     repo,
@@ -941,6 +920,7 @@ def _build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="OWNER_OBJ_UNAVAILABLE",
+                    error_detail=form144_outcome.error_detail,
                 )
                 continue
             has_sale_rows = any(
@@ -964,10 +944,12 @@ def _build_bundles_from_provider(
             continue
 
         if route == "issuer" and form_family == "8-K":
-            vote_bundle, vote_item_present = _issuer_8k_vote_bundle(
+            vote_outcome = _issuer_8k_vote_bundle(
                 envelope=envelope,
                 filing=filing,
             )
+            vote_bundle = vote_outcome.bundle
+            vote_item_present = vote_outcome.item_present
             if vote_bundle is not None:
                 has_vote_rows = any(
                     fact.subject_key.startswith("proposal:")
@@ -984,6 +966,7 @@ def _build_bundles_from_provider(
                         cik=envelope.cik,
                         accession_no=envelope.accession_no,
                         error_type="NO_VOTE_ROWS_EXTRACTED",
+                        error_detail=vote_outcome.error_detail,
                     )
                 if has_vote_rows:
                     facts.extend(vote_bundle.facts)
@@ -1031,7 +1014,8 @@ def _build_bundles_from_provider(
                     )
                 )
 
-            holding_bundle = _holding_13f_bundle(envelope=envelope, filing=filing)
+            holding_outcome = _holding_13f_bundle(envelope=envelope, filing=filing)
+            holding_bundle = holding_outcome.bundle
             if holding_bundle is None:
                 _safe_write_log(
                     repo,
@@ -1043,6 +1027,7 @@ def _build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="HOLDING_OBJ_UNAVAILABLE",
+                    error_detail=holding_outcome.error_detail,
                 )
                 continue
             has_position_rows = any(
@@ -1071,7 +1056,8 @@ def _build_bundles_from_provider(
             continue
 
         if route == "holding" and form_family == "13F-HR":
-            holding_bundle = _holding_13f_bundle(envelope=envelope, filing=filing)
+            holding_outcome = _holding_13f_bundle(envelope=envelope, filing=filing)
+            holding_bundle = holding_outcome.bundle
             if holding_bundle is None:
                 _safe_write_log(
                     repo,
@@ -1083,6 +1069,7 @@ def _build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="HOLDING_OBJ_UNAVAILABLE",
+                    error_detail=holding_outcome.error_detail,
                 )
                 continue
             has_position_rows = any(
@@ -1237,258 +1224,6 @@ def _build_bundles_from_provider(
     return bundles
 
 
-def _safe_write_log(
-    repo: PipelineRepository,
-    *,
-    run_id: str,
-    route: RouteName,
-    stage: str,
-    level: str,
-    message: str,
-    cik: str | None = None,
-    accession_no: str | None = None,
-    error_type: str | None = None,
-) -> None:
-    try:
-        repo.write_log(
-            run_id=run_id,
-            route=route,
-            stage=stage,
-            level=level,
-            message=message,
-            cik=cik,
-            accession_no=accession_no,
-            error_type=error_type,
-        )
-    except Exception:
-        pass
-
-
-def _review_metric_for_gate(fact: FactInput) -> float | None:
-    if isinstance(fact.value_numeric, (int, float)) and not isinstance(fact.value_numeric, bool):
-        return float(fact.value_numeric)
-
-    if isinstance(fact.value_text, str):
-        text_length = len(fact.value_text.strip())
-        if text_length > 0:
-            return float(text_length)
-
-    return None
-
-
-def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stats: SqlAlchemyReviewStats) -> None:
-    form_family = classify_form_family(bundle.filing.form_type)
-    text_field_names = {
-        spec.field_name
-        for spec in all_text_field_specs()
-        if spec.route == route and form_family in spec.form_families
-    }
-    if not text_field_names:
-        return
-
-    evidence_by_field: dict[str, EvidenceInput] = {}
-    for evidence in bundle.evidences:
-        if evidence.field_name not in evidence_by_field:
-            evidence_by_field[evidence.field_name] = evidence
-
-    for index, fact in enumerate(bundle.facts):
-        if fact.field_name not in text_field_names:
-            continue
-
-        evidence = evidence_by_field.get(fact.field_name)
-        metric = _review_metric_for_gate(fact)
-        review_decision = evaluate_review_gate(
-            candidate=ReviewGateInput(
-                cik=bundle.filing.cik,
-                route=route,
-                field_name=fact.field_name,
-                template_hash=evidence.source_xpath if evidence else None,
-                value_numeric=metric,
-            ),
-            stats=stats,
-        )
-
-        bundle.facts[index] = FactInput(
-            field_name=fact.field_name,
-            subject_key=fact.subject_key,
-            value_numeric=fact.value_numeric,
-            value_text=fact.value_text,
-            value_json=fact.value_json,
-            value_unit=fact.value_unit,
-            confidence=0.49 if review_decision["decision"] == "needs_review" else 0.99,
-            review_priority=review_decision["priority"],
-            review_reason=review_decision["reason"],
-        )
-
-
-def _process_security_route(
-    *,
-    security: Any,
-    route: RouteName,
-    repo: PipelineRepository,
-    persistence_service: PersistenceService,
-    start_date: date,
-    run_id: str,
-) -> None:
-    cik = getattr(security, "cik", None)
-    if cik is None:
-        return
-
-    active_attr = getattr(security, "active", None)
-    if not isinstance(active_attr, bool):
-        return
-    active = active_attr
-    composite_figi = getattr(security, "composite_figi", None)
-    delisted_utc = getattr(security, "delisted_utc", None)
-
-    completion = None
-    if composite_figi is not None:
-        completion = repo.get_delisted_route_completion(
-            composite_figi=composite_figi,
-            cik=cik,
-            route=route,
-        )
-
-    if active and completion is not None and bool(getattr(completion, "is_completed", False)):
-        try:
-            repo.invalidate_delisted_route_completion(
-                composite_figi=composite_figi,
-                cik=cik,
-                route=route,
-            )
-        except Exception as exc:
-            _safe_write_log(
-                repo,
-                run_id=run_id,
-                route=route,
-                cik=cik,
-                stage="persist",
-                level="ERROR",
-                message="delisted completion invalidation failed",
-                error_type=exc.__class__.__name__,
-            )
-        completion = None
-
-    if should_skip_delisted_route(
-        active=active,
-        is_completed=bool(getattr(completion, "is_completed", False)),
-        snapshot=getattr(completion, "delisted_utc_snapshot", None),
-        current_delisted_utc=delisted_utc,
-    ):
-        return
-
-    watermark = repo.get_route_watermark(cik, route)
-    start_accepted_at = watermark or _as_utc_start_of_day(start_date)
-
-    bundles = _load_route_filing_bundles(
-        security=security,
-        route=route,
-        start_accepted_at=start_accepted_at,
-    )
-    if not bundles:
-        bundles = _build_bundles_from_provider(
-            security=security,
-            route=route,
-            start_accepted_at=start_accepted_at,
-            repo=repo,
-            run_id=run_id,
-        )
-
-    eligible_bundles: list[FilingBundle] = []
-    normalized_start = _normalize_to_utc(start_accepted_at)
-    for bundle in bundles:
-        accepted_at = _normalize_to_utc(bundle.filing.accepted_at)
-        if accepted_at <= normalized_start:
-            continue
-        if not is_filing_eligible(active=active, delisted_utc=delisted_utc, accepted_at=accepted_at):
-            continue
-        eligible_bundles.append(bundle)
-
-    eligible_bundles.sort(key=_bundle_sort_key)
-
-    last_seen_accepted_at = watermark
-    if eligible_bundles:
-        review_stats = SqlAlchemyReviewStats(repo.session)
-        processed_bundles: list[FilingBundle] = []
-        for bundle in eligible_bundles:
-            try:
-                _apply_review_gate_to_bundle(bundle=bundle, route=route, stats=review_stats)
-                persistence_service.persist_filing_bundle(
-                    filing=bundle.filing,
-                    route=route,
-                    facts=bundle.facts,
-                    evidences=bundle.evidences,
-                )
-                processed_bundles.append(bundle)
-                _safe_write_log(
-                    repo,
-                    run_id=run_id,
-                    route=route,
-                    cik=cik,
-                    accession_no=bundle.filing.accession_no,
-                    stage="persist",
-                    level="INFO",
-                    message="filing persisted",
-                )
-            except Exception as exc:
-                try:
-                    repo.session.rollback()
-                except Exception:
-                    pass
-                _safe_write_log(
-                    repo,
-                    run_id=run_id,
-                    route=route,
-                    cik=cik,
-                    accession_no=bundle.filing.accession_no,
-                    stage="persist",
-                    level="ERROR",
-                    message="filing persistence failed",
-                    error_type=exc.__class__.__name__,
-                )
-
-        if processed_bundles:
-            max_accepted_at = max(
-                (_normalize_to_utc(bundle.filing.accepted_at) for bundle in processed_bundles),
-                key=lambda value: value,
-            )
-            try:
-                repo.upsert_route_watermark(cik=cik, route=route, accepted_at=max_accepted_at)
-                last_seen_accepted_at = max_accepted_at
-            except Exception as exc:
-                _safe_write_log(
-                    repo,
-                    run_id=run_id,
-                    route=route,
-                    cik=cik,
-                    stage="persist",
-                    level="ERROR",
-                    message="watermark update failed",
-                    error_type=exc.__class__.__name__,
-                )
-
-    if (not active) and composite_figi is not None:
-        try:
-            repo.mark_delisted_route_completed(
-                composite_figi=composite_figi,
-                cik=cik,
-                route=route,
-                delisted_utc_snapshot=delisted_utc,
-                last_seen_accepted_at=last_seen_accepted_at,
-            )
-        except Exception as exc:
-            _safe_write_log(
-                repo,
-                run_id=run_id,
-                route=route,
-                cik=cik,
-                stage="persist",
-                level="ERROR",
-                message="delisted completion update failed",
-                error_type=exc.__class__.__name__,
-            )
-
-
 def _build_run_artifact_payloads(*, session: Any, run_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     route_rows = session.execute(
         select(PipelineLog.route, func.count())
@@ -1521,6 +1256,7 @@ def _build_run_artifact_payloads(*, session: Any, run_id: str) -> tuple[dict[str
             "cik": row.cik,
             "accession_no": row.accession_no,
             "error_type": row.error_type,
+            "error_detail": row.error_detail,
         }
         for row in sample_logs
     ]
@@ -1542,24 +1278,48 @@ def _build_run_artifact_payloads(*, session: Any, run_id: str) -> tuple[dict[str
     return summary, samples, diff_markdown
 
 
-def _run_once_pipeline() -> None:
+def _parse_route_name(route: str | None) -> RouteName | None:
+    if route is None:
+        return None
+
+    normalized = route.strip().lower()
+    if normalized not in ROUTE_ORDER:
+        allowed_routes = ", ".join(ROUTE_ORDER)
+        raise typer.BadParameter(f"route must be one of: {allowed_routes}")
+
+    return cast(RouteName, normalized)
+
+
+def _selected_routes(route: RouteName | None) -> tuple[RouteName, ...]:
+    if route is None:
+        return cast(tuple[RouteName, ...], ROUTE_ORDER)
+    return (route,)
+
+
+def _run_once_pipeline(*, route: RouteName | None = None) -> None:
     settings = Settings()
     session_factory = get_session_factory(settings)
-
-    router_map = {
-        "issuer": IssuerRouter(),
-        "owner": OwnerRouter(),
-        "holding": HoldingRouter(),
-    }
-    routers = ordered_routers(router_map)
-    typer.echo("route order: " + " -> ".join(router.name for router in routers))
+    selected_routes = _selected_routes(route)
 
     run_id = make_run_id()
 
     with session_factory() as session:
         repo = PipelineRepository(session)
         persistence_service = PersistenceService(session)
-        securities = _load_run_once_securities(session)
+        securities = _load_run_once_securities(session, settings)
+        processor = RouteProcessor(
+            repo=repo,
+            persistence_service=persistence_service,
+            start_date=settings.start_date,
+            provider_bundle_builder=_build_bundles_from_provider,
+        )
+        router_map = {
+            "issuer": IssuerRouter(processor),
+            "owner": OwnerRouter(processor),
+            "holding": HoldingRouter(processor),
+        }
+        routers = ordered_routers({route_name: router_map[route_name] for route_name in selected_routes})
+        typer.echo("route order: " + " -> ".join(router.name for router in routers))
 
         run_single_tick(
             run_id=run_id,
@@ -1567,17 +1327,6 @@ def _run_once_pipeline() -> None:
             routers=routers,
             repo=repo,
         )
-
-        for security in securities:
-            for route_name in ROUTE_ORDER:
-                _process_security_route(
-                    security=security,
-                    route=cast(RouteName, route_name),
-                    repo=repo,
-                    persistence_service=persistence_service,
-                    start_date=settings.start_date,
-                    run_id=run_id,
-                )
 
         if settings.write_offline_artifacts:
             summary_payload, sample_payload, diff_markdown = _build_run_artifact_payloads(
@@ -1596,9 +1345,37 @@ def _run_once_pipeline() -> None:
 
 
 @app.command("run-once")
-def run_once() -> None:
+def run_once(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+) -> None:
     """Run the phase-1 pipeline once."""
-    _run_once_pipeline()
+    _run_once_pipeline(route=_parse_route_name(route))
+
+
+@app.command("run-route")
+def run_route(
+    route: str = typer.Argument(..., help="Route name: issuer, owner, holding"),
+) -> None:
+    """Run a single pipeline route once."""
+    _run_once_pipeline(route=_parse_route_name(route))
+
+
+@app.command("run-issuer")
+def run_issuer() -> None:
+    """Run the issuer route once."""
+    _run_once_pipeline(route="issuer")
+
+
+@app.command("run-owner")
+def run_owner() -> None:
+    """Run the owner route once."""
+    _run_once_pipeline(route="owner")
+
+
+@app.command("run-holding")
+def run_holding() -> None:
+    """Run the holding route once."""
+    _run_once_pipeline(route="holding")
 
 
 def _run_strict_v2_eval(
@@ -1764,13 +1541,134 @@ def golden_10q_numeric_batch(
         )
 
 
+@app.command("review-list")
+def review_list(
+    status: str = typer.Option("open", "--status", help="Review task status filter"),
+    route: str | None = typer.Option(None, "--route", help="Optional route filter"),
+    limit: int = typer.Option(100, "--limit", min=1, max=1000, help="Maximum tasks to return"),
+) -> None:
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        service = ReviewWorkflowService(session)
+        payload = [
+            {
+                **asdict(task),
+                "created_at": task.created_at.isoformat(),
+            }
+            for task in service.list_tasks(status=status, route=route, limit=limit)
+        ]
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@app.command("review-show")
+def review_show(
+    task_id: int = typer.Argument(..., help="Review task id"),
+) -> None:
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        service = ReviewWorkflowService(session)
+        try:
+            detail = service.get_task_detail(task_id=task_id)
+        except ReviewWorkflowError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(review_task_detail_asdict(detail), ensure_ascii=False, indent=2))
+
+
+@app.command("review-assign")
+def review_assign(
+    task_id: int = typer.Argument(..., help="Review task id"),
+    assignee: str = typer.Argument(..., help="Assignee name"),
+) -> None:
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        service = ReviewWorkflowService(session)
+        try:
+            summary = service.assign_task(task_id=task_id, assignee=assignee)
+        except ReviewWorkflowError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "task_id": summary.task_id,
+                "status": summary.status,
+                "assignee": summary.assignee,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("review-resolve")
+def review_resolve(
+    task_id: int = typer.Argument(..., help="Review task id"),
+    decision: str = typer.Option(..., "--decision", help="accept, corrected, reject, not_applicable"),
+    reviewer: str = typer.Option(..., "--reviewer", help="Reviewer name"),
+    error_code: str | None = typer.Option(None, "--error-code", help="Normalized extraction failure class for non-accept decisions"),
+    comment: str | None = typer.Option(None, "--comment", help="Optional review comment"),
+    corrected_json: str | None = typer.Option(None, "--corrected-json", help="JSON payload for corrected decisions"),
+) -> None:
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        service = ReviewWorkflowService(session)
+        try:
+            summary = service.resolve_task(
+                task_id=task_id,
+                decision=decision,
+                reviewer=reviewer,
+                error_code=error_code,
+                comment=comment,
+                corrected_json=corrected_json,
+            )
+        except ReviewWorkflowError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "task_id": summary.task_id,
+                "status": summary.status,
+                "assignee": summary.assignee,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("review-dashboard")
+def review_dashboard(
+    status: str = typer.Option("open", "--status", help="Review task status filter"),
+    route: str | None = typer.Option(None, "--route", help="Optional route filter"),
+    limit: int = typer.Option(100, "--limit", min=1, max=1000, help="Maximum tasks to export"),
+    output_dir: Path = typer.Option(
+        Path("artifacts/review_dashboard"),
+        "--output-dir",
+        help="Directory for the exported review dashboard",
+    ),
+) -> None:
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        service = ReviewWorkflowService(session)
+        packets = build_review_dashboard_packets(
+            service=service,
+            status=status,
+            route=route,
+            limit=limit,
+        )
+    dashboard_dir = write_review_dashboard(output_dir=output_dir, packets=packets)
+    typer.echo(str(dashboard_dir))
+
+
 @app.command("schedule")
-def schedule() -> None:
+def schedule(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+) -> None:
     """Run the phase-1 scheduler loop."""
     settings = Settings()
+    parsed_route = _parse_route_name(route)
     scheduler = build_blocking_scheduler(
         interval_minutes=settings.scheduler_interval_minutes,
-        tick_callable=run_once,
+        tick_callable=partial(_run_once_pipeline, route=parsed_route),
     )
     scheduler.start()
 

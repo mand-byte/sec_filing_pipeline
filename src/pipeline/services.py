@@ -113,6 +113,47 @@ class PersistenceService:
                 )
             )
 
+        evidence_rows_by_key: dict[tuple[str, str], ExtractionEvidence] = {}
+        for evidence in evidences:
+            existing_evidence = self.session.scalar(
+                select(ExtractionEvidence).where(
+                    ExtractionEvidence.accession_no == filing.accession_no,
+                    ExtractionEvidence.route == route,
+                    ExtractionEvidence.field_name == evidence.field_name,
+                    ExtractionEvidence.subject_key == evidence.subject_key,
+                    ExtractionEvidence.locator_kind == evidence.locator_kind,
+                    ExtractionEvidence.source_span == evidence.source_span,
+                    ExtractionEvidence.source_section == evidence.source_section,
+                    ExtractionEvidence.source_item_no == evidence.source_item_no,
+                    ExtractionEvidence.source_xpath == evidence.source_xpath,
+                    ExtractionEvidence.xbrl_concept == evidence.xbrl_concept,
+                    ExtractionEvidence.raw_value == evidence.raw_value,
+                    ExtractionEvidence.normalized_value == evidence.normalized_value,
+                )
+            )
+            evidence_row = existing_evidence
+            if evidence_row is None:
+                evidence_row = ExtractionEvidence(
+                    accession_no=filing.accession_no,
+                    route=route,
+                    field_name=evidence.field_name,
+                    subject_key=evidence.subject_key,
+                    locator_kind=evidence.locator_kind,
+                    source_section=evidence.source_section,
+                    source_item_no=evidence.source_item_no,
+                    source_xpath=evidence.source_xpath,
+                    xbrl_concept=evidence.xbrl_concept,
+                    source_span=evidence.source_span,
+                    raw_value=evidence.raw_value,
+                    normalized_value=evidence.normalized_value,
+                    created_at=now,
+                )
+                self.session.add(evidence_row)
+
+            evidence_rows_by_key[(evidence.field_name, evidence.subject_key)] = evidence_row
+
+        self.session.flush()
+
         for fact in facts:
             existing_fact = self.session.scalar(
                 select(ExtractedFact).where(
@@ -147,11 +188,13 @@ class PersistenceService:
                 existing_fact.extracted_at = now
 
             if fact.confidence is not None and fact.confidence < 0.5:
+                evidence_row = evidence_rows_by_key.get((fact.field_name, fact.subject_key))
                 existing_review_task = self.session.scalar(
                     select(ReviewTask).where(
                         ReviewTask.accession_no == filing.accession_no,
                         ReviewTask.route == route,
                         ReviewTask.field_name == fact.field_name,
+                        ReviewTask.subject_key == fact.subject_key,
                         ReviewTask.status == "open",
                     )
                 )
@@ -161,6 +204,8 @@ class PersistenceService:
                             accession_no=filing.accession_no,
                             route=route,
                             field_name=fact.field_name,
+                            subject_key=fact.subject_key,
+                            primary_evidence_id=evidence_row.id if evidence_row is not None else None,
                             status="open",
                             priority=fact.review_priority or "high",
                             reason=fact.review_reason,
@@ -169,41 +214,5 @@ class PersistenceService:
                             resolved_at=None,
                         )
                     )
-
-        for evidence in evidences:
-            existing_evidence = self.session.scalar(
-                select(ExtractionEvidence).where(
-                    ExtractionEvidence.accession_no == filing.accession_no,
-                    ExtractionEvidence.route == route,
-                    ExtractionEvidence.field_name == evidence.field_name,
-                    ExtractionEvidence.subject_key == evidence.subject_key,
-                    ExtractionEvidence.locator_kind == evidence.locator_kind,
-                    ExtractionEvidence.source_span == evidence.source_span,
-                    ExtractionEvidence.source_section == evidence.source_section,
-                    ExtractionEvidence.source_item_no == evidence.source_item_no,
-                    ExtractionEvidence.source_xpath == evidence.source_xpath,
-                    ExtractionEvidence.xbrl_concept == evidence.xbrl_concept,
-                    ExtractionEvidence.raw_value == evidence.raw_value,
-                    ExtractionEvidence.normalized_value == evidence.normalized_value,
-                )
-            )
-            if existing_evidence is None:
-                self.session.add(
-                    ExtractionEvidence(
-                        accession_no=filing.accession_no,
-                        route=route,
-                        field_name=evidence.field_name,
-                        subject_key=evidence.subject_key,
-                        locator_kind=evidence.locator_kind,
-                        source_section=evidence.source_section,
-                        source_item_no=evidence.source_item_no,
-                        source_xpath=evidence.source_xpath,
-                        xbrl_concept=evidence.xbrl_concept,
-                        source_span=evidence.source_span,
-                        raw_value=evidence.raw_value,
-                        normalized_value=evidence.normalized_value,
-                        created_at=now,
-                    )
-                )
 
         self.session.commit()

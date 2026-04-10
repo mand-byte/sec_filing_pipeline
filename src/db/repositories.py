@@ -203,6 +203,7 @@ class PipelineRepository:
         cik: str | None = None,
         accession_no: str | None = None,
         error_type: str | None = None,
+        error_detail: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
 
@@ -216,6 +217,7 @@ class PipelineRepository:
                 level=level,
                 message=message,
                 error_type=error_type,
+                error_detail=error_detail,
                 created_at=now,
             )
         )

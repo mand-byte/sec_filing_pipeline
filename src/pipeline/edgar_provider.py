@@ -15,6 +15,9 @@ class FilingEnvelope:
     form_type: str
     accepted_at: datetime
     filing: Any
+    filed_at: datetime | None = None
+    period_end: datetime | None = None
+    amendment_no: int | None = None
 
 
 def classify_form_family(form_type: str) -> str:
@@ -90,6 +93,38 @@ def _coerce_datetime(value: object) -> datetime | None:
     return None
 
 
+def _first_datetime_attribute(target: object, *names: str) -> datetime | None:
+    for name in names:
+        value = getattr(target, name, None)
+        coerced = _coerce_datetime(value)
+        if coerced is not None:
+            return coerced
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned.isdigit():
+            return int(cleaned)
+    return None
+
+
+def _first_int_attribute(target: object, *names: str) -> int | None:
+    for name in names:
+        value = getattr(target, name, None)
+        coerced = _coerce_int(value)
+        if coerced is not None:
+            return coerced
+    return None
+
+
 def fetch_filings_for_security(*, security: Any, route: str, start_accepted_at: datetime) -> list[FilingEnvelope]:
     forms = _route_forms(route)
     if not forms:
@@ -133,6 +168,26 @@ def fetch_filings_for_security(*, security: Any, route: str, start_accepted_at: 
         if accepted_at <= start_utc:
             continue
 
+        filed_at = _first_datetime_attribute(
+            filing,
+            "filing_date",
+            "filed_at",
+            "filed_date",
+        )
+        period_end = _first_datetime_attribute(
+            filing,
+            "period_of_report",
+            "period_end",
+            "period",
+            "report_period",
+            "report_date",
+        )
+        amendment_no = _first_int_attribute(
+            filing,
+            "amendment_no",
+            "amendment_number",
+        )
+
         envelopes.append(
             FilingEnvelope(
                 accession_no=accession_no,
@@ -140,6 +195,9 @@ def fetch_filings_for_security(*, security: Any, route: str, start_accepted_at: 
                 form_type=form_type,
                 accepted_at=accepted_at,
                 filing=filing,
+                filed_at=filed_at,
+                period_end=period_end,
+                amendment_no=amendment_no,
             )
         )
 

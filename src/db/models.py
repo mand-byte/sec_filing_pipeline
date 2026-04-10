@@ -133,6 +133,7 @@ class PipelineLog(Base):
     level: Mapped[str] = mapped_column(String(16), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -148,6 +149,13 @@ class ReviewTask(Base):
     )
     route: Mapped[str] = mapped_column(String(16), nullable=False)
     field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False, default="document", server_default="document")
+    primary_evidence_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("extraction_evidence.id"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -167,6 +175,7 @@ class ReviewDecision(Base):
         index=True,
     )
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     corrected_value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewer: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -322,6 +322,55 @@ def test_build_bundles_from_provider_supports_10q_amendments(monkeypatch) -> Non
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_preserves_filing_metadata(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 8, tzinfo=timezone.utc)
+    filed_at = datetime(2024, 5, 7, tzinfo=timezone.utc)
+    period_end = datetime(2024, 3, 31, tzinfo=timezone.utc)
+    filing = FakeFiling(
+        form="10-Q/A",
+        records=[
+            {
+                "fact_key": "revenue-q1a",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-03-31",
+                "value": 1100.0,
+            }
+        ],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000008",
+        cik="0000789019",
+        form_type="10-Q/A",
+        accepted_at=accepted_at,
+        filing=filing,
+        filed_at=filed_at,
+        period_end=period_end,
+        amendment_no=2,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    bundles = cli_module._build_bundles_from_provider(
+        security=SimpleNamespace(cik="0000789019", ticker="MSFT"),
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=FakeRepo(),
+        run_id="run-8",
+    )
+
+    assert len(bundles) == 1
+    assert bundles[0].filing.filed_at == filed_at
+    assert bundles[0].filing.period_end == period_end
+    assert bundles[0].filing.amendment_no == 2
+
+
 def test_build_bundles_from_provider_skips_empty_issuer_10q_bundles(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 3, tzinfo=timezone.utc)
     filing = FakeFiling(
