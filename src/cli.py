@@ -3,7 +3,9 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 import math
 from pathlib import Path
+import re
 from typing import Any, cast
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 
@@ -371,6 +373,286 @@ def _holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle 
     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
+def _strip_namespace(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[1]
+    return tag
+
+
+def _xml_root(xml_text: str) -> ET.Element | None:
+    try:
+        return ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+
+def _xml_findall(element: ET.Element, tag_name: str) -> list[ET.Element]:
+    return [child for child in element.iter() if _strip_namespace(child.tag) == tag_name]
+
+
+def _xml_child_text(element: ET.Element, tag_name: str) -> str | None:
+    for child in element.iter():
+        if _strip_namespace(child.tag) != tag_name:
+            continue
+        if child.text is None:
+            continue
+        text = child.text.strip()
+        if text:
+            return text
+    return None
+
+
+def _xml_direct_child_text(element: ET.Element, tag_name: str) -> str | None:
+    for child in list(element):
+        if _strip_namespace(child.tag) != tag_name:
+            continue
+        if child.text is None:
+            continue
+        text = child.text.strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_monetary_amount(text: str | None) -> float | None:
+    if not isinstance(text, str):
+        return None
+
+    normalized_text = " ".join(text.split())
+    anchored_currency_patterns = (
+        r"(?i)(?:total\s+funds\s+used|aggregate\s+purchase\s+price|purchase\s+price|source\s+and\s+amount\s+of\s+funds|reporting\s+person\s+used)\D{0,32}\$\s*([-+]?\d[\d,]*(?:\.\d+)?)",
+        r"(?i)\$\s*([-+]?\d[\d,]*(?:\.\d+)?)\D{0,32}(?:in\s+cash|of\s+working\s+capital|from\s+working\s+capital|aggregate\s+purchase\s+price|purchase\s+price)",
+    )
+    for pattern in anchored_currency_patterns:
+        match = re.search(pattern, normalized_text)
+        if match is None:
+            continue
+        numeric_value = _coerce_numeric_value(match.group(1))
+        if numeric_value is not None:
+            return float(numeric_value)
+
+    currency_matches = [
+        _coerce_numeric_value(match.group(1))
+        for match in re.finditer(r"\$\s*([-+]?\d[\d,]*(?:\.\d+)?)", normalized_text)
+    ]
+    currency_candidates = [value for value in currency_matches if value is not None]
+    if len(currency_candidates) == 1:
+        return float(currency_candidates[0])
+    if len(currency_candidates) > 1:
+        return None
+
+    anchored_plain_patterns = (
+        r"(?i)(?:total\s+funds\s+used|aggregate\s+purchase\s+price|purchase\s+price|reporting\s+person\s+used)\D{0,16}([-+]?\d{1,3}(?:,\d{3})+|[-+]?\d{5,}(?:\.\d+)?)",
+    )
+    for pattern in anchored_plain_patterns:
+        match = re.search(pattern, normalized_text)
+        if match is None:
+            continue
+        numeric_value = _coerce_numeric_value(match.group(1))
+        if numeric_value is not None:
+            return float(numeric_value)
+
+    return None
+
+
+def _owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, form_family: str) -> FilingBundle | None:
+    xml_method = getattr(envelope.filing, "xml", None)
+    if not callable(xml_method):
+        return None
+
+    try:
+        xml_text = xml_method()
+    except Exception:
+        return None
+
+    if not isinstance(xml_text, str) or not xml_text.strip():
+        return None
+
+    root = _xml_root(xml_text)
+    if root is None:
+        return None
+
+    if form_family == "13G":
+        person_blocks = _xml_findall(root, "coverPageHeaderReportingPersonDetails")
+        field_map = (
+            ("beneficially_owned_shares", "reportingPersonBeneficiallyOwnedAggregateNumberOfShares"),
+            ("beneficial_ownership_pct", "classPercent"),
+            ("sole_voting_power", "soleVotingPower"),
+            ("shared_voting_power", "sharedVotingPower"),
+            ("sole_dispositive_power", "soleDispositivePower"),
+            ("shared_dispositive_power", "sharedDispositivePower"),
+        )
+    else:
+        person_blocks = _xml_findall(root, "reportingPerson")
+        if not person_blocks:
+            person_blocks = _xml_findall(root, "coverPageReportingPerson")
+        field_map = (
+            ("beneficially_owned_shares", "aggregateAmountOwned"),
+            ("beneficial_ownership_pct", "percentOfClass"),
+            ("sole_voting_power", "soleVotingPower"),
+            ("shared_voting_power", "sharedVotingPower"),
+            ("sole_dispositive_power", "soleDispositivePower"),
+            ("shared_dispositive_power", "sharedDispositivePower"),
+        )
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+
+    for index, block in enumerate(person_blocks, start=1):
+        subject_key = f"filer:{index}"
+        for field_name, tag_name in field_map:
+            raw_value = _xml_child_text(block, tag_name)
+            numeric_value = _coerce_numeric_value(raw_value)
+            if numeric_value is None:
+                continue
+            facts.append(
+                FactInput(
+                    field_name=field_name,
+                    subject_key=subject_key,
+                    value_numeric=float(numeric_value),
+                    confidence=0.99,
+                )
+            )
+            evidences.append(
+                EvidenceInput(
+                    field_name=field_name,
+                    subject_key=subject_key,
+                    locator_kind="obj",
+                    source_span=f"xml.{_strip_namespace(block.tag)}[{index - 1}].{tag_name}",
+                    raw_value=str(raw_value),
+                    normalized_value=str(float(numeric_value)),
+                )
+            )
+
+        if form_family != "13D":
+            continue
+
+        funds_source_text = _xml_child_text(block, "fundsSource")
+        funds_amount = _extract_monetary_amount(funds_source_text)
+        if funds_amount is not None:
+            facts.append(
+                FactInput(
+                    field_name="source_of_funds_amount",
+                    subject_key=subject_key,
+                    value_numeric=float(funds_amount),
+                    confidence=0.99,
+                )
+            )
+            evidences.append(
+                EvidenceInput(
+                    field_name="source_of_funds_amount",
+                    subject_key=subject_key,
+                    locator_kind="obj",
+                    source_span=f"xml.{_strip_namespace(block.tag)}[{index - 1}].fundsSource",
+                    raw_value=str(funds_source_text),
+                    normalized_value=str(float(funds_amount)),
+                )
+            )
+
+    if form_family == "13D":
+        funds_source_text = _xml_direct_child_text(root, "fundsSource")
+        aggregate_purchase_price = _extract_monetary_amount(funds_source_text)
+        if aggregate_purchase_price is not None:
+            facts.append(
+                FactInput(
+                    field_name="aggregate_purchase_price",
+                    subject_key="document",
+                    value_numeric=float(aggregate_purchase_price),
+                    confidence=0.99,
+                )
+            )
+            evidences.append(
+                EvidenceInput(
+                    field_name="aggregate_purchase_price",
+                    subject_key="document",
+                    locator_kind="obj",
+                    source_span="xml.fundsSource",
+                    raw_value=str(funds_source_text),
+                    normalized_value=str(float(aggregate_purchase_price)),
+                )
+            )
+
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+
+
+def _owner_form144_bundle(*, envelope: Any, filing: FilingRecord) -> FilingBundle | None:
+    obj_method = getattr(envelope.filing, "obj", None)
+    if not callable(obj_method):
+        return None
+
+    try:
+        form144 = obj_method()
+    except Exception:
+        return None
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+
+    securities_information = getattr(form144, "securities_information", None)
+    if isinstance(securities_information, pd.DataFrame) and not securities_information.empty:
+        for index, row in enumerate(securities_information.itertuples(index=False), start=1):
+            subject_key = f"sale_notice:{index}"
+            sale_specs = (
+                ("proposed_sale_shares", getattr(row, "units_to_be_sold", None), "securities_information.units_to_be_sold"),
+                ("proposed_sale_market_value", getattr(row, "market_value", None), "securities_information.market_value"),
+            )
+            for field_name, raw_value, path_name in sale_specs:
+                numeric_value = _coerce_numeric_value(raw_value)
+                if numeric_value is None:
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        value_numeric=float(numeric_value),
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        locator_kind="obj",
+                        source_span=f"{path_name}[{index - 1}]",
+                        raw_value=str(raw_value),
+                        normalized_value=str(float(numeric_value)),
+                    )
+                )
+
+    securities_sold = getattr(form144, "securities_sold_past_3_months", None)
+    if isinstance(securities_sold, pd.DataFrame) and not securities_sold.empty:
+        for index, row in enumerate(securities_sold.itertuples(index=False), start=1):
+            subject_key = f"sold_past_3m:{index}"
+            sold_specs = (
+                ("shares_sold_past_3m", getattr(row, "amount_sold", None), "securities_sold_past_3_months.amount_sold"),
+                ("market_value_sold_past_3m", getattr(row, "gross_proceeds", None), "securities_sold_past_3_months.gross_proceeds"),
+            )
+            for field_name, raw_value, path_name in sold_specs:
+                numeric_value = _coerce_numeric_value(raw_value)
+                if numeric_value is None:
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        value_numeric=float(numeric_value),
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=field_name,
+                        subject_key=subject_key,
+                        locator_kind="obj",
+                        source_span=f"{path_name}[{index - 1}]",
+                        raw_value=str(raw_value),
+                        normalized_value=str(float(numeric_value)),
+                    )
+                )
+
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+
+
 def _load_run_once_securities(session: Any) -> list[SecurityMaster]:
     return list(
         session.scalars(
@@ -483,6 +765,80 @@ def _build_bundles_from_provider(
                 )
                 continue
             bundles.append(owner_bundle)
+            continue
+
+        if route == "owner" and form_family in {"13D", "13G"}:
+            schedule_bundle = _owner_schedule_13dg_bundle(
+                envelope=envelope,
+                filing=filing,
+                form_family=form_family,
+            )
+            if schedule_bundle is None:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="owner schedule extraction failed",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="OWNER_XML_UNAVAILABLE",
+                )
+                continue
+            has_owner_rows = any(
+                fact.subject_key.startswith("filer:")
+                for fact in schedule_bundle.facts
+            )
+            if not has_owner_rows:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="owner schedule extracted no rows",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="NO_OWNER_ROWS_EXTRACTED",
+                )
+                continue
+            facts.extend(schedule_bundle.facts)
+            evidences.extend(schedule_bundle.evidences)
+
+        if route == "owner" and form_family == "144":
+            form144_bundle = _owner_form144_bundle(envelope=envelope, filing=filing)
+            if form144_bundle is None:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="owner form144 extraction failed",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="OWNER_OBJ_UNAVAILABLE",
+                )
+                continue
+            has_sale_rows = any(
+                fact.subject_key.startswith("sale_notice:") or fact.subject_key.startswith("sold_past_3m:")
+                for fact in form144_bundle.facts
+            )
+            if not has_sale_rows:
+                _safe_write_log(
+                    repo,
+                    run_id=run_id,
+                    route=route,
+                    stage="extract",
+                    level="ERROR",
+                    message="owner form144 extracted no rows",
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    error_type="NO_OWNER_ROWS_EXTRACTED",
+                )
+                continue
+            bundles.append(form144_bundle)
             continue
 
         if route == "holding" and form_family == "13F-HR/A":

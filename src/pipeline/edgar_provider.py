@@ -19,6 +19,10 @@ class FilingEnvelope:
 
 def classify_form_family(form_type: str) -> str:
     normalized = form_type.strip().upper()
+    if normalized.startswith("SC 13D") or normalized.startswith("SCHEDULE 13D"):
+        return "13D"
+    if normalized.startswith("SC 13G") or normalized.startswith("SCHEDULE 13G"):
+        return "13G"
     if normalized.endswith("/A") and normalized not in {"13F-HR/A"}:
         return normalized[:-2]
     return normalized
@@ -26,7 +30,18 @@ def classify_form_family(form_type: str) -> str:
 
 def _route_forms(route: str) -> tuple[str, ...]:
     if route == "owner":
-        base_forms = {"3", "4", "5"}
+        base_forms = {
+            "3",
+            "4",
+            "5",
+            "13D",
+            "13G",
+            "SC 13D",
+            "SC 13G",
+            "SCHEDULE 13D",
+            "SCHEDULE 13G",
+            "144",
+        }
     else:
         base_forms = {
             form

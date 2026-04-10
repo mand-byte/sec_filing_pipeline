@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import src.cli as cli_module
-from src.pipeline.edgar_provider import FilingEnvelope
+from src.pipeline.edgar_provider import FilingEnvelope, classify_form_family
 
 
 class FakeTransaction:
@@ -63,6 +63,31 @@ class FakeRepo:
 
     def write_log(self, **kwargs: object) -> None:
         self.logs.append(dict(kwargs))
+
+
+class FakeXmlFiling:
+    def __init__(self, *, form: str, xml_text: str, sections: list[str] | None = None):
+        self.form = form
+        self._xml_text = xml_text
+        self._sections = sections or []
+
+    def xml(self) -> str:
+        return self._xml_text
+
+    def sections(self) -> list[str]:
+        return self._sections
+
+
+class FakeForm144Filing:
+    def __init__(self, *, form: str, securities_information: list[dict[str, object]], securities_sold_past_3_months: list[dict[str, object]]):
+        self.form = form
+        self._form144 = SimpleNamespace(
+            securities_information=pd.DataFrame(securities_information),
+            securities_sold_past_3_months=pd.DataFrame(securities_sold_past_3_months),
+        )
+
+    def obj(self) -> SimpleNamespace:
+        return self._form144
 
 
 def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -> None:
@@ -172,3 +197,210 @@ def test_build_bundles_from_provider_emits_owner_holding_rows(monkeypatch) -> No
     assert ("derivative_underlying_shares", "dhold:2") in evidence_keys
     assert ("exercise_or_conversion_price", "dhold:1") in evidence_keys
     assert repo.logs == []
+
+
+def test_build_bundles_from_provider_emits_13g_owner_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000102",
+        cik="0001067983",
+        form_type="SC 13G",
+        accepted_at=datetime(2024, 5, 3, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SC 13G",
+            xml_text="""
+<submission>
+  <coverPageHeaderReportingPersonDetails>
+    <reportingPersonBeneficiallyOwnedAggregateNumberOfShares>1234567</reportingPersonBeneficiallyOwnedAggregateNumberOfShares>
+    <classPercent>7.5</classPercent>
+    <soleVotingPower>1200000</soleVotingPower>
+    <sharedVotingPower>34567</sharedVotingPower>
+    <soleDispositivePower>1100000</soleDispositivePower>
+    <sharedDispositivePower>14567</sharedDispositivePower>
+  </coverPageHeaderReportingPersonDetails>
+</submission>
+""",
+            sections=["Purpose of Transaction\nThis filing is passive."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-3",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert numeric_facts[("beneficially_owned_shares", "filer:1")] == 1234567.0
+    assert numeric_facts[("beneficial_ownership_pct", "filer:1")] == 7.5
+    assert numeric_facts[("sole_voting_power", "filer:1")] == 1200000.0
+    assert numeric_facts[("shared_voting_power", "filer:1")] == 34567.0
+    assert numeric_facts[("sole_dispositive_power", "filer:1")] == 1100000.0
+    assert numeric_facts[("shared_dispositive_power", "filer:1")] == 14567.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("beneficial_ownership_intent_quant", "document")] == "passive"
+    assert repo.logs == []
+
+
+def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000103",
+        cik="0001326380",
+        form_type="SCHEDULE 13D/A",
+        accepted_at=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SCHEDULE 13D/A",
+            xml_text="""
+<submission>
+  <fundsSource>Item 3. Source and Amount of Funds. Total funds used was $2,500,000 in cash.</fundsSource>
+  <reportingPerson>
+    <aggregateAmountOwned>400000</aggregateAmountOwned>
+    <percentOfClass>9.9</percentOfClass>
+    <soleVotingPower>390000</soleVotingPower>
+    <sharedVotingPower>10000</sharedVotingPower>
+    <soleDispositivePower>380000</soleDispositivePower>
+    <sharedDispositivePower>20000</sharedDispositivePower>
+    <fundsSource>Item 3. Reporting person used $1,250,000 of working capital.</fundsSource>
+  </reportingPerson>
+  <reportingPerson>
+    <aggregateAmountOwned>100000</aggregateAmountOwned>
+    <percentOfClass>2.5</percentOfClass>
+    <soleVotingPower>100000</soleVotingPower>
+    <sharedVotingPower>0</sharedVotingPower>
+    <soleDispositivePower>100000</soleDispositivePower>
+    <sharedDispositivePower>0</sharedDispositivePower>
+    <fundsSource>$950,000 in cash contributed by affiliates.</fundsSource>
+  </reportingPerson>
+</submission>
+""",
+            sections=["Purpose of Transaction\nThis filer is activist."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-4",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert numeric_facts[("beneficially_owned_shares", "filer:1")] == 400000.0
+    assert numeric_facts[("beneficial_ownership_pct", "filer:1")] == 9.9
+    assert numeric_facts[("source_of_funds_amount", "filer:1")] == 1250000.0
+    assert numeric_facts[("source_of_funds_amount", "filer:2")] == 950000.0
+    assert numeric_facts[("aggregate_purchase_price", "document")] == 2500000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
+    assert repo.logs == []
+
+
+def test_build_bundles_from_provider_emits_form144_sale_notice_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000104",
+        cik="0001326380",
+        form_type="144",
+        accepted_at=datetime(2024, 5, 5, tzinfo=timezone.utc),
+        filing=FakeForm144Filing(
+            form="144",
+            securities_information=[
+                {"units_to_be_sold": 17087, "market_value": 1282000.0},
+            ],
+            securities_sold_past_3_months=[
+                {"amount_sold": 5000, "gross_proceeds": 410000.0},
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-5",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert facts[("proposed_sale_shares", "sale_notice:1")] == 17087.0
+    assert facts[("proposed_sale_market_value", "sale_notice:1")] == 1282000.0
+    assert facts[("shares_sold_past_3m", "sold_past_3m:1")] == 5000.0
+    assert facts[("market_value_sold_past_3m", "sold_past_3m:1")] == 410000.0
+    assert repo.logs == []
+
+
+def test_build_bundles_from_provider_keeps_form144_rows_without_sale_notice_table(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000105",
+        cik="0001326380",
+        form_type="144",
+        accepted_at=datetime(2024, 5, 6, tzinfo=timezone.utc),
+        filing=FakeForm144Filing(
+            form="144",
+            securities_information=[],
+            securities_sold_past_3_months=[
+                {"amount_sold": 5000, "gross_proceeds": 410000.0},
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-6",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert facts[("shares_sold_past_3m", "sold_past_3m:1")] == 5000.0
+    assert facts[("market_value_sold_past_3m", "sold_past_3m:1")] == 410000.0
+    assert repo.logs == []
+
+
+def test_classify_form_family_normalizes_schedule_aliases() -> None:
+    assert classify_form_family("SC 13G") == "13G"
+    assert classify_form_family("SC 13D/A") == "13D"
+    assert classify_form_family("SCHEDULE 13D") == "13D"
+    assert classify_form_family("SCHEDULE 13G/A") == "13G"
