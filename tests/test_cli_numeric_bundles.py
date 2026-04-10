@@ -510,3 +510,49 @@ def test_build_bundles_from_provider_emits_8k_three_column_vote_rows(monkeypatch
     assert facts[("proposal_votes_abstain", "proposal:1")] == 10.0
     assert ("proposal_broker_non_votes", "proposal:1") not in facts
     assert repo.logs == []
+
+
+
+def test_build_bundles_from_provider_emits_8k_four_column_vote_rows_with_year_label(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 7, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": "Proposal 2024 Plan Approval 1,500,000 250,000 25 10",
+            },
+        ),
+        sections=["Current report\nvote event"],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000007",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-7",
+    )
+
+    assert len(bundles) == 1
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts}
+    assert facts[("proposal_votes_for", "proposal:1")] == 1500000.0
+    assert facts[("proposal_votes_against", "proposal:1")] == 250000.0
+    assert facts[("proposal_votes_abstain", "proposal:1")] == 25.0
+    assert facts[("proposal_broker_non_votes", "proposal:1")] == 10.0
+    assert repo.logs == []
