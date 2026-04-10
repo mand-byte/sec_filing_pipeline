@@ -702,22 +702,36 @@ def _issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> tuple[Fili
     proposal_index = 0
 
     for line_number, line in enumerate(lines, start=1):
-        trailing_vote_match = re.match(
-            r"^(?P<label>.*[A-Za-z].*)\s+(?P<n1>\d[\d,]*)\s+(?P<n2>\d[\d,]*)\s+(?P<n3>\d[\d,]*)(?:\s+(?P<n4>\d[\d,]*))?\s*$",
-            line,
-        )
-        if trailing_vote_match is None:
+        all_numeric_tokens = [
+            match.group(0)
+            for match in re.finditer(r"\d[\d,]*", line)
+        ]
+        if len(all_numeric_tokens) < 3:
             continue
 
-        label = trailing_vote_match.group("label").strip()
-        if not label or not re.search(r"[A-Za-z]", label):
+        selected_token_values: list[str] | None = None
+        for count in (4, 3):
+            if len(all_numeric_tokens) < count:
+                continue
+            candidate_tokens = all_numeric_tokens[-count:]
+            token_pattern = r"\s+".join(re.escape(token) for token in candidate_tokens)
+            trailing_vote_match = re.match(
+                rf"^(?P<label>.+?)\s+(?P<tail>{token_pattern})\s*$",
+                line,
+            )
+            if trailing_vote_match is None:
+                continue
+            label = trailing_vote_match.group("label").strip()
+            if not label or not re.search(r"[A-Za-z]", label):
+                continue
+            selected_token_values = candidate_tokens
+            break
+
+        if selected_token_values is None:
             continue
 
         selected_numeric_values: list[float] = []
-        for group_name in ("n1", "n2", "n3", "n4"):
-            token = trailing_vote_match.group(group_name)
-            if token is None:
-                continue
+        for token in selected_token_values:
             numeric_value = _coerce_numeric_value(token)
             if numeric_value is None:
                 selected_numeric_values = []
