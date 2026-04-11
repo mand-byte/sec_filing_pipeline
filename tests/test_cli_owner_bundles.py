@@ -1044,6 +1044,61 @@ def test_build_bundles_from_provider_emits_form144_sale_notice_rows(monkeypatch)
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_keeps_form144_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000104B",
+        cik="0001326380",
+        form_type="144",
+        accepted_at=datetime(2024, 5, 5, tzinfo=timezone.utc),
+        filing=FakeForm144Filing(
+            form="144",
+            securities_information=[
+                {"units_to_be_sold": 17087, "market_value": 1282000.0},
+            ],
+            securities_sold_past_3_months=[
+                {"amount_sold": 5000, "gross_proceeds": 410000.0},
+            ],
+            sections=["Remarks\nThe planned sale is for diversification."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "rule144_sale_plan_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-144-text-failure",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts if fact.value_numeric is not None}
+    assert facts[("proposed_sale_shares", "sale_notice:1")] == 17087.0
+    assert facts[("proposed_sale_market_value", "sale_notice:1")] == 1282000.0
+    assert facts[("shares_sold_past_3m", "sold_past_3m:1")] == 5000.0
+    assert facts[("market_value_sold_past_3m", "sold_past_3m:1")] == 410000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert ("rule144_sale_plan_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_preserves_form144_text_when_row_bundle_violates_subject_contract(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000104A",
