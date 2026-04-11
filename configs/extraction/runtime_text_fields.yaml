@@ -21,6 +21,20 @@ fields:
     cash_impact_usd_nullable: true
     dilution_pct_nullable: true
     one_time_cost_usd_nullable: true
+  span_policy:
+    anchor_headers:
+    - item
+    - current report
+    - press release
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
   implemented: true
 - field_name: beneficial_ownership_intent_quant
   route: owner
@@ -45,6 +59,19 @@ fields:
     allow_medium: true
     allow_long: true
     allow_unclear: true
+  span_policy:
+    anchor_headers:
+    - item 4
+    - purpose of transaction
+    min_tokens: 2
+    max_tokens: 180
+    preferred_tokens:
+    - 2
+    - 180
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
   implemented: true
 - field_name: amendment_scope_quant
   route: holding
@@ -65,4 +92,18 @@ fields:
     position_count_delta_nullable: true
     value_delta_usd_nullable: true
     restatement_flag_required: true
+  span_policy:
+    anchor_headers:
+    - amendment
+    - amendment note
+    - header
+    min_tokens: 2
+    max_tokens: 120
+    preferred_tokens:
+    - 5
+    - 120
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
   implemented: true

@@ -40,7 +40,7 @@ def test_runtime_numeric_specs_load_from_yaml_with_subject_mapping() -> None:
 
 def test_text_catalog_tracks_documented_and_implemented_fields() -> None:
     catalog = load_text_field_catalog()
-    specs = { (spec.route, spec.field_name) for spec in all_text_field_specs() }
+    specs = {(spec.route, spec.field_name): spec for spec in all_text_field_specs()}
 
     assert len(catalog) == 15
     implemented = {
@@ -48,8 +48,11 @@ def test_text_catalog_tracks_documented_and_implemented_fields() -> None:
         for entry in catalog
         if entry.implemented
     }
-    assert implemented == specs == {
+    assert implemented == set(specs) == {
         ("issuer", "current_event_quant"),
         ("owner", "beneficial_ownership_intent_quant"),
         ("holding", "amendment_scope_quant"),
     }
+    assert specs[("issuer", "current_event_quant")].span_policy is not None
+    assert specs[("owner", "beneficial_ownership_intent_quant")].span_policy is not None
+    assert specs[("holding", "amendment_scope_quant")].span_policy is not None
