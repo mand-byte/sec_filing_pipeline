@@ -44,6 +44,12 @@ def run_single_tick(
                     },
                 )
             except Exception as exc:
+                session = getattr(repo, "session", None)
+                if session is not None:
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
                 try:
                     repo.write_log(
                         run_id=run_id,
