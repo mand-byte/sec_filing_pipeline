@@ -652,3 +652,212 @@ def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> Non
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("delay_reason_quant", "document")] == "audit"
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_emits_mdna_outlook_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 9, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000013",
+        cik="0000789019",
+        form_type="S-1",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="S-1",
+            sections=["MD&A\nManagement expects revenue up in the next quarter."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-13",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("mdna_outlook_quant", "document")] == "up"
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_emits_risk_factor_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 9, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000014",
+        cik="0000789019",
+        form_type="10-K",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="10-K",
+            sections=["Risk Factors\nCybersecurity incidents may materially affect our operations."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-14",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("risk_factor_quant", "document")] == "Cybersecurity"
+
+
+def test_build_bundles_from_provider_emits_use_of_proceeds_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 10, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000010",
+        cik="0000789019",
+        form_type="S-1",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="S-1",
+            sections=["Use of Proceeds\nWe intend to use the proceeds for working capital."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-10",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("use_of_proceeds_quant", "document")] == "working capital"
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_emits_proxy_proposal_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 11, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000011",
+        cik="0000789019",
+        form_type="DEF 14A",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="DEF 14A",
+            sections=["Proposal 1\nThe board recommends election of directors at the annual meeting."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-11",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("proxy_proposal_quant", "document")] == "election"
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_emits_comp_policy_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 11, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000015",
+        cik="0000789019",
+        form_type="DEF 14A",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="DEF 14A",
+            sections=["CD&A\nThe company emphasizes pay for performance in executive compensation."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-15",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("comp_policy_quant", "document")] == "pay for performance"
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_emits_tender_going_private_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 12, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000012",
+        cik="0000789019",
+        form_type="SC TO-I",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="SC TO-I",
+            sections=["Summary term sheet\nThis transaction is a cash merger that the committee determined was fair."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-12",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("tender_going_private_quant", "document")] == "cash merger"
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)

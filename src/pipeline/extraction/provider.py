@@ -30,6 +30,22 @@ _ISSUER_VOTE_FIELDS = {
 }
 
 
+def _supports_text_extraction_surface(filing: object) -> bool:
+    for attr_name in ("sections", "parse", "text", "items"):
+        attr = getattr(filing, attr_name, None)
+        if callable(attr):
+            try:
+                value = attr()
+            except Exception:
+                continue
+            if value:
+                return True
+            continue
+        if attr:
+            return True
+    return False
+
+
 def build_bundles_from_provider(
     *,
     security: Any,
@@ -83,6 +99,53 @@ def build_bundles_from_provider(
         evidences: list[EvidenceInput] = []
         form_family = classify_form_family(envelope.form_type)
         if route == "owner" and form_family in {"3", "4", "5"}:
+            if _supports_text_extraction_surface(envelope.filing):
+                owner_text_specs = tuple(
+                    spec
+                    for spec in route_text_specs
+                    if form_family in spec.form_families
+                )
+                for spec in owner_text_specs:
+                    outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+                    if outcome["status"] != "ok":
+                        _safe_write_log(
+                            repo,
+                            run_id=run_id,
+                            route=route,
+                            stage="extract",
+                            level="ERROR",
+                            message="text field extraction failed",
+                            cik=envelope.cik,
+                            accession_no=envelope.accession_no,
+                            error_type=outcome["error_code"],
+                        )
+                        continue
+                    facts.append(
+                        FactInput(
+                            field_name=spec.field_name,
+                            subject_key="document",
+                            value_text=outcome["value_text"],
+                            value_json=outcome["value_json"],
+                            confidence=0.99,
+                        )
+                    )
+                    evidences.append(
+                        EvidenceInput(
+                            field_name=spec.field_name,
+                            subject_key="document",
+                            locator_kind=outcome["locator_kind"],
+                            source_span=outcome["source_span"],
+                            source_xpath=outcome["locator_path"],
+                            source_locator_json=outcome["source_locator_json"],
+                            source_heading_path_json=outcome["source_heading_path_json"],
+                            source_block_offsets_json=outcome["source_block_offsets_json"],
+                            adequacy_signals_json=outcome["adequacy_signals_json"],
+                            retry_history_json=outcome["retry_history_json"],
+                            raw_value=outcome["value_text"],
+                            normalized_value=outcome["value_text"],
+                        )
+                    )
+
             owner_outcome = build_owner_ownership_bundle(envelope=envelope, filing=filing)
             owner_bundle = owner_outcome.bundle
             if owner_bundle is None:
@@ -112,7 +175,12 @@ def build_bundles_from_provider(
                     error_type="NO_OWNER_ROWS_EXTRACTED",
                 )
                 continue
-            bundles.append(owner_bundle)
+            merged_bundle = FilingBundle(
+                filing=owner_bundle.filing,
+                facts=[*owner_bundle.facts, *facts],
+                evidences=[*owner_bundle.evidences, *evidences],
+            )
+            bundles.append(merged_bundle)
             continue
 
         if route == "owner" and form_family in {"13D", "13G"}:
@@ -161,6 +229,53 @@ def build_bundles_from_provider(
             evidences.extend(schedule_bundle.evidences)
 
         if route == "owner" and form_family == "144":
+            if _supports_text_extraction_surface(envelope.filing):
+                form144_text_specs = tuple(
+                    spec
+                    for spec in route_text_specs
+                    if form_family in spec.form_families
+                )
+                for spec in form144_text_specs:
+                    outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+                    if outcome["status"] != "ok":
+                        _safe_write_log(
+                            repo,
+                            run_id=run_id,
+                            route=route,
+                            stage="extract",
+                            level="ERROR",
+                            message="text field extraction failed",
+                            cik=envelope.cik,
+                            accession_no=envelope.accession_no,
+                            error_type=outcome["error_code"],
+                        )
+                        continue
+                    facts.append(
+                        FactInput(
+                            field_name=spec.field_name,
+                            subject_key="document",
+                            value_text=outcome["value_text"],
+                            value_json=outcome["value_json"],
+                            confidence=0.99,
+                        )
+                    )
+                    evidences.append(
+                        EvidenceInput(
+                            field_name=spec.field_name,
+                            subject_key="document",
+                            locator_kind=outcome["locator_kind"],
+                            source_span=outcome["source_span"],
+                            source_xpath=outcome["locator_path"],
+                            source_locator_json=outcome["source_locator_json"],
+                            source_heading_path_json=outcome["source_heading_path_json"],
+                            source_block_offsets_json=outcome["source_block_offsets_json"],
+                            adequacy_signals_json=outcome["adequacy_signals_json"],
+                            retry_history_json=outcome["retry_history_json"],
+                            raw_value=outcome["value_text"],
+                            normalized_value=outcome["value_text"],
+                        )
+                    )
+
             form144_outcome = build_owner_form144_bundle(envelope=envelope, filing=filing)
             form144_bundle = form144_outcome.bundle
             if form144_bundle is None:
@@ -198,7 +313,12 @@ def build_bundles_from_provider(
                     error_type="NO_OWNER_ROWS_EXTRACTED",
                 )
                 continue
-            bundles.append(form144_bundle)
+            merged_bundle = FilingBundle(
+                filing=form144_bundle.filing,
+                facts=[*form144_bundle.facts, *facts],
+                evidences=[*form144_bundle.evidences, *evidences],
+            )
+            bundles.append(merged_bundle)
             continue
 
         if route == "issuer" and form_family == "8-K":

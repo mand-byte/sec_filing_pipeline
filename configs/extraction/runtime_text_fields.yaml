@@ -36,6 +36,75 @@ fields:
     avoid:
     - table of contents
   implemented: true
+- field_name: mdna_outlook_quant
+  route: issuer
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - 6-K-financial
+  - S-1
+  - 424B4
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - md&a
+  - operating and financial review
+  - prospects
+  regex_patterns:
+  - (?i)\b(up|down|flat)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - md&a
+    - operating and financial review
+    - prospects
+    min_tokens: 1
+    max_tokens: 180
+    preferred_tokens:
+    - 1
+    - 180
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: risk_factor_quant
+  route: issuer
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+  - SC TO-I
+  - SC 13E3
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - risk factors
+  - risk considerations
+  regex_patterns:
+  - (?i)\b(cybersecurity|litigation|regulatory|competition)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - risk factors
+    - risk considerations
+    min_tokens: 1
+    max_tokens: 180
+    preferred_tokens:
+    - 1
+    - 180
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
 - field_name: beneficial_ownership_intent_quant
   route: owner
   form_families:
@@ -102,6 +171,121 @@ fields:
     avoid:
     - table of contents
   implemented: true
+- field_name: use_of_proceeds_quant
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - use of proceeds
+  - proceeds
+  regex_patterns:
+  - (?i)\b(working capital|debt repayment|acquisition|general corporate)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - use of proceeds
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: proxy_proposal_quant
+  route: issuer
+  form_families:
+  - DEF 14A
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - proposal
+  - board recommends
+  regex_patterns:
+  - (?i)\b(election|say on pay|equity plan|auditor)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - proposal
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: comp_policy_quant
+  route: issuer
+  form_families:
+  - DEF 14A
+  - S-1
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - cd&a
+  - compensation discussion and analysis
+  - executive compensation
+  regex_patterns:
+  - (?i)\b(pay for performance|fixed pay|variable pay|equity pay)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - cd&a
+    - compensation discussion and analysis
+    min_tokens: 1
+    max_tokens: 180
+    preferred_tokens:
+    - 1
+    - 180
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: tender_going_private_quant
+  route: issuer
+  form_families:
+  - SC TO-I
+  - SC 13E3
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - summary term sheet
+  - special factors
+  - fairness
+  regex_patterns:
+  - (?i)\b(cash merger|self tender|exchange offer|reverse split)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - summary term sheet
+    - special factors
+    min_tokens: 1
+    max_tokens: 180
+    preferred_tokens:
+    - 1
+    - 180
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
 - field_name: source_of_funds_quant
   route: owner
   form_families:
@@ -121,6 +305,93 @@ fields:
     anchor_headers:
     - item 3
     - source and amount of funds
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: insider_transaction_quant
+  route: owner
+  form_families:
+  - '4'
+  - '5'
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - remarks
+  - transaction
+  - footnote
+  regex_patterns:
+  - (?i)\b(buy|sell|exercise|award|withholding|gift|conversion)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - remarks
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: insider_role_ownership_structure_quant
+  route: owner
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - remarks
+  - director
+  - officer
+  regex_patterns:
+  - (?i)\b(director|officer|ten percent holder)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - remarks
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: rule144_sale_plan_quant
+  route: owner
+  form_families:
+  - '144'
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - remarks
+  - sale plan
+  - sale reason
+  regex_patterns:
+  - (?i)\b(liquidity|diversification|tax|estate|pledge release)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - remarks
     min_tokens: 1
     max_tokens: 160
     preferred_tokens:

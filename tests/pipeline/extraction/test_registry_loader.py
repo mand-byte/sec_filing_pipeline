@@ -49,16 +49,34 @@ def test_text_catalog_tracks_documented_and_implemented_fields() -> None:
         if entry.implemented
     }
     assert implemented == set(specs) == {
+        ("issuer", "mdna_outlook_quant"),
+        ("issuer", "risk_factor_quant"),
         ("issuer", "current_event_quant"),
         ("issuer", "delay_reason_quant"),
+        ("issuer", "use_of_proceeds_quant"),
+        ("issuer", "proxy_proposal_quant"),
+        ("issuer", "comp_policy_quant"),
+        ("issuer", "tender_going_private_quant"),
         ("owner", "beneficial_ownership_intent_quant"),
+        ("owner", "insider_transaction_quant"),
+        ("owner", "insider_role_ownership_structure_quant"),
+        ("owner", "rule144_sale_plan_quant"),
         ("owner", "source_of_funds_quant"),
         ("holding", "manager_structure_quant"),
         ("holding", "amendment_scope_quant"),
     }
+    assert specs[("issuer", "mdna_outlook_quant")].span_policy is not None
+    assert specs[("issuer", "risk_factor_quant")].span_policy is not None
     assert specs[("issuer", "current_event_quant")].span_policy is not None
     assert specs[("issuer", "delay_reason_quant")].span_policy is not None
+    assert specs[("issuer", "use_of_proceeds_quant")].span_policy is not None
+    assert specs[("issuer", "proxy_proposal_quant")].span_policy is not None
+    assert specs[("issuer", "comp_policy_quant")].span_policy is not None
+    assert specs[("issuer", "tender_going_private_quant")].span_policy is not None
     assert specs[("owner", "beneficial_ownership_intent_quant")].span_policy is not None
+    assert specs[("owner", "insider_transaction_quant")].span_policy is not None
+    assert specs[("owner", "insider_role_ownership_structure_quant")].span_policy is not None
+    assert specs[("owner", "rule144_sale_plan_quant")].span_policy is not None
     assert specs[("owner", "source_of_funds_quant")].span_policy is not None
     assert specs[("holding", "manager_structure_quant")].span_policy is not None
     assert specs[("holding", "amendment_scope_quant")].span_policy is not None

@@ -49,12 +49,16 @@ class FakeForm4:
 
 
 class FakeForm4Filing:
-    def __init__(self, transactions: list[FakeTransaction], derivative_rows: list[dict[str, object]] | None = None, non_derivative_holding_rows: list[dict[str, object]] | None = None, derivative_holding_rows: list[dict[str, object]] | None = None, form: str = "4"):
+    def __init__(self, transactions: list[FakeTransaction], derivative_rows: list[dict[str, object]] | None = None, non_derivative_holding_rows: list[dict[str, object]] | None = None, derivative_holding_rows: list[dict[str, object]] | None = None, form: str = "4", sections: list[str] | None = None):
         self.form = form
         self._form4 = FakeForm4(transactions, derivative_rows, non_derivative_holding_rows, derivative_holding_rows)
+        self._sections = sections or []
 
     def obj(self) -> FakeForm4:
         return self._form4
+
+    def sections(self) -> list[str]:
+        return self._sections
 
 
 class FakeRepo:
@@ -79,15 +83,19 @@ class FakeXmlFiling:
 
 
 class FakeForm144Filing:
-    def __init__(self, *, form: str, securities_information: list[dict[str, object]], securities_sold_past_3_months: list[dict[str, object]]):
+    def __init__(self, *, form: str, securities_information: list[dict[str, object]], securities_sold_past_3_months: list[dict[str, object]], sections: list[str] | None = None):
         self.form = form
         self._form144 = SimpleNamespace(
             securities_information=pd.DataFrame(securities_information),
             securities_sold_past_3_months=pd.DataFrame(securities_sold_past_3_months),
         )
+        self._sections = sections or []
 
     def obj(self) -> SimpleNamespace:
         return self._form144
+
+    def sections(self) -> list[str]:
+        return self._sections
 
 
 def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -> None:
@@ -105,6 +113,7 @@ def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -
                 {"UnderlyingShares": 500.0, "ExercisePrice": 7.5},
                 {"UnderlyingShares": 250.0, "ExercisePrice": 6.25},
             ],
+            sections=["Remarks\nThe reporting person is a director and this was a buy transaction."],
         ),
     )
 
@@ -137,6 +146,9 @@ def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -
     assert facts[("derivative_underlying_shares", "dtxn:2")] == 250.0
     assert facts[("exercise_or_conversion_price", "dtxn:1")] == 7.5
     assert facts[("exercise_or_conversion_price", "dtxn:2")] == 6.25
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("insider_transaction_quant", "document")] == "buy"
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
 
     evidence_keys = {(e.field_name, e.subject_key) for e in bundle.evidences}
     assert ("transaction_price_per_share", "txn:1") in evidence_keys
@@ -335,6 +347,7 @@ def test_build_bundles_from_provider_emits_form144_sale_notice_rows(monkeypatch)
             securities_sold_past_3_months=[
                 {"amount_sold": 5000, "gross_proceeds": 410000.0},
             ],
+            sections=["Remarks\nThe planned sale is for diversification."],
         ),
     )
 
@@ -361,6 +374,8 @@ def test_build_bundles_from_provider_emits_form144_sale_notice_rows(monkeypatch)
     assert facts[("proposed_sale_market_value", "sale_notice:1")] == 1282000.0
     assert facts[("shares_sold_past_3m", "sold_past_3m:1")] == 5000.0
     assert facts[("market_value_sold_past_3m", "sold_past_3m:1")] == 410000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("rule144_sale_plan_quant", "document")] == "diversification"
     assert repo.logs == []
 
 
