@@ -1541,6 +1541,72 @@ def test_build_bundles_from_provider_emits_sc_13e3_deal_numeric_fields(monkeypat
     assert evidence[("deal_value", "document")].source_section == "Special factors"
 
 
+def test_build_bundles_from_provider_logs_invalid_sc_13e3_deal_contract_without_blocking_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 15, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000021A",
+        cik="0000789019",
+        form_type="SC 13E3",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="SC 13E3",
+            sections=[
+                "Special factors\nThis transaction is a cash merger that the committee determined was fair. Deal value of $9,500,000. Cash consideration per share was $19.00. Financing commitment of $4,000,000. Break-up fee of $350,000."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_deal_bundle(*, filing, text_sections):
+        del text_sections
+        return FilingBundle(
+            filing=filing,
+            facts=[
+                FactInput(
+                    field_name="offer_price_per_share",
+                    subject_key="document",
+                    value_numeric=19.0,
+                    confidence=0.99,
+                )
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name="offer_price_per_share",
+                    subject_key="document",
+                    locator_kind="parse_text",
+                    source_span="deal_text",
+                    source_section="Special factors",
+                    raw_value="19.0",
+                    normalized_value="19.0",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(provider_module, "_build_issuer_deal_text_facts", build_invalid_deal_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-sc-13e3-invalid-deal-contract",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("tender_going_private_quant", "document")] == "cash merger"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("offer_price_per_share", "document") not in numeric_fields
+    assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_8k_deal_numeric_fields(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 16, tzinfo=timezone.utc)
     filing = FakeEightKFiling(
