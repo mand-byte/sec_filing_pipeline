@@ -9,6 +9,7 @@ import typer
 from sqlalchemy import func, select
 
 from src.config import Settings
+from src.db.rollout import describe_rollout_assets
 from src.db.models import FilingAttempt, PipelineLog
 from src.db.repositories import PipelineRepository
 from src.db.session import get_session_factory
@@ -48,6 +49,12 @@ from src.pipeline.universe import SecurityUniverseRow, load_security_universe
 
 
 app = typer.Typer(help="SEC filing pipeline CLI for running phase 1 tasks.")
+
+
+@app.command("db-rollout-assets")
+def db_rollout_assets() -> None:
+    """List checked-in DB rollout assets for existing-database migrations."""
+    typer.echo(json.dumps(describe_rollout_assets(), ensure_ascii=False, indent=2))
 
 
 def _coerce_numeric_value(value: object) -> float | None:

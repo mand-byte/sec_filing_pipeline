@@ -1,0 +1,24 @@
+schema_id: comp_policy_quant
+comparison_rule: bounded numeric + boolean comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- fixed_pay_pct
+properties:
+  fixed_pay_pct:
+    type: number
+    minimum: 0
+    maximum: 100
+  variable_pay_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100
+  equity_pay_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100
+  pay_for_performance:
+    type: boolean
+    nullable: true

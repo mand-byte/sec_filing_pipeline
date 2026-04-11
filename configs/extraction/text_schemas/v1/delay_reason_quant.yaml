@@ -1,0 +1,29 @@
+schema_id: delay_reason_quant
+comparison_rule: exact enum/boolean + nullable integer comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- reason_type
+properties:
+  reason_type:
+    type: string
+    enum:
+    - audit
+    - transaction
+    - valuation
+    - system
+    - other
+  severity:
+    type: string
+    nullable: true
+    enum:
+    - low
+    - medium
+    - high
+  expected_days:
+    type: integer
+    nullable: true
+    minimum: 0
+  needs_extension:
+    type: boolean
+    nullable: true

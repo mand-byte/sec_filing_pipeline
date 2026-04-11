@@ -15,6 +15,7 @@ fields:
   - (?i)\b(event|announcement|transaction|agreement)\b
   - (?i)\b(material\s+definitive\s+agreement|results\s+of\s+operations|financial\s+condition)\b
   output_kind: text
+  output_schema: v1/current_event_quant
   qa_rules:
     materiality_score_min: 0
     materiality_score_max: 5
@@ -55,6 +56,7 @@ fields:
   regex_patterns:
   - (?i)\b(up|down|flat)\b
   output_kind: text
+  output_schema: v1/mdna_outlook_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -90,6 +92,7 @@ fields:
   regex_patterns:
   - (?i)\b(cybersecurity|litigation|regulatory|competition)\b
   output_kind: text
+  output_schema: v1/risk_factor_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -121,6 +124,7 @@ fields:
   - (?i)\b(passive|engaged|activist|control)\b
   - (?i)\b(board\s+seat|proxy\s+fight|group\s+formed|strategic\s+alternatives|merger)\b
   output_kind: text
+  output_schema: v1/beneficial_ownership_intent_quant
   qa_rules:
     require_stance_enum: true
     require_group_flag: true
@@ -157,6 +161,7 @@ fields:
   regex_patterns:
   - (?i)\b(audit|transaction|valuation|system)\b
   output_kind: text
+  output_schema: v1/delay_reason_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -185,6 +190,7 @@ fields:
   regex_patterns:
   - (?i)\b(working capital|debt repayment|acquisition|general corporate)\b
   output_kind: text
+  output_schema: v1/use_of_proceeds_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -212,6 +218,7 @@ fields:
   regex_patterns:
   - (?i)\b(election|say on pay|equity plan|auditor)\b
   output_kind: text
+  output_schema: v1/proxy_proposal_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -241,6 +248,7 @@ fields:
   regex_patterns:
   - (?i)\b(pay for performance|fixed pay|variable pay|equity pay)\b
   output_kind: text
+  output_schema: v1/comp_policy_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -271,6 +279,7 @@ fields:
   regex_patterns:
   - (?i)\b(cash merger|self tender|exchange offer|reverse split)\b
   output_kind: text
+  output_schema: v1/tender_going_private_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -300,6 +309,7 @@ fields:
   regex_patterns:
   - (?i)\b(cash|margin loan|debt|seller financing)\b
   output_kind: text
+  output_schema: v1/source_of_funds_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -330,6 +340,7 @@ fields:
   regex_patterns:
   - (?i)\b(buy|sell|exercise|award|withholding|gift|conversion)\b
   output_kind: text
+  output_schema: v1/insider_transaction_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -360,6 +371,7 @@ fields:
   regex_patterns:
   - (?i)\b(director|officer|ten percent holder)\b
   output_kind: text
+  output_schema: v1/insider_role_ownership_structure_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -388,6 +400,7 @@ fields:
   regex_patterns:
   - (?i)\b(liquidity|diversification|tax|estate|pledge release)\b
   output_kind: text
+  output_schema: v1/rule144_sale_plan_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -416,6 +429,7 @@ fields:
   regex_patterns:
   - (?i)\b(holdings|notice|combination)\b
   output_kind: text
+  output_schema: v1/manager_structure_quant
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -445,6 +459,7 @@ fields:
   - (?i)\b(amendment|restatement|correction|addition|deletion)\b
   - (?i)\b(position\s+count\s+delta|value\s+delta|restatement\s+flag)\b
   output_kind: text
+  output_schema: v1/amendment_scope_quant
   qa_rules:
     position_count_delta_nullable: true
     value_delta_usd_nullable: true

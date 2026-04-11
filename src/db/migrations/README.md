@@ -11,3 +11,12 @@ Current required rollout:
 
 Apply the SQL before deploying the corresponding application code to an existing
 PostgreSQL database.
+
+Operational notes:
+
+- The checked-in SQL uses `IF NOT EXISTS` guards so re-applying the same rollout
+  is safe on existing databases.
+- Apply the SQL in filename order from this directory.
+- Rollback is manual: remove or revert the deployed application code first, then
+  drop the added columns/table/indexes only after confirming no production data
+  depends on them.

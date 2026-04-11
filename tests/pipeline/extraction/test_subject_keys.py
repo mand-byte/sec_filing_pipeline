@@ -18,6 +18,7 @@ def test_subject_key_rules_load_configured_prefixes() -> None:
 
 
 def test_subject_type_for_key_uses_configured_prefixes() -> None:
+    assert subject_type_for_key(route="issuer", subject_key="security:1") == "filing"
     assert subject_type_for_key(route="issuer", subject_key="proposal:1") == "proposal"
     assert subject_type_for_key(route="owner", subject_key="txn:1") == "transaction_row"
     assert subject_type_for_key(route="owner", subject_key="dtxn:2") == "transaction_row"
@@ -30,6 +31,7 @@ def test_subject_type_for_key_uses_configured_prefixes() -> None:
 
 
 def test_subject_key_has_type_matches_same_config() -> None:
+    assert subject_key_has_type(route="issuer", subject_key="security:1", subject_type="filing")
     assert subject_key_has_type(route="issuer", subject_key="proposal:1", subject_type="proposal")
     assert subject_key_has_type(route="owner", subject_key="sale_notice:1", subject_type="form144_notice")
     assert not subject_key_has_type(route="holding", subject_key="document", subject_type="holding_position")

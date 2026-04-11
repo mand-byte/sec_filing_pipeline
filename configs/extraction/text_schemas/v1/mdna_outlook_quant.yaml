@@ -1,0 +1,23 @@
+schema_id: mdna_outlook_quant
+comparison_rule: fieldwise exact enum + bounded numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- direction
+properties:
+  direction:
+    type: string
+    enum:
+    - up
+    - down
+    - flat
+    - mixed
+    - unclear
+  confidence_score:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 1
+  summary:
+    type: string
+    nullable: true

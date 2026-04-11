@@ -1,0 +1,28 @@
+schema_id: proxy_proposal_quant
+comparison_rule: exact enum + nullable numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- proposal_type
+properties:
+  proposal_type:
+    type: string
+    enum:
+    - election
+    - say_on_pay
+    - equity_plan
+    - auditor
+    - other
+  board_recommendation:
+    type: string
+    nullable: true
+    enum:
+    - for
+    - against
+    - abstain
+    - unclear
+  support_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100

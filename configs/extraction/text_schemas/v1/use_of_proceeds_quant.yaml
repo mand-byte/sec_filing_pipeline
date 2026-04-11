@@ -1,0 +1,21 @@
+schema_id: use_of_proceeds_quant
+comparison_rule: fieldwise bounded numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- working_capital_pct
+properties:
+  working_capital_pct:
+    type: number
+    minimum: 0
+    maximum: 100
+  debt_repayment_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100
+  acquisition_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100

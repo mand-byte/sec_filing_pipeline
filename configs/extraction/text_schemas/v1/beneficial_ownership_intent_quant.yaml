@@ -1,0 +1,26 @@
+schema_id: beneficial_ownership_intent_quant
+comparison_rule: exact enum/boolean comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- stance
+properties:
+  stance:
+    type: string
+    enum:
+    - passive
+    - engaged
+    - activist
+    - control
+    - unclear
+  group_formed:
+    type: boolean
+    nullable: true
+  horizon:
+    type: string
+    nullable: true
+    enum:
+    - short
+    - medium
+    - long
+    - unclear

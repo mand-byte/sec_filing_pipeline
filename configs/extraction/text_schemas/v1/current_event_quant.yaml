@@ -1,0 +1,28 @@
+schema_id: current_event_quant
+comparison_rule: exact enum + nullable numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- event_type
+properties:
+  event_type:
+    type: string
+    enum:
+    - agreement
+    - results
+    - financing
+    - governance
+    - other
+  materiality_score:
+    type: integer
+    nullable: true
+    minimum: 0
+    maximum: 5
+  cash_impact_usd:
+    type: number
+    nullable: true
+  dilution_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100

@@ -4,6 +4,7 @@ from functools import lru_cache
 
 from src.pipeline.extraction._config import load_extraction_config
 from src.pipeline.extraction.text_contracts import SpanPolicy, TextFieldCatalogEntry, TextFieldSpec
+from src.pipeline.extraction.text_schemas import load_text_schema
 
 
 @lru_cache(maxsize=None)
@@ -58,6 +59,10 @@ def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
                 must_include=tuple(str(value) for value in span_policy_raw.get("must_include", ())),
                 avoid=tuple(str(value) for value in span_policy_raw.get("avoid", ())),
             )
+        output_schema = raw_entry.get("output_schema")
+        output_schema_ref = str(output_schema).strip() if isinstance(output_schema, str) and output_schema.strip() else None
+        if output_schema_ref is not None:
+            load_text_schema(output_schema_ref)
         specs.append(
             TextFieldSpec(
                 field_name=str(raw_entry["field_name"]),
@@ -68,7 +73,7 @@ def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
                 regex_patterns=tuple(str(pattern) for pattern in raw_entry.get("regex_patterns", ())),
                 output_kind=str(raw_entry.get("output_kind", "text")),
                 qa_rules=dict(raw_entry.get("qa_rules", {})),
-                output_schema=raw_entry.get("output_schema"),
+                output_schema=output_schema_ref,
                 span_policy=span_policy,
                 implemented=implemented,
             )

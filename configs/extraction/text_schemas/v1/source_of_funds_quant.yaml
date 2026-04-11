@@ -1,0 +1,21 @@
+schema_id: source_of_funds_quant
+comparison_rule: bounded numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- cash_pct
+properties:
+  cash_pct:
+    type: number
+    minimum: 0
+    maximum: 100
+  debt_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100
+  other_pct:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 100

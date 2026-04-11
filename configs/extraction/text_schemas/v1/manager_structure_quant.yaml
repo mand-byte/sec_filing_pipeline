@@ -1,0 +1,20 @@
+schema_id: manager_structure_quant
+comparison_rule: exact enum/boolean + integer comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- report_type
+properties:
+  report_type:
+    type: string
+    enum:
+    - single_manager
+    - multiple_manager
+    - other
+  manager_count:
+    type: integer
+    nullable: true
+    minimum: 0
+  discretion_shared:
+    type: boolean
+    nullable: true

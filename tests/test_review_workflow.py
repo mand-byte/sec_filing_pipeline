@@ -81,6 +81,63 @@ def _seed_review_task(session: Session) -> None:
     )
 
 
+def _issuer_security_line_filing() -> FilingRecord:
+    return FilingRecord(
+        accession_no="0000000000-24-000021",
+        cik="0000789019",
+        ticker="MSFT",
+        form_type="S-1",
+        filed_at=datetime(2024, 5, 3, tzinfo=timezone.utc),
+        accepted_at=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        period_end=datetime(2024, 3, 31, tzinfo=timezone.utc),
+        is_amendment=False,
+        amendment_no=None,
+    )
+
+
+def _seed_security_line_review_tasks(session: Session) -> None:
+    PersistenceService(session).persist_filing_bundle(
+        filing=_issuer_security_line_filing(),
+        route="issuer",
+        facts=[
+            FactInput(
+                field_name="offering_price_per_share",
+                subject_key="security:1",
+                value_numeric=10.0,
+                confidence=0.49,
+                review_reason="first_seen_template",
+            ),
+            FactInput(
+                field_name="offering_price_per_share",
+                subject_key="security:2",
+                value_numeric=12.0,
+                confidence=0.49,
+                review_reason="first_seen_template",
+            ),
+        ],
+        evidences=[
+            EvidenceInput(
+                field_name="offering_price_per_share",
+                subject_key="security:1",
+                locator_kind="section",
+                source_span="Use of Proceeds:0:4",
+                source_section="Use of Proceeds",
+                raw_value="10.00",
+                normalized_value="10.0",
+            ),
+            EvidenceInput(
+                field_name="offering_price_per_share",
+                subject_key="security:2",
+                locator_kind="section",
+                source_span="Use of Proceeds:10:14",
+                source_section="Use of Proceeds",
+                raw_value="12.00",
+                normalized_value="12.0",
+            ),
+        ],
+    )
+
+
 def test_review_workflow_service_lists_and_shows_task_detail() -> None:
     factory = _session_factory()
     with factory() as session:
@@ -131,7 +188,7 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         updated = service.resolve_task(
             task_id=task.task_id,
             decision="corrected",
-            reviewer="alice",
+            reviewer="  alice  ",
             error_code="unit_scaling",
             corrected_json=json.dumps({"value_numeric": 125.5, "value_unit": "shares"}),
             comment="corrected transaction size",
@@ -151,6 +208,7 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         assert fact.value_unit == "shares"
         assert fact.confidence == 1.0
         assert decision.decision == "CORRECTED"
+        assert decision.reviewer == "alice"
         assert decision.error_code == "unit_scaling"
         assert task.status == "corrected"
         assert task.assignee == "alice"
@@ -200,6 +258,39 @@ def test_review_workflow_service_reject_removes_fact() -> None:
         assert session.query(GoldenTruth).all() == []
 
 
+def test_review_workflow_service_not_applicable_captures_fix_once_regression_seed() -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_review_task(session)
+
+    with factory() as session:
+        service = ReviewWorkflowService(session)
+        task = service.list_tasks()[0]
+        updated = service.resolve_task(
+            task_id=task.task_id,
+            decision="not_applicable",
+            reviewer="bob",
+            error_code="field_not_found",
+            comment="field does not apply to this filing",
+        )
+        assert updated.status == "not_applicable"
+
+    with factory() as session:
+        assert session.query(ExtractedFact).all() == []
+        decision = session.query(ReviewDecision).one()
+        golden_truth = session.query(GoldenTruth).one()
+        golden_packet = session.query(GoldenReviewPacket).one()
+        assert decision.decision == "NOT_APPLICABLE"
+        assert decision.error_code == "field_not_found"
+        assert golden_truth.is_applicable is False
+        assert golden_truth.value_numeric is None
+        assert golden_truth.value_text is None
+        assert '"decision": "not_applicable"' in golden_packet.packet_json
+        assert '"error_code": "field_not_found"' in golden_packet.packet_json
+        assert '"source_heading_path_json": "[\\"Ownership Table\\"]"' in golden_packet.packet_json
+        assert '"selection_trace_json": "{\\"selected_value\\":\\"100\\"}"' in golden_packet.packet_json
+
+
 def test_review_workflow_service_rejects_non_accept_without_error_code() -> None:
     factory = _session_factory()
     with factory() as session:
@@ -218,6 +309,32 @@ def test_review_workflow_service_rejects_non_accept_without_error_code() -> None
             assert "error-code" in str(exc)
         else:  # pragma: no cover - defensive branch
             raise AssertionError("expected missing error_code to fail")
+
+
+def test_review_workflow_service_requires_non_blank_reviewer() -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_review_task(session)
+
+    with factory() as session:
+        service = ReviewWorkflowService(session)
+        task = service.list_tasks()[0]
+        try:
+            service.resolve_task(
+                task_id=task.task_id,
+                decision="accept",
+                reviewer="   ",
+            )
+        except Exception as exc:
+            assert "reviewer is required" in str(exc)
+        else:  # pragma: no cover - defensive branch
+            raise AssertionError("expected blank reviewer to fail")
+
+    with factory() as session:
+        task = session.query(ReviewTask).one()
+        assert task.status == "open"
+        assert task.assignee is None
+        assert session.query(ReviewDecision).count() == 0
 
 
 def test_review_workflow_service_rejects_unknown_error_code() -> None:
@@ -239,6 +356,33 @@ def test_review_workflow_service_rejects_unknown_error_code() -> None:
             assert "error_code must be one of:" in str(exc)
         else:  # pragma: no cover - defensive branch
             raise AssertionError("expected invalid error_code to fail")
+
+
+def test_review_workflow_preserves_security_line_subject_keys_for_filing_subject_type() -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_security_line_review_tasks(session)
+
+    with factory() as session:
+        service = ReviewWorkflowService(session)
+        tasks = sorted(service.list_tasks(route="issuer"), key=lambda task: task.subject_key)
+        assert [task.subject_key for task in tasks] == ["security:1", "security:2"]
+        for task in tasks:
+            service.resolve_task(
+                task_id=task.task_id,
+                decision="corrected",
+                reviewer="alice",
+                error_code="row_match_error",
+                corrected_json=json.dumps({"value_numeric": 11.0}),
+            )
+
+    with factory() as session:
+        subjects = session.query(GoldenSubject).order_by(GoldenSubject.subject_key.asc()).all()
+        truths = session.query(GoldenTruth).order_by(GoldenTruth.subject_id.asc()).all()
+
+        assert [subject.subject_key for subject in subjects] == ["security:1", "security:2"]
+        assert {subject.subject_type for subject in subjects} == {"filing"}
+        assert len(truths) == 2
 
 
 def test_normalize_review_error_code_accepts_runtime_text_failures() -> None:

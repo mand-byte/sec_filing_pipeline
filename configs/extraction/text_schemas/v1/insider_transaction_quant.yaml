@@ -1,0 +1,26 @@
+schema_id: insider_transaction_quant
+comparison_rule: exact enum/boolean comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- transaction_type
+properties:
+  transaction_type:
+    type: string
+    enum:
+    - purchase
+    - sale
+    - award
+    - exercise
+    - other
+  ownership_form:
+    type: string
+    nullable: true
+    enum:
+    - direct
+    - indirect
+    - mixed
+    - unclear
+  is_derivative:
+    type: boolean
+    nullable: true

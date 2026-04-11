@@ -4,6 +4,7 @@ from collections import Counter
 
 from src.pipeline.extraction.registry import all_numeric_field_specs, load_numeric_field_catalog
 from src.pipeline.extraction.text_registry import all_text_field_specs, load_text_field_catalog
+from src.pipeline.extraction.text_schemas import load_text_schema
 
 
 def test_numeric_catalog_freezes_53_fields_and_subject_type_distribution() -> None:
@@ -80,3 +81,10 @@ def test_text_catalog_tracks_documented_and_implemented_fields() -> None:
     assert specs[("owner", "source_of_funds_quant")].span_policy is not None
     assert specs[("holding", "manager_structure_quant")].span_policy is not None
     assert specs[("holding", "amendment_scope_quant")].span_policy is not None
+    assert specs[("issuer", "current_event_quant")].output_schema == "v1/current_event_quant"
+    assert specs[("owner", "beneficial_ownership_intent_quant")].output_schema == "v1/beneficial_ownership_intent_quant"
+    assert specs[("holding", "amendment_scope_quant")].output_schema == "v1/amendment_scope_quant"
+
+    schema = load_text_schema("v1/current_event_quant")
+    assert schema.schema_id == "current_event_quant"
+    assert schema.root.type == "object"

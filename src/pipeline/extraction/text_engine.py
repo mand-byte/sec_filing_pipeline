@@ -3,16 +3,25 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Literal, TypedDict
 
 from src.pipeline.extraction.text_contracts import SpanPolicy, TextFieldSpec, TextLocatorKind
 from src.pipeline.extraction.text_locators import run_text_locator
+from src.pipeline.extraction.text_normalization import (
+    NormalizationFailure,
+    SelectedSpan,
+    SpanNormalizer,
+    UnavailableSpanNormalizer,
+    merge_selection_trace,
+)
+from src.pipeline.extraction.text_schemas import validate_text_schema_value
 
 
 class TextExtractionOk(TypedDict):
     status: Literal["ok"]
-    value_text: str
-    value_json: None
+    value_text: str | None
+    value_json: str | None
     locator_kind: TextLocatorKind
     locator_path: str
     source_span: str
@@ -35,6 +44,9 @@ TextExtractionOutcome = TextExtractionOk | TextExtractionFailure
 
 
 class TextExtractionEngine:
+    def __init__(self, *, normalizer: SpanNormalizer | None = None):
+        self._normalizer = normalizer
+
     def _heading_path_json(self, *, window_hit: Mapping[str, object]) -> str:
         locator_path = str(window_hit["locator_path"])
         heading = locator_path
@@ -133,10 +145,25 @@ class TextExtractionEngine:
 
         return None
 
-    def extract_field(self, *, filing: object, field_spec: TextFieldSpec) -> TextExtractionOutcome:
-        if field_spec.output_kind != "text":
-            return {"status": "error", "error_code": "NORMALIZATION_FAILED"}
+    def _selected_span_ok(self, *, selected_span: SelectedSpan, value_json: str | None = None) -> TextExtractionOk:
+        return {
+            "status": "ok",
+            "value_text": selected_span.value_text,
+            "value_json": value_json,
+            "locator_kind": selected_span.locator_kind,
+            "locator_path": selected_span.locator_path,
+            "source_span": selected_span.source_span,
+            "source_section": selected_span.source_section,
+            "source_item_no": selected_span.source_item_no,
+            "source_locator_json": selected_span.source_locator_json,
+            "source_heading_path_json": selected_span.source_heading_path_json,
+            "source_block_offsets_json": selected_span.source_block_offsets_json,
+            "adequacy_signals_json": selected_span.adequacy_signals_json,
+            "retry_history_json": selected_span.retry_history_json,
+            "selection_trace_json": selected_span.selection_trace_json,
+        }
 
+    def _select_candidate(self, *, filing: object, field_spec: TextFieldSpec) -> SelectedSpan | TextExtractionFailure:
         best_failure: str = "PATTERN_NOT_MATCHED"
         failure_priority = {
             "PATTERN_NOT_MATCHED": 0,
@@ -216,16 +243,14 @@ class TextExtractionEngine:
                             body_end = max(0, span_end - section_body_offset)
                             source_span = f"{body_start}:{body_end}"
 
-                return {
-                    "status": "ok",
-                    "value_text": value_text,
-                    "value_json": None,
-                    "locator_kind": window_hit["locator_kind"],
-                    "locator_path": window_hit["locator_path"],
-                    "source_span": source_span,
-                    "source_section": window_hit.get("source_section"),
-                    "source_item_no": window_hit.get("source_item_no"),
-                    "source_locator_json": json.dumps(
+                return SelectedSpan(
+                    value_text=value_text,
+                    locator_kind=window_hit["locator_kind"],
+                    locator_path=window_hit["locator_path"],
+                    source_span=source_span,
+                    source_section=window_hit.get("source_section"),
+                    source_item_no=window_hit.get("source_item_no"),
+                    source_locator_json=json.dumps(
                         {
                             "locator_kind": window_hit["locator_kind"],
                             "locator_path": window_hit["locator_path"],
@@ -236,23 +261,23 @@ class TextExtractionEngine:
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
-                    "source_heading_path_json": self._heading_path_json(window_hit=window_hit),
-                    "source_block_offsets_json": self._block_offsets_json(
+                    source_heading_path_json=self._heading_path_json(window_hit=window_hit),
+                    source_block_offsets_json=self._block_offsets_json(
                         window_hit=window_hit,
                         span_start=span_start,
                         span_end=span_end,
                         source_start=source_start,
                         source_end=source_end,
                     ),
-                    "adequacy_signals_json": self._adequacy_signals_json(
+                    adequacy_signals_json=self._adequacy_signals_json(
                         field_spec=field_spec,
                         window_text=window_text,
                         pattern=pattern,
                         distinct_match_count=len(distinct_matches),
                         value_text=value_text,
                     ),
-                    "retry_history_json": "[]",
-                    "selection_trace_json": json.dumps(
+                    retry_history_json="[]",
+                    selection_trace_json=json.dumps(
                         {
                             "pattern": pattern,
                             "distinct_match_count": len(distinct_matches),
@@ -263,9 +288,61 @@ class TextExtractionEngine:
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
-                }
+                )
 
         if not saw_window:
             return {"status": "error", "error_code": "WINDOW_NOT_FOUND"}
 
         return {"status": "error", "error_code": best_failure}
+
+    def extract_field(self, *, filing: object, field_spec: TextFieldSpec) -> TextExtractionOutcome:
+        selection = self._select_candidate(filing=filing, field_spec=field_spec)
+        if isinstance(selection, dict):
+            return selection
+
+        if field_spec.output_kind == "text":
+            return self._selected_span_ok(selected_span=selection)
+        if field_spec.output_kind != "json" or not field_spec.output_schema:
+            return {"status": "error", "error_code": "NORMALIZATION_FAILED"}
+
+        normalizer = self._normalizer or UnavailableSpanNormalizer()
+        normalization = normalizer.normalize(
+            field_spec=field_spec,
+            schema_ref=field_spec.output_schema,
+            selected_span=selection,
+        )
+        if isinstance(normalization, NormalizationFailure):
+            return {"status": "error", "error_code": normalization.error_code}
+
+        validation = validate_text_schema_value(
+            schema_ref=field_spec.output_schema,
+            value=normalization.value,
+        )
+        if not validation.ok:
+            return {"status": "error", "error_code": "SCHEMA_VALIDATION_FAILED"}
+
+        adequacy_payload = json.loads(selection.adequacy_signals_json)
+        if not isinstance(adequacy_payload, dict):
+            adequacy_payload = {}
+        adequacy_payload["schema_validation_passed"] = True
+        adequacy_payload["output_schema"] = field_spec.output_schema
+
+        selection_trace_json = normalization.selection_trace_json or merge_selection_trace(
+            base_json=selection.selection_trace_json,
+            additions={
+                "output_schema": field_spec.output_schema,
+                "normalized_keys": sorted(normalization.value.keys()) if isinstance(normalization.value, dict) else None,
+            },
+        )
+
+        normalized_selection = replace(
+            selection,
+            adequacy_signals_json=json.dumps(adequacy_payload, ensure_ascii=False, sort_keys=True),
+            retry_history_json=normalization.retry_history_json,
+            selection_trace_json=selection_trace_json,
+        )
+
+        return self._selected_span_ok(
+            selected_span=normalized_selection,
+            value_json=json.dumps(normalization.value, ensure_ascii=False, sort_keys=True),
+        )

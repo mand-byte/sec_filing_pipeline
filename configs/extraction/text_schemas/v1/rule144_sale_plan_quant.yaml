@@ -1,0 +1,23 @@
+schema_id: rule144_sale_plan_quant
+comparison_rule: exact enum/boolean + nullable numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- sale_reason
+properties:
+  sale_reason:
+    type: string
+    enum:
+    - liquidity
+    - tax
+    - diversification
+    - estate
+    - other
+  plan_ratio:
+    type: number
+    nullable: true
+    minimum: 0
+    maximum: 1
+  uses_10b5_1:
+    type: boolean
+    nullable: true

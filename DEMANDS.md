@@ -59,6 +59,7 @@ ORDER BY (composite_figi)
 ## 六、人工审核产品交互刚需 (UI/UX Requirement)
 - 高效的人工审核面板（UI）**必须并排展示原文 Span 区块 与 抽取结果**（Side-by-side），支持对长文档直接高亮对应锚点。若让审核人员脱离原文盲审 JSON，效率低且极易出现盲目确认。
 - **审核证据要求**：人工审核必须基于可定位的原文证据进行，系统需保留足以回放定位的 source span / locator / review linkage；具体 contract 见 [EXTRACTION_METHOD.md](./EXTRACTION_METHOD.md)。
+- **操作与发布门禁流程**：review dashboard/server、CLI 决策链路、fix-once packet 导出与 release gate 验证见 [REVIEW_RELEASE_WORKFLOW.md](./REVIEW_RELEASE_WORKFLOW.md)。
 
 ## 七、研发里程碑与大包规划 (Roadmap)
 为了匹配 Golden Set V2 计划的落地，我们对此前的粗放规划进行了严谨整合重排：

@@ -215,6 +215,25 @@ def _subject_key_for_candidate(candidate: Mapping[str, Any]) -> str:
     return "document"
 
 
+def _matches_expected_ok_value(*, expected_value: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+    if candidate.get("status") != "ok":
+        return False
+
+    if "value_json" in expected_value:
+        actual_value_json = candidate.get("value_json")
+        if not isinstance(actual_value_json, str):
+            return False
+        try:
+            actual_payload = json.loads(actual_value_json)
+        except json.JSONDecodeError:
+            return False
+        return actual_payload == expected_value.get("value_json")
+
+    expected_text = str(expected_value.get("value_text", "")).strip().casefold()
+    actual_text = str(candidate.get("value_text", "")).strip().casefold()
+    return actual_text == expected_text
+
+
 def _build_manifest(
     *,
     run_id: str,
@@ -380,9 +399,7 @@ def run_offline_tier2_evaluation(
 
                 expected_status = str(expected_value.get("status", "ok"))
                 if expected_status == "ok":
-                    expected_text = str(expected_value.get("value_text", "")).strip().casefold()
-                    actual_text = str(candidate.get("value_text", "")).strip().casefold()
-                    matched = candidate["status"] == "ok" and actual_text == expected_text
+                    matched = _matches_expected_ok_value(expected_value=expected_value, candidate=candidate)
                 elif expected_status == "error":
                     expected_error = str(expected_value.get("error_code", "")).strip()
                     matched = candidate["status"] == "error" and str(candidate.get("error_code", "")) == expected_error

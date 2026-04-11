@@ -67,12 +67,16 @@ class TextFieldSpec:
             raise ValueError("regex_patterns must be non-empty")
         if any(not pattern.strip() for pattern in regex_patterns):
             raise ValueError("regex_patterns must contain non-empty patterns")
+        output_schema = self.output_schema.strip() if isinstance(self.output_schema, str) else None
+        if self.output_kind == "json" and not output_schema:
+            raise ValueError("json text fields must define output_schema")
 
         object.__setattr__(self, "field_name", field_name)
         object.__setattr__(self, "form_families", form_families)
         object.__setattr__(self, "locators", locators)
         object.__setattr__(self, "anchor_terms", anchor_terms)
         object.__setattr__(self, "regex_patterns", regex_patterns)
+        object.__setattr__(self, "output_schema", output_schema)
         object.__setattr__(self, "qa_rules", MappingProxyType(dict(self.qa_rules)))
 
 

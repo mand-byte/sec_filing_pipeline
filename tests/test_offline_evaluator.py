@@ -249,3 +249,84 @@ cases:
     by_field = json.loads((artifacts_dir / "strict-run-na" / "by_field.json").read_text(encoding="utf-8"))
     assert by_field["current_event_quant"]["not_applicable"] == 1
     assert by_field["current_event_quant"]["error"] == 0
+
+
+def test_run_offline_tier2_evaluation_matches_expected_value_json(monkeypatch, tmp_path: Path) -> None:
+    regex_config_path = tmp_path / "regex.yaml"
+    golden_set_path = tmp_path / "golden.yaml"
+    fixtures_dir = tmp_path / "fixtures"
+    artifacts_dir = tmp_path / "artifacts"
+    fixtures_dir.mkdir()
+
+    regex_config_path.write_text(
+        """
+fields:
+  beneficial_ownership_intent_quant:
+    route: owner
+    form_families: [13D]
+    locators: [section_window]
+    anchor_terms: ["purpose of transaction"]
+    regex_patterns: ['(?i)passive']
+    output_kind: text
+    qa_rules: {}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    golden_set_path.write_text(
+        """
+cases:
+  - case_id: case-001
+    route: owner
+    form_type: 13D
+    fixture_file: case-001.txt
+    expected:
+      beneficial_ownership_intent_quant:
+        status: ok
+        value_json:
+          stance: passive
+          group_formed: false
+          horizon: medium
+        truth_tier: gold
+""".strip(),
+        encoding="utf-8",
+    )
+    (fixtures_dir / "case-001.txt").write_text("Purpose of Transaction\nPassive investor", encoding="utf-8")
+
+    class FakeTextExtractionEngine:
+        def extract_field(self, *, filing, field_spec):
+            del filing, field_spec
+            return {
+                "status": "ok",
+                "value_text": "Passive investor",
+                "value_json": json.dumps(
+                    {
+                        "stance": "passive",
+                        "group_formed": False,
+                        "horizon": "medium",
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                "locator_kind": "section_window",
+                "locator_path": "sections[Purpose of Transaction]",
+                "source_span": "0:7",
+            }
+
+    monkeypatch.setattr("src.pipeline.offline_evaluator.TextExtractionEngine", FakeTextExtractionEngine)
+
+    result = run_offline_tier2_evaluation(
+        regex_config_path=regex_config_path,
+        golden_set_path=golden_set_path,
+        fixtures_dir=fixtures_dir,
+        artifacts_dir=artifacts_dir,
+        run_id="strict-run-json",
+        min_pass_rate=1.0,
+    )
+
+    assert result.summary["metrics"]["pass_rate"] == 1.0
+    candidates = (artifacts_dir / "strict-run-json" / "candidates.ndjson").read_text(encoding="utf-8").strip().splitlines()
+    assert len(candidates) == 1
+    payload = json.loads(candidates[0])
+    assert json.loads(payload["value_json"])["stance"] == "passive"
+    assert payload["matched"] is True

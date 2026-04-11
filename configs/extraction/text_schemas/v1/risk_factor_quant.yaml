@@ -1,0 +1,28 @@
+schema_id: risk_factor_quant
+comparison_rule: array/set comparison + bounded numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- categories
+properties:
+  categories:
+    type: array
+    min_items: 1
+    items:
+      type: string
+  severity:
+    type: string
+    nullable: true
+    enum:
+    - low
+    - medium
+    - high
+    - critical
+  horizon:
+    type: string
+    nullable: true
+    enum:
+    - short
+    - medium
+    - long
+    - unclear

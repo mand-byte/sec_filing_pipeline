@@ -94,6 +94,13 @@ def _normalize_corrected_payload(value: str | None) -> dict[str, Any] | None:
     return dict(payload)
 
 
+def _normalize_reviewer(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ReviewWorkflowError("reviewer is required")
+    return normalized
+
+
 def _coerce_numeric(value: object) -> float | None:
     if value is None:
         return None
@@ -251,6 +258,7 @@ class ReviewWorkflowService:
         if task.status != "open":
             raise ReviewWorkflowError(f"review task is not open: {task_id}")
 
+        normalized_reviewer = _normalize_reviewer(reviewer)
         normalized_decision = _normalize_decision(decision)
         normalized_error_code = None
         if isinstance(error_code, str) and error_code.strip():
@@ -297,7 +305,7 @@ class ReviewWorkflowService:
                 fact=fact,
                 corrected_payload=corrected_payload,
                 comment=comment,
-                reviewer=reviewer,
+                reviewer=normalized_reviewer,
                 error_code=normalized_error_code,
                 decided_at=now,
                 decision=normalized_decision,
@@ -310,14 +318,14 @@ class ReviewWorkflowService:
                 error_code=normalized_error_code,
                 corrected_value_json=json.dumps(corrected_payload, ensure_ascii=False) if corrected_payload is not None else None,
                 comment=comment,
-                reviewer=reviewer,
+                reviewer=normalized_reviewer,
                 decided_at=now,
             )
         )
         task.status = normalized_decision
         task.resolved_at = now
         if not task.assignee:
-            task.assignee = reviewer
+            task.assignee = normalized_reviewer
         self.session.commit()
         return _task_summary(task)
 

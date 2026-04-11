@@ -162,6 +162,36 @@ def test_review_server_http_flow_lists_and_resolves_tasks(tmp_path: Path) -> Non
         server.server_close()
 
 
+def test_review_server_rejects_out_of_range_limit_query(tmp_path: Path) -> None:
+    factory = _session_factory(tmp_path)
+    with factory() as session:
+        _seed_review_task(session)
+
+    api = ReviewApi(session_factory=factory, status="open", route=None, limit=100)
+    handler = create_review_http_handler(api=api)
+
+    from http.server import ThreadingHTTPServer
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            urlopen(f"{base_url}/api/tasks?limit=0")
+        except HTTPError as exc:
+            assert exc.code == 400
+            payload = json.loads(exc.read().decode("utf-8"))
+            assert payload["error"] == "limit must be between 1 and 1000"
+        else:  # pragma: no cover - defensive branch
+            raise AssertionError("expected invalid limit request to fail")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_cli_review_serve_wires_server_configuration(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

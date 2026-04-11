@@ -1,0 +1,21 @@
+schema_id: tender_going_private_quant
+comparison_rule: exact enum + nullable numeric comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- transaction_type
+properties:
+  transaction_type:
+    type: string
+    enum:
+    - tender_offer
+    - going_private
+    - merger
+    - other
+  fairness_opinion:
+    type: boolean
+    nullable: true
+  premium_pct:
+    type: number
+    nullable: true
+    minimum: 0

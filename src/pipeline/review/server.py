@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from src.pipeline.review.workflow import ReviewTaskSummary, ReviewWorkflowError, ReviewWorkflowService, review_task_detail_asdict
 
 
+_TASK_LIMIT_MIN = 1
+_TASK_LIMIT_MAX = 1000
+
+
 @dataclass(frozen=True)
 class ReviewServerConfig:
     host: str = "127.0.0.1"
@@ -716,6 +720,13 @@ def create_review_http_handler(
                         limit = int(limit_raw)
                     except ValueError:
                         _json_response(self, status=HTTPStatus.BAD_REQUEST, payload={"error": "limit must be an integer"})
+                        return
+                    if limit < _TASK_LIMIT_MIN or limit > _TASK_LIMIT_MAX:
+                        _json_response(
+                            self,
+                            status=HTTPStatus.BAD_REQUEST,
+                            payload={"error": f"limit must be between {_TASK_LIMIT_MIN} and {_TASK_LIMIT_MAX}"},
+                        )
                         return
                 _json_response(
                     self,

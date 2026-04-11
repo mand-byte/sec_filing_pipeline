@@ -1,0 +1,19 @@
+schema_id: insider_role_ownership_structure_quant
+comparison_rule: exact boolean + array/set comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- is_director
+properties:
+  is_director:
+    type: boolean
+  is_officer:
+    type: boolean
+    nullable: true
+  is_ten_percent_owner:
+    type: boolean
+    nullable: true
+  vehicles:
+    type: array
+    items:
+      type: string

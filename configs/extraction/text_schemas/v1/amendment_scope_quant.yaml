@@ -1,0 +1,20 @@
+schema_id: amendment_scope_quant
+comparison_rule: exact enum/boolean comparison
+review_correction_shape: '{"value_json": {...}}'
+type: object
+required:
+- scope
+properties:
+  scope:
+    type: string
+    enum:
+    - full
+    - partial
+    - restatement
+    - other
+  only_new_holdings:
+    type: boolean
+    nullable: true
+  only_restated_values:
+    type: boolean
+    nullable: true
