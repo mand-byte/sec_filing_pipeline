@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Literal, TypedDict
 
-from src.pipeline.extraction.text_contracts import TextFieldSpec, TextLocatorKind
+from src.pipeline.extraction.text_contracts import SpanPolicy, TextFieldSpec, TextLocatorKind
 from src.pipeline.extraction.text_locators import run_text_locator
 
 
@@ -26,6 +26,37 @@ TextExtractionOutcome = TextExtractionOk | TextExtractionFailure
 
 
 class TextExtractionEngine:
+    def _span_policy_error(self, *, window_text: str, span_policy: SpanPolicy) -> str | None:
+        lowered_window = window_text.casefold()
+        header_text = window_text.splitlines()[0].strip().casefold() if window_text.splitlines() else ""
+
+        if span_policy.anchor_headers:
+            if not any(anchor.casefold() in header_text for anchor in span_policy.anchor_headers):
+                return "SPAN_POLICY_FAILED"
+
+        token_count = len(re.findall(r"\S+", window_text))
+        min_tokens = span_policy.min_tokens
+        max_tokens = span_policy.max_tokens
+        if span_policy.preferred_tokens is not None:
+            preferred_min, preferred_max = span_policy.preferred_tokens
+            min_tokens = max(min_tokens, preferred_min)
+            max_tokens = preferred_max if max_tokens == 0 else min(max_tokens, preferred_max)
+
+        if min_tokens > 0 and token_count < min_tokens:
+            return "SPAN_POLICY_FAILED"
+        if max_tokens > 0 and token_count > max_tokens:
+            return "SPAN_POLICY_FAILED"
+
+        if span_policy.must_include:
+            if any(required.casefold() not in lowered_window for required in span_policy.must_include):
+                return "SPAN_POLICY_FAILED"
+
+        if span_policy.avoid:
+            if any(avoid.casefold() in lowered_window for avoid in span_policy.avoid):
+                return "SPAN_POLICY_FAILED"
+
+        return None
+
     def _qa_check(self, value_text: str, qa_rules: Mapping[str, int | float | bool]) -> str | None:
         min_len = qa_rules.get("min_len")
         if isinstance(min_len, (int, float)) and not isinstance(min_len, bool) and len(value_text) < int(min_len):
@@ -42,7 +73,12 @@ class TextExtractionEngine:
             return {"status": "error", "error_code": "NORMALIZATION_FAILED"}
 
         best_failure: str = "PATTERN_NOT_MATCHED"
-        failure_priority = {"PATTERN_NOT_MATCHED": 0, "MULTIPLE_CANDIDATES": 1, "QA_FAILED": 2}
+        failure_priority = {
+            "PATTERN_NOT_MATCHED": 0,
+            "MULTIPLE_CANDIDATES": 1,
+            "QA_FAILED": 2,
+            "SPAN_POLICY_FAILED": 3,
+        }
         saw_window = False
 
         for locator in field_spec.locators:
@@ -52,6 +88,15 @@ class TextExtractionEngine:
 
             saw_window = True
             window_text = window_hit["value"]
+            if field_spec.span_policy is not None:
+                span_policy_error = self._span_policy_error(
+                    window_text=window_text,
+                    span_policy=field_spec.span_policy,
+                )
+                if span_policy_error is not None:
+                    if failure_priority[span_policy_error] > failure_priority[best_failure]:
+                        best_failure = span_policy_error
+                    continue
 
             for pattern in field_spec.regex_patterns:
                 matches = list(re.finditer(pattern, window_text))
