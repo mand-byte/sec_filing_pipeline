@@ -926,6 +926,43 @@ def test_build_bundles_from_provider_emits_8k_current_event_text(monkeypatch) ->
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_emits_6k_current_event_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000004C",
+        cik="0000789019",
+        form_type="6-K",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="6-K",
+            sections=["Current report\nMaterial definitive agreement entered into on signing date."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-6k-current-event",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("current_event_quant", "document")] == "agreement"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("current_event_quant", "document")].source_section in {"Current report", "current report"}
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_logs_missing_8k_vote_rows(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 5, tzinfo=timezone.utc)
     filing = FakeEightKFiling(
@@ -1021,6 +1058,50 @@ def test_build_bundles_from_provider_keeps_8k_vote_rows_when_current_event_text_
     assert numeric_facts[("proposal_broker_non_votes", "proposal:1")] == 50000.0
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert ("current_event_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_returns_empty_6k_bundle_when_current_event_text_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000004D",
+        cik="0000789019",
+        form_type="6-K",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="6-K",
+            sections=["Current report\nMaterial definitive agreement entered into on signing date."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "current_event_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-6k-current-event-failure",
+    )
+
+    assert len(bundles) == 1
+    assert bundles[0].facts == []
+    assert bundles[0].evidences == []
     assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
 
 
