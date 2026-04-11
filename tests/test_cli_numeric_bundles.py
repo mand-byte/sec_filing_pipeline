@@ -1044,6 +1044,52 @@ def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> Non
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
+def test_build_bundles_from_provider_keeps_delay_days_when_delay_reason_text_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 9, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000009A",
+        cik="0000789019",
+        form_type="NT 10-Q",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="NT 10-Q",
+            sections=["Delay reason\nThe filing was delayed because of the audit review and the registrant expects to file within 5 calendar days."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "delay_reason_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-9-text-failure",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("filing_delay_days", "document")] == 5.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert ("delay_reason_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_mdna_outlook_text(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 9, tzinfo=timezone.utc)
     envelope = FilingEnvelope(
