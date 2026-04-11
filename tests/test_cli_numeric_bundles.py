@@ -341,6 +341,128 @@ def test_build_bundles_from_provider_emits_20f_numeric_xbrl_evidence(monkeypatch
     assert facts_by_field["cash_and_equivalents"].value_numeric == 980.0
 
 
+def test_build_bundles_from_provider_emits_20f_risk_factor_text_alongside_xbrl_numeric(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 3, tzinfo=timezone.utc)
+    filing = FakeXbrlTextFiling(
+        form="20-F",
+        records=[
+            {
+                "fact_key": "revenue-20f",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-12-31",
+                "value": 5100.0,
+            },
+            {
+                "fact_key": "cash-20f",
+                "concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 980.0,
+            },
+        ],
+        sections=["Risk Factors\nCybersecurity incidents may materially affect our foreign operations."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000017A",
+        cik="0000789019",
+        form_type="20-F",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-20f-text",
+    )
+
+    assert len(bundles) == 1
+    facts_by_field = {(fact.field_name, fact.subject_key): fact for fact in bundles[0].facts}
+    assert facts_by_field[("total_revenue", "document")].value_numeric == 5100.0
+    assert facts_by_field[("cash_and_equivalents", "document")].value_numeric == 980.0
+    assert facts_by_field[("risk_factor_quant", "document")].value_text == "Cybersecurity"
+
+
+def test_build_bundles_from_provider_keeps_20f_numeric_when_risk_factor_text_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 3, tzinfo=timezone.utc)
+    filing = FakeXbrlTextFiling(
+        form="20-F",
+        records=[
+            {
+                "fact_key": "revenue-20f",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-12-31",
+                "value": 5100.0,
+            },
+            {
+                "fact_key": "cash-20f",
+                "concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 980.0,
+            },
+        ],
+        sections=["Risk Factors\nCybersecurity incidents may materially affect our foreign operations."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000017B",
+        cik="0000789019",
+        form_type="20-F",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "risk_factor_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-20f-risk-failure",
+    )
+
+    assert len(bundles) == 1
+    facts_by_field = {(fact.field_name, fact.subject_key): fact for fact in bundles[0].facts}
+    assert facts_by_field[("total_revenue", "document")].value_numeric == 5100.0
+    assert facts_by_field[("cash_and_equivalents", "document")].value_numeric == 980.0
+    assert ("risk_factor_quant", "document") not in facts_by_field
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_6k_financial_numeric_xbrl_evidence(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
     filing = FakeFiling(
