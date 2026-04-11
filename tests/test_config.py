@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from datetime import date
+
+import pytest
+from pydantic import ValidationError
+
 from src.config import Settings
 
 
@@ -33,3 +38,22 @@ def test_settings_builds_legacy_postgres_and_clickhouse_dsns(monkeypatch) -> Non
 
     assert settings.pg_dsn == "postgresql+psycopg://hubber:secret@db.internal:5433/sec_filing"
     assert settings.ch_dsn == "clickhouse://analytics:secret@ch.internal:9000/quant_data"
+
+
+def test_settings_loads_start_date_alias(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("START_DATE", "2024-05-06")
+
+    settings = Settings()
+
+    assert settings.start_date == date(2024, 5, 6)
+
+
+def test_settings_rejects_invalid_start_date_shape(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("START_DATE", "2024/05/06")
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()
+
+    assert "START_DATE" in str(exc_info.value)
