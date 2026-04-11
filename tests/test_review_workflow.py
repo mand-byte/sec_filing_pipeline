@@ -103,6 +103,22 @@ def test_review_workflow_service_lists_and_shows_task_detail() -> None:
         assert detail.primary_evidence["retry_history_json"] == "[]"
 
 
+def test_review_workflow_service_assigns_task_and_persists_trimmed_assignee() -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_review_task(session)
+
+    with factory() as session:
+        service = ReviewWorkflowService(session)
+        task = service.list_tasks()[0]
+        summary = service.assign_task(task_id=task.task_id, assignee="  alice  ")
+        assert summary.assignee == "alice"
+
+    with factory() as session:
+        detail = ReviewWorkflowService(session).get_task_detail(task_id=task.task_id)
+        assert detail.task.assignee == "alice"
+
+
 def test_review_workflow_service_corrected_updates_fact_and_persists_decision() -> None:
     factory = _session_factory()
     with factory() as session:
@@ -277,6 +293,30 @@ def test_cli_review_commands_operate_on_seeded_queue(monkeypatch) -> None:
         assert fact.value_numeric == 130.0
         assert decision.error_code == "row_match_error"
         assert float(golden_truth.value_numeric) == 130.0
+
+
+def test_cli_review_assign_updates_assignee(monkeypatch) -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_review_task(session)
+
+    monkeypatch.setattr(cli_module, "Settings", lambda: object())
+    monkeypatch.setattr(cli_module, "get_session_factory", lambda settings: factory)
+
+    list_result = runner.invoke(cli_module.app, ["review-list"])
+    task_id = json.loads(list_result.stdout)[0]["task_id"]
+
+    assign_result = runner.invoke(
+        cli_module.app,
+        ["review-assign", str(task_id), "  carol  "],
+    )
+    assert assign_result.exit_code == 0
+    payload = json.loads(assign_result.stdout)
+    assert payload == {"task_id": task_id, "status": "open", "assignee": "carol"}
+
+    with factory() as session:
+        task = session.query(ReviewTask).one()
+        assert task.assignee == "carol"
 
 
 def test_cli_review_resolve_requires_error_code_for_reject(monkeypatch) -> None:
