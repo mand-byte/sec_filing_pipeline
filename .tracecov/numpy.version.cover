@@ -1,0 +1,11 @@
+       
+    1: """
+       Module to expose more detailed version info for the installed `numpy`
+       """
+    1: version = "2.4.4"
+    1: __version__ = version
+    1: full_version = version
+       
+    1: git_revision = "be93fe2960dbf49b4647f5783c66d967fb2c65b5"
+    1: release = 'dev' not in version and '+' not in version
+    1: short_version = version.split("+")[0]

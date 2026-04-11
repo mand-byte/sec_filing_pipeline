@@ -1,0 +1,63 @@
+    1: import logging
+    1: import re
+    1: from typing import Optional, Dict, Union, Any, Callable
+       
+    1: logger = logging.getLogger(__name__)
+       
+    1: _empty_map = {}
+       
+       
+       # pylint: disable=too-many-instance-attributes
+    2: class BaseQueryContext:
+       
+    8:     def __init__(self,
+    2:                  settings: Optional[Dict[str, Any]] = None,
+    2:                  query_formats: Optional[Dict[str, str]] = None,
+    2:                  column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    2:                  encoding: Optional[str] = None,
+    2:                  use_extended_dtypes: bool = False,
+    2:                  use_numpy: bool = False,
+    2:                  transport_settings: Optional[Dict[str, str]] = None):
+    1:         self.settings = settings or {}
+    1:         if query_formats is None:
+    1:             self.type_formats = _empty_map
+               else:
+>>>>>>             self.type_formats = {re.compile(type_name.replace('*', '.*'), re.IGNORECASE): fmt
+>>>>>>                                  for type_name, fmt in query_formats.items()}
+    1:         if column_formats is None:
+    1:             self.col_simple_formats = _empty_map
+    1:             self.col_type_formats = _empty_map
+               else:
+>>>>>>             self.col_simple_formats = {col_name: fmt for col_name, fmt in column_formats.items() if
+>>>>>>                                        isinstance(fmt, str)}
+>>>>>>             self.col_type_formats = {}
+>>>>>>             for col_name, fmt in column_formats.items():
+>>>>>>                 if not isinstance(fmt, str):
+>>>>>>                     self.col_type_formats[col_name] = {re.compile(type_name.replace('*', '.*'), re.IGNORECASE): fmt
+>>>>>>                                                        for type_name, fmt in fmt.items()}
+    1:         self.query_formats = query_formats or {}
+    1:         self.column_formats = column_formats or {}
+    1:         self.transport_settings = transport_settings
+    1:         self.column_name = None
+    1:         self.encoding = encoding
+    1:         self.use_numpy = use_numpy
+    1:         self.use_extended_dtypes = use_extended_dtypes
+    1:         self._active_col_fmt = None
+    1:         self._active_col_type_fmts = _empty_map
+    1:         self.column_renamer: Optional[Callable[[str], str]] = None
+       
+    1:     def start_column(self, name: str):
+>>>>>>         self.column_name = name
+>>>>>>         self._active_col_fmt = self.col_simple_formats.get(name)
+>>>>>>         self._active_col_type_fmts = self.col_type_formats.get(name, _empty_map)
+       
+    1:     def active_fmt(self, ch_type):
+>>>>>>         if self._active_col_fmt:
+>>>>>>             return self._active_col_fmt
+>>>>>>         for type_pattern, fmt in self._active_col_type_fmts.items():
+>>>>>>             if type_pattern.match(ch_type):
+>>>>>>                 return fmt
+>>>>>>         for type_pattern, fmt in self.type_formats.items():
+>>>>>>             if type_pattern.match(ch_type):
+>>>>>>                 return fmt
+>>>>>>         return None

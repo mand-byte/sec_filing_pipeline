@@ -1,0 +1,432 @@
+    1: from __future__ import annotations
+       
+    1: from collections.abc import (
+           Callable,
+           Hashable,
+           Sequence,
+       )
+    1: from typing import (
+           TYPE_CHECKING,
+           Any,
+           NoReturn,
+       )
+       
+    1: from pandas.util._decorators import set_module
+       
+    1: if TYPE_CHECKING:
+>>>>>>     from pandas import (
+               DataFrame,
+               Series,
+           )
+       
+       
+       # Used only for generating the str repr of expressions.
+   19: _OP_SYMBOLS = {
+    1:     "__add__": "+",
+    1:     "__radd__": "+",
+    1:     "__sub__": "-",
+    1:     "__rsub__": "-",
+    1:     "__mul__": "*",
+    1:     "__rmul__": "*",
+    1:     "__truediv__": "/",
+    1:     "__rtruediv__": "/",
+    1:     "__floordiv__": "//",
+    1:     "__rfloordiv__": "//",
+    1:     "__mod__": "%",
+    1:     "__rmod__": "%",
+    1:     "__ge__": ">=",
+    1:     "__gt__": ">",
+    1:     "__le__": "<=",
+    1:     "__lt__": "<",
+    1:     "__eq__": "==",
+    1:     "__ne__": "!=",
+    1:     "__and__": "&",
+    1:     "__rand__": "&",
+    1:     "__or__": "|",
+    1:     "__ror__": "|",
+    1:     "__xor__": "^",
+    1:     "__rxor__": "^",
+       }
+       
+       
+    1: def _parse_args(df: DataFrame, *args: Any) -> tuple[Any, ...]:
+           # Parse `args`, evaluating any expressions we encounter.
+>>>>>>     return tuple(
+>>>>>>         x._eval_expression(df) if isinstance(x, Expression) else x for x in args
+           )
+       
+       
+    1: def _parse_kwargs(df: DataFrame, **kwargs: Any) -> dict[str, Any]:
+           # Parse `kwargs`, evaluating any expressions we encounter.
+>>>>>>     return {
+>>>>>>         key: val._eval_expression(df) if isinstance(val, Expression) else val
+>>>>>>         for key, val in kwargs.items()
+           }
+       
+       
+    1: def _pretty_print_args_kwargs(*args: Any, **kwargs: Any) -> str:
+>>>>>>     inputs_repr = ", ".join(repr(arg) for arg in args)
+>>>>>>     kwargs_repr = ", ".join(f"{k}={v!r}" for k, v in kwargs.items())
+       
+>>>>>>     all_args = []
+>>>>>>     if inputs_repr:
+>>>>>>         all_args.append(inputs_repr)
+>>>>>>     if kwargs_repr:
+>>>>>>         all_args.append(kwargs_repr)
+       
+>>>>>>     return ", ".join(all_args)
+       
+       
+    3: @set_module("pandas.api.typing")
+    2: class Expression:
+    1:     """
+           Class representing a deferred column.
+       
+           This is not meant to be instantiated directly. Instead, use :meth:`pandas.col`.
+           """
+       
+    5:     def __init__(
+               self,
+    1:         func: Callable[[DataFrame], Any],
+    1:         repr_str: str,
+    2:         needs_parenthese: bool = False,
+    1:     ) -> None:
+>>>>>>         self._func = func
+>>>>>>         self._repr_str = repr_str
+>>>>>>         self._needs_parentheses = needs_parenthese
+       
+    1:     def _eval_expression(self, df: DataFrame) -> Any:
+>>>>>>         return self._func(df)
+       
+    6:     def _with_op(
+    5:         self, op: str, other: Any, repr_str: str, needs_parentheses: bool = True
+    1:     ) -> Expression:
+>>>>>>         if isinstance(other, Expression):
+>>>>>>             return Expression(
+>>>>>>                 lambda df: getattr(self._eval_expression(df), op)(
+>>>>>>                     other._eval_expression(df)
+                       ),
+>>>>>>                 repr_str,
+>>>>>>                 needs_parenthese=needs_parentheses,
+                   )
+               else:
+>>>>>>             return Expression(
+>>>>>>                 lambda df: getattr(self._eval_expression(df), op)(other),
+>>>>>>                 repr_str,
+>>>>>>                 needs_parenthese=needs_parentheses,
+                   )
+       
+    1:     def _maybe_wrap_parentheses(self, other: Any) -> tuple[str, str]:
+>>>>>>         if self._needs_parentheses:
+>>>>>>             self_repr = f"({self!r})"
+               else:
+>>>>>>             self_repr = f"{self!r}"
+>>>>>>         if isinstance(other, Expression) and other._needs_parentheses:
+>>>>>>             other_repr = f"({other!r})"
+               else:
+>>>>>>             other_repr = f"{other!r}"
+>>>>>>         return self_repr, other_repr
+       
+           # Binary ops
+    1:     def __add__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__add__", other, f"{self_repr} + {other_repr}")
+       
+    1:     def __radd__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__radd__", other, f"{other_repr} + {self_repr}")
+       
+    1:     def __sub__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__sub__", other, f"{self_repr} - {other_repr}")
+       
+    1:     def __rsub__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rsub__", other, f"{other_repr} - {self_repr}")
+       
+    1:     def __mul__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__mul__", other, f"{self_repr} * {other_repr}")
+       
+    1:     def __rmul__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rmul__", other, f"{other_repr} * {self_repr}")
+       
+    1:     def __matmul__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__matmul__", other, f"{self_repr} @ {other_repr}")
+       
+    1:     def __rmatmul__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rmatmul__", other, f"{other_repr} @ {self_repr}")
+       
+    1:     def __pow__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__pow__", other, f"{self_repr} ** {other_repr}")
+       
+    1:     def __rpow__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rpow__", other, f"{other_repr} ** {self_repr}")
+       
+    1:     def __truediv__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__truediv__", other, f"{self_repr} / {other_repr}")
+       
+    1:     def __rtruediv__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rtruediv__", other, f"{other_repr} / {self_repr}")
+       
+    1:     def __floordiv__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__floordiv__", other, f"{self_repr} // {other_repr}")
+       
+    1:     def __rfloordiv__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rfloordiv__", other, f"{other_repr} // {self_repr}")
+       
+    1:     def __ge__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__ge__", other, f"{self_repr} >= {other_repr}")
+       
+    1:     def __gt__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__gt__", other, f"{self_repr} > {other_repr}")
+       
+    1:     def __le__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__le__", other, f"{self_repr} <= {other_repr}")
+       
+    1:     def __lt__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__lt__", other, f"{self_repr} < {other_repr}")
+       
+    1:     def __eq__(self, other: object) -> Expression:  # type: ignore[override]
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__eq__", other, f"{self_repr} == {other_repr}")
+       
+    1:     def __ne__(self, other: object) -> Expression:  # type: ignore[override]
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__ne__", other, f"{self_repr} != {other_repr}")
+       
+    1:     def __mod__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__mod__", other, f"{self_repr} % {other_repr}")
+       
+    1:     def __rmod__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rmod__", other, f"{other_repr} % {self_repr}")
+       
+           # Logical ops
+    1:     def __and__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__and__", other, f"{self_repr} & {other_repr}")
+       
+    1:     def __rand__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rand__", other, f"{other_repr} & {self_repr}")
+       
+    1:     def __or__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__or__", other, f"{self_repr} | {other_repr}")
+       
+    1:     def __ror__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__ror__", other, f"{other_repr} | {self_repr}")
+       
+    1:     def __xor__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__xor__", other, f"{self_repr} ^ {other_repr}")
+       
+    1:     def __rxor__(self, other: Any) -> Expression:
+>>>>>>         self_repr, other_repr = self._maybe_wrap_parentheses(other)
+>>>>>>         return self._with_op("__rxor__", other, f"{other_repr} ^ {self_repr}")
+       
+    1:     def __invert__(self) -> Expression:
+>>>>>>         return Expression(
+>>>>>>             lambda df: ~self._eval_expression(df),
+>>>>>>             f"~{self._repr_str}",
+>>>>>>             needs_parenthese=True,
+               )
+       
+    1:     def __neg__(self) -> Expression:
+>>>>>>         if self._needs_parentheses:
+>>>>>>             repr_str = f"-({self._repr_str})"
+               else:
+>>>>>>             repr_str = f"-{self._repr_str}"
+>>>>>>         return Expression(
+>>>>>>             lambda df: -self._eval_expression(df),
+>>>>>>             repr_str,
+>>>>>>             needs_parenthese=True,
+               )
+       
+    1:     def __pos__(self) -> Expression:
+>>>>>>         if self._needs_parentheses:
+>>>>>>             repr_str = f"+({self._repr_str})"
+               else:
+>>>>>>             repr_str = f"+{self._repr_str}"
+>>>>>>         return Expression(
+>>>>>>             lambda df: +self._eval_expression(df),
+>>>>>>             repr_str,
+>>>>>>             needs_parenthese=True,
+               )
+       
+    1:     def __abs__(self) -> Expression:
+>>>>>>         return Expression(
+>>>>>>             lambda df: abs(self._eval_expression(df)),
+>>>>>>             f"abs({self._repr_str})",
+>>>>>>             needs_parenthese=True,
+               )
+       
+    6:     def __array_ufunc__(
+    4:         self, ufunc: Callable[..., Any], method: str, *inputs: Any, **kwargs: Any
+    1:     ) -> Expression:
+>>>>>>         def func(df: DataFrame) -> Any:
+>>>>>>             parsed_inputs = _parse_args(df, *inputs)
+>>>>>>             parsed_kwargs = _parse_kwargs(df, *kwargs)
+>>>>>>             return ufunc(*parsed_inputs, **parsed_kwargs)
+       
+>>>>>>         args_str = _pretty_print_args_kwargs(*inputs, **kwargs)
+>>>>>>         repr_str = f"{ufunc.__name__}({args_str})"
+       
+>>>>>>         return Expression(func, repr_str)
+       
+    1:     def __getitem__(self, item: Any) -> Expression:
+>>>>>>         return self._with_op(
+>>>>>>             "__getitem__", item, f"{self!r}[{item!r}]", needs_parentheses=True
+               )
+       
+    1:     def _call_with_func(self, func: Callable, **kwargs: Any) -> Expression:
+>>>>>>         def wrapped(df: DataFrame) -> Any:
+>>>>>>             parsed_kwargs = _parse_kwargs(df, **kwargs)
+>>>>>>             return func(**parsed_kwargs)
+       
+>>>>>>         args_str = _pretty_print_args_kwargs(**kwargs)
+>>>>>>         repr_str = func.__name__ + "(" + args_str + ")"
+       
+>>>>>>         return Expression(wrapped, repr_str)
+       
+    1:     def __call__(self, *args: Any, **kwargs: Any) -> Expression:
+>>>>>>         def func(df: DataFrame, *args: Any, **kwargs: Any) -> Any:
+>>>>>>             parsed_args = _parse_args(df, *args)
+>>>>>>             parsed_kwargs = _parse_kwargs(df, **kwargs)
+>>>>>>             return self._eval_expression(df)(*parsed_args, **parsed_kwargs)
+       
+>>>>>>         args_str = _pretty_print_args_kwargs(*args, **kwargs)
+>>>>>>         repr_str = f"{self._repr_str}({args_str})"
+>>>>>>         return Expression(lambda df: func(df, *args, **kwargs), repr_str)
+       
+    1:     def __getattr__(self, name: str, /) -> Any:
+>>>>>>         repr_str = f"{self!r}"
+>>>>>>         if self._needs_parentheses:
+>>>>>>             repr_str = f"({repr_str})"
+>>>>>>         repr_str += f".{name}"
+>>>>>>         return Expression(lambda df: getattr(self._eval_expression(df), name), repr_str)
+       
+    1:     def case_when(self, caselist: Sequence[tuple[Any, Any]]) -> Expression:
+               """
+               Create an expression that evaluates :meth:`Series.case_when` in a DataFrame
+               context.
+       
+               This is intended to enable patterns like::
+       
+                   df.assign(result=pd.col("a").case_when([(pd.col("b") > 0, 1)]))
+       
+               where conditions/replacements may reference other columns via ``pd.col``.
+               """
+       
+>>>>>>         def func(df: DataFrame) -> Any:
+>>>>>>             ser = self._eval_expression(df)
+>>>>>>             evaluated = []
+>>>>>>             for condition, replacement in caselist:
+>>>>>>                 if isinstance(condition, Expression):
+>>>>>>                     condition = condition._eval_expression(df)
+>>>>>>                 if isinstance(replacement, Expression):
+>>>>>>                     replacement = replacement._eval_expression(df)
+>>>>>>                 evaluated.append((condition, replacement))
+>>>>>>             return ser.case_when(evaluated)
+       
+               # Keep repr compact; caselist may be large.
+>>>>>>         repr_str = f"{self!r}.case_when(...)"
+>>>>>>         return Expression(func, repr_str)
+       
+    1:     def __repr__(self) -> str:
+>>>>>>         return self._repr_str or "Expr(...)"
+       
+           # Unsupported ops
+    1:     def __bool__(self) -> NoReturn:
+>>>>>>         raise TypeError("boolean value of an expression is ambiguous")
+       
+    1:     def __iter__(self) -> NoReturn:
+>>>>>>         raise TypeError("Expression objects are not iterable")
+       
+    1:     def __copy__(self) -> NoReturn:
+>>>>>>         raise TypeError("Expression objects are not copiable")
+       
+    1:     def __deepcopy__(self, memo: dict[int, Any] | None) -> NoReturn:
+>>>>>>         raise TypeError("Expression objects are not copiable")
+       
+       
+    2: @set_module("pandas")
+    2: def col(col_name: Hashable) -> Expression:
+           """
+           Generate deferred object representing a column of a DataFrame.
+       
+           Any place which accepts ``lambda df: df[col_name]``, such as
+           :meth:`DataFrame.assign` or :meth:`DataFrame.loc`, can also accept
+           ``pd.col(col_name)``.
+       
+           .. versionadded:: 3.0.0
+       
+           Parameters
+           ----------
+           col_name : Hashable
+               Column name.
+       
+           Returns
+           -------
+           `pandas.api.typing.Expression`
+               A deferred object representing a column of a DataFrame.
+       
+           See Also
+           --------
+           DataFrame.query : Query columns of a dataframe using string expressions.
+       
+           Examples
+           --------
+       
+           You can use `col` in `assign`.
+       
+           >>> df = pd.DataFrame({"name": ["beluga", "narwhal"], "speed": [100, 110]})
+           >>> df.assign(name_titlecase=pd.col("name").str.title())
+                 name  speed name_titlecase
+           0   beluga    100         Beluga
+           1  narwhal    110        Narwhal
+       
+           You can also use it for filtering.
+       
+           >>> df.loc[pd.col("speed") > 105]
+                 name  speed
+           1  narwhal    110
+           """
+>>>>>>     if not isinstance(col_name, Hashable):
+>>>>>>         msg = f"Expected Hashable, got: {type(col_name)}"
+>>>>>>         raise TypeError(msg)
+       
+>>>>>>     def func(df: DataFrame) -> Series:
+>>>>>>         if col_name not in df.columns:
+>>>>>>             columns_str = str(df.columns.tolist())
+>>>>>>             max_len = 90
+>>>>>>             if len(columns_str) > max_len:
+>>>>>>                 columns_str = columns_str[:max_len] + "...]"
+       
+>>>>>>             msg = (
+>>>>>>                 f"Column '{col_name}' not found in given DataFrame.\n\n"
+>>>>>>                 f"Hint: did you mean one of {columns_str} instead?"
+                   )
+>>>>>>             raise ValueError(msg)
+>>>>>>         return df[col_name]
+       
+>>>>>>     return Expression(func, f"col({col_name!r})")
+       
+       
+    1: __all__ = ["Expression", "col"]

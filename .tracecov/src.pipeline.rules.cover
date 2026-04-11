@@ -1,0 +1,36 @@
+    1: from datetime import datetime, timezone
+       
+       
+    1: def _normalize_to_utc(value: datetime) -> datetime:
+>>>>>>     if value.tzinfo is None:
+>>>>>>         return value.replace(tzinfo=timezone.utc)
+       
+>>>>>>     return value.astimezone(timezone.utc)
+       
+       
+    5: def is_filing_eligible(
+    1:     active: bool,
+    1:     delisted_utc: datetime | None,
+    1:     accepted_at: datetime,
+    1: ) -> bool:
+>>>>>>     if active:
+>>>>>>         return True
+       
+>>>>>>     if delisted_utc is None:
+>>>>>>         return True
+       
+>>>>>>     return _normalize_to_utc(accepted_at) <= _normalize_to_utc(delisted_utc)
+       
+       
+    6: def should_skip_delisted_route(
+    1:     active: bool,
+    1:     is_completed: bool,
+    1:     snapshot: datetime | None,
+    1:     current_delisted_utc: datetime | None,
+    1: ) -> bool:
+>>>>>>     if snapshot is None or current_delisted_utc is None:
+>>>>>>         return (not active) and is_completed and snapshot == current_delisted_utc
+       
+>>>>>>     return (not active) and is_completed and (
+>>>>>>         _normalize_to_utc(snapshot) == _normalize_to_utc(current_delisted_utc)
+           )

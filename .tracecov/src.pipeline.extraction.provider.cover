@@ -1,0 +1,1544 @@
+    1: from __future__ import annotations
+       
+    1: from datetime import datetime
+    1: import re
+    1: from typing import Any
+       
+    1: from src.db.repositories import PipelineRepository
+    1: from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
+    1: from src.pipeline.extraction.bundles import (
+           build_holding_13f_bundle,
+           build_issuer_8k_vote_bundle,
+           build_owner_form144_bundle,
+           build_owner_ownership_bundle,
+           build_owner_schedule_13dg_bundle,
+           coerce_numeric_value,
+       )
+    1: from src.pipeline.extraction.engine import NumericExtractionEngine
+    1: from src.pipeline.extraction.registry import all_numeric_field_specs
+    1: from src.pipeline.extraction.subject_keys import subject_key_has_type, subject_key_matches_granularity
+    1: from src.pipeline.extraction.text_engine import TextExtractionEngine
+    1: from src.pipeline.extraction.text_registry import all_text_field_specs
+    1: from src.pipeline.route_runtime import FilingBundle, _normalize_to_utc, _safe_write_log
+    1: from src.pipeline.services import EvidenceInput, FactInput
+    1: from src.pipeline.types import FilingRecord, RouteName
+       
+       
+    1: _ISSUER_VOTE_FIELDS = {
+           "proposal_votes_for",
+           "proposal_votes_against",
+           "proposal_votes_abstain",
+           "proposal_broker_non_votes",
+       }
+    1: _SPECIALIZED_NUMERIC_CONTRACT_ERROR = "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+       
+       
+    5: def _specialized_numeric_bundle_contract_error(
+           *,
+    1:     route: RouteName,
+    1:     bundle: FilingBundle,
+    1:     numeric_specs_by_field: dict[str, Any],
+    1: ) -> str | None:
+   29:     violations: set[str] = set()
+   87:     for record_type, entries in (("fact", bundle.facts), ("evidence", bundle.evidences)):
+  330:         for entry in entries:
+  272:             field_name = getattr(entry, "field_name", "").strip()
+  272:             subject_key = getattr(entry, "subject_key", "").strip()
+  272:             spec = numeric_specs_by_field.get(field_name)
+  272:             if spec is None:
+>>>>>>                 violations.add(f"{record_type}:{field_name}:unregistered")
+>>>>>>                 continue
+  544:             if not subject_key_matches_granularity(
+  272:                 route=route,
+  272:                 granularity=spec.granularity,
+  272:                 subject_key=subject_key,
+                   ):
+   24:                 violations.add(
+   12:                     f"{record_type}:{field_name}:{subject_key or '<blank>'}:expected_granularity={spec.granularity}"
+                       )
+   12:                 continue
+  520:             if not subject_key_has_type(
+  260:                 route=route,
+  260:                 subject_key=subject_key,
+  260:                 subject_type=spec.subject_type,
+                   ):
+>>>>>>                 violations.add(
+>>>>>>                     f"{record_type}:{field_name}:{subject_key or '<blank>'}:expected={spec.subject_type}"
+                       )
+       
+   29:     if not violations:
+   23:         return None
+    6:     return "; ".join(sorted(violations))
+       
+       
+   12: def _extend_specialized_numeric_bundle_if_valid(
+           *,
+    1:     route: RouteName,
+    1:     bundle: FilingBundle,
+    1:     facts: list[FactInput],
+    1:     evidences: list[EvidenceInput],
+    1:     numeric_specs_by_field: dict[str, Any],
+    1:     repo: PipelineRepository,
+    1:     run_id: str,
+    1:     cik: str | None,
+    1:     accession_no: str | None,
+    1:     violation_message: str,
+    1: ) -> bool:
+   58:     contract_error_detail = _specialized_numeric_bundle_contract_error(
+   29:         route=route,
+   29:         bundle=bundle,
+   29:         numeric_specs_by_field=numeric_specs_by_field,
+           )
+   29:     if contract_error_detail is not None:
+   12:         _safe_write_log(
+    6:             repo,
+    6:             run_id=run_id,
+    6:             route=route,
+    6:             stage="extract",
+    6:             level="ERROR",
+    6:             message=violation_message,
+    6:             cik=cik,
+    6:             accession_no=accession_no,
+    6:             error_type=_SPECIALIZED_NUMERIC_CONTRACT_ERROR,
+    6:             error_detail=contract_error_detail,
+               )
+    6:         return False
+       
+   23:     facts.extend(bundle.facts)
+   23:     evidences.extend(bundle.evidences)
+   23:     return True
+       
+       
+    6: def _append_partial_bundle_if_any(
+           *,
+    1:     filing: FilingRecord,
+    1:     facts: list[FactInput],
+    1:     evidences: list[EvidenceInput],
+    1:     bundles: list[FilingBundle],
+    1: ) -> bool:
+   18:     if not facts:
+>>>>>>         return False
+       
+   36:     bundles.append(
+   36:         FilingBundle(
+   18:             filing=filing,
+   18:             facts=list(facts),
+   18:             evidences=list(evidences),
+               )
+           )
+   18:     return True
+       
+       
+    1: def _supports_text_extraction_surface(filing: object) -> bool:
+   30:     for attr_name in ("sections", "parse", "text", "items"):
+   29:         attr = getattr(filing, attr_name, None)
+   29:         if callable(attr):
+   26:             try:
+   26:                 value = attr()
+>>>>>>             except Exception:
+>>>>>>                 continue
+   26:             if value:
+   25:                 return True
+    1:             continue
+    3:         if attr:
+>>>>>>             return True
+    1:     return False
+       
+       
+    1: def _extract_delay_days_from_text(filing: object) -> float | None:
+>>>>>>     text_sources: list[str] = []
+>>>>>>     for attr_name in ("parse", "text", "sections"):
+>>>>>>         attr = getattr(filing, attr_name, None)
+>>>>>>         if callable(attr):
+>>>>>>             try:
+>>>>>>                 value = attr()
+>>>>>>             except Exception:
+>>>>>>                 continue
+               else:
+>>>>>>             value = attr
+       
+>>>>>>         if isinstance(value, str) and value.strip():
+>>>>>>             text_sources.append(value)
+>>>>>>         elif isinstance(value, list):
+>>>>>>             text_sources.extend(str(item) for item in value if str(item).strip())
+>>>>>>         elif isinstance(value, dict):
+>>>>>>             text_sources.extend(str(item) for item in value.values() if str(item).strip())
+       
+>>>>>>     pattern = re.compile(r"(?i)\b(\d+)\s+calendar\s+days?\b")
+>>>>>>     for source in text_sources:
+>>>>>>         match = pattern.search(source)
+>>>>>>         if match is not None:
+>>>>>>             return float(match.group(1))
+>>>>>>     return None
+       
+       
+    1: def _extract_text_sources(filing: object) -> list[str]:
+>>>>>>     text_sources: list[str] = []
+>>>>>>     for attr_name in ("parse", "text", "sections"):
+>>>>>>         attr = getattr(filing, attr_name, None)
+>>>>>>         if callable(attr):
+>>>>>>             try:
+>>>>>>                 value = attr()
+>>>>>>             except Exception:
+>>>>>>                 continue
+               else:
+>>>>>>             value = attr
+       
+>>>>>>         if isinstance(value, str) and value.strip():
+>>>>>>             text_sources.append(value)
+>>>>>>         elif isinstance(value, list):
+>>>>>>             text_sources.extend(str(item) for item in value if str(item).strip())
+>>>>>>         elif isinstance(value, dict):
+>>>>>>             text_sources.extend(str(item) for item in value.values() if str(item).strip())
+>>>>>>     return text_sources
+       
+       
+    1: def _extract_text_sections(filing: object) -> list[tuple[str | None, str]]:
+>>>>>>     sections: list[tuple[str | None, str]] = []
+       
+>>>>>>     raw_sections = getattr(filing, "sections", None)
+>>>>>>     if callable(raw_sections):
+>>>>>>         try:
+>>>>>>             raw_sections = raw_sections()
+>>>>>>         except Exception:
+>>>>>>             raw_sections = None
+       
+>>>>>>     if isinstance(raw_sections, dict):
+>>>>>>         for section_name, section_text in raw_sections.items():
+>>>>>>             text = str(section_text).strip()
+>>>>>>             if text:
+>>>>>>                 sections.append((str(section_name), text))
+>>>>>>     elif isinstance(raw_sections, list):
+>>>>>>         for section in raw_sections:
+>>>>>>             text = str(section).strip()
+>>>>>>             if not text:
+>>>>>>                 continue
+>>>>>>             heading = text.splitlines()[0].strip() if text.splitlines() else None
+>>>>>>             sections.append((heading, text))
+       
+>>>>>>     if sections:
+>>>>>>         return sections
+       
+>>>>>>     for attr_name in ("parse", "text"):
+>>>>>>         attr = getattr(filing, attr_name, None)
+>>>>>>         if callable(attr):
+>>>>>>             try:
+>>>>>>                 value = attr()
+>>>>>>             except Exception:
+>>>>>>                 continue
+               else:
+>>>>>>             value = attr
+>>>>>>         if isinstance(value, str) and value.strip():
+>>>>>>             sections.append((None, value))
+>>>>>>     return sections
+       
+       
+    1: def _extract_first_currency(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
+>>>>>>     for source in text_sources:
+>>>>>>         normalized = " ".join(source.split())
+>>>>>>         for pattern in patterns:
+>>>>>>             match = re.search(pattern, normalized)
+>>>>>>             if match is None:
+>>>>>>                 continue
+>>>>>>             candidate = coerce_numeric_value(match.group(1))
+>>>>>>             if candidate is not None:
+>>>>>>                 return float(candidate)
+>>>>>>     return None
+       
+       
+    4: def _extract_first_currency_with_section(
+    2:     patterns: tuple[str, ...], text_sections: list[tuple[str | None, str]]
+    1: ) -> tuple[float | None, str | None]:
+>>>>>>     for section_name, source in text_sections:
+>>>>>>         normalized = " ".join(source.split())
+>>>>>>         for pattern in patterns:
+>>>>>>             match = re.search(pattern, normalized)
+>>>>>>             if match is None:
+>>>>>>                 continue
+>>>>>>             candidate = coerce_numeric_value(match.group(1))
+>>>>>>             if candidate is not None:
+>>>>>>                 return float(candidate), section_name
+>>>>>>     return None, None
+       
+       
+    1: def _extract_first_count(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
+>>>>>>     for source in text_sources:
+>>>>>>         normalized = " ".join(source.split())
+>>>>>>         for pattern in patterns:
+>>>>>>             match = re.search(pattern, normalized)
+>>>>>>             if match is None:
+>>>>>>                 continue
+>>>>>>             candidate = coerce_numeric_value(match.group(1))
+>>>>>>             if candidate is not None:
+>>>>>>                 return float(candidate)
+>>>>>>     return None
+       
+       
+    4: def _extract_first_count_with_section(
+    2:     patterns: tuple[str, ...], text_sections: list[tuple[str | None, str]]
+    1: ) -> tuple[float | None, str | None]:
+>>>>>>     for section_name, source in text_sections:
+>>>>>>         normalized = " ".join(source.split())
+>>>>>>         for pattern in patterns:
+>>>>>>             match = re.search(pattern, normalized)
+>>>>>>             if match is None:
+>>>>>>                 continue
+>>>>>>             candidate = coerce_numeric_value(match.group(1))
+>>>>>>             if candidate is not None:
+>>>>>>                 return float(candidate), section_name
+>>>>>>     return None, None
+       
+       
+    1: def _build_issuer_offering_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
+>>>>>>     field_extractors = {
+>>>>>>         "gross_proceeds": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)gross proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)aggregate offering price(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "net_proceeds": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)net proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)estimated net proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "offering_price_per_share": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)offering price per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)\$([\d,]+(?:\.\d+)?)\s+per share",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "underwriter_discount_total": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)underwriting discounts and commissions(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "financing_commitment_amount": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)financing commitment(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)backstop amount(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "securities_offered_qty": _extract_first_count_with_section(
+>>>>>>             (
+                       r"(?i)([\d,]+)\s+shares?\s+of common stock",
+                       r"(?i)offering of\s+([\d,]+)\s+shares?",
+                   ),
+>>>>>>             text_sections,
+               ),
+           }
+       
+>>>>>>     facts: list[FactInput] = []
+>>>>>>     evidences: list[EvidenceInput] = []
+>>>>>>     for field_name, extraction in field_extractors.items():
+>>>>>>         value, source_section = extraction
+>>>>>>         if value is None:
+>>>>>>             continue
+>>>>>>         subject_key = "security:1" if field_name in {"offering_price_per_share", "securities_offered_qty"} else "document"
+>>>>>>         facts.append(
+>>>>>>             FactInput(
+>>>>>>                 field_name=field_name,
+>>>>>>                 subject_key=subject_key,
+>>>>>>                 value_numeric=value,
+>>>>>>                 confidence=0.99,
+                   )
+               )
+>>>>>>         evidences.append(
+>>>>>>             EvidenceInput(
+>>>>>>                 field_name=field_name,
+>>>>>>                 subject_key=subject_key,
+>>>>>>                 locator_kind="parse_text",
+>>>>>>                 source_span="offering_text",
+>>>>>>                 source_section=source_section,
+>>>>>>                 raw_value=str(value),
+>>>>>>                 normalized_value=str(value),
+                   )
+               )
+       
+>>>>>>     if not facts:
+>>>>>>         return None
+>>>>>>     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+       
+       
+    1: def _build_issuer_deal_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
+>>>>>>     field_extractors = {
+>>>>>>         "deal_value": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)deal value(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)transaction value(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "offer_price_per_share": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)offer price per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)cash consideration per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "tender_shares_sought": _extract_first_count_with_section(
+>>>>>>             (
+                       r"(?i)([\d,]+)\s+shares?\s+sought",
+                       r"(?i)maximum number of shares(?: is| are)?\s+([\d,]+)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "financing_commitment_amount": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)financing commitment(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)backstop amount(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+>>>>>>         "termination_fee": _extract_first_currency_with_section(
+>>>>>>             (
+                       r"(?i)termination fee(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                       r"(?i)break-up fee(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                   ),
+>>>>>>             text_sections,
+               ),
+           }
+       
+>>>>>>     facts: list[FactInput] = []
+>>>>>>     evidences: list[EvidenceInput] = []
+>>>>>>     for field_name, extraction in field_extractors.items():
+>>>>>>         value, source_section = extraction
+>>>>>>         if value is None:
+>>>>>>             continue
+>>>>>>         subject_key = "security:1" if field_name in {"offer_price_per_share", "tender_shares_sought"} else "document"
+>>>>>>         facts.append(
+>>>>>>             FactInput(
+>>>>>>                 field_name=field_name,
+>>>>>>                 subject_key=subject_key,
+>>>>>>                 value_numeric=value,
+>>>>>>                 confidence=0.99,
+                   )
+               )
+>>>>>>         evidences.append(
+>>>>>>             EvidenceInput(
+>>>>>>                 field_name=field_name,
+>>>>>>                 subject_key=subject_key,
+>>>>>>                 locator_kind="parse_text",
+>>>>>>                 source_span="deal_text",
+>>>>>>                 source_section=source_section,
+>>>>>>                 raw_value=str(value),
+>>>>>>                 normalized_value=str(value),
+                   )
+               )
+       
+>>>>>>     if not facts:
+>>>>>>         return None
+>>>>>>     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+       
+       
+    1: def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
+>>>>>>     facts: list[FactInput] = []
+>>>>>>     evidences: list[EvidenceInput] = []
+>>>>>>     executive_index = 0
+>>>>>>     holder_index = 0
+       
+>>>>>>     exec_pattern = re.compile(r"(?i)^(?P<label>.+?)\s+total\s+\$?(?P<amount>[\d,]+(?:\.\d+)?)$")
+>>>>>>     holder_pattern = re.compile(r"(?i)^(?P<label>.+?)\s+(?P<shares>[\d,]+)\s+shares?\s+(?P<pct>[\d.]+)%$")
+       
+>>>>>>     for source_section, source in text_sections:
+>>>>>>         for raw_line in source.splitlines():
+>>>>>>             line = raw_line.strip()
+>>>>>>             if not line:
+>>>>>>                 continue
+       
+>>>>>>             exec_match = exec_pattern.match(line)
+>>>>>>             if exec_match is not None:
+>>>>>>                 amount = coerce_numeric_value(exec_match.group("amount"))
+>>>>>>                 if amount is not None:
+>>>>>>                     executive_index += 1
+>>>>>>                     subject_key = f"exec:{executive_index}"
+>>>>>>                     facts.append(
+>>>>>>                         FactInput(
+>>>>>>                             field_name="exec_total_comp",
+>>>>>>                             subject_key=subject_key,
+>>>>>>                             value_numeric=float(amount),
+>>>>>>                             confidence=0.99,
+                               )
+                           )
+>>>>>>                     evidences.append(
+>>>>>>                         EvidenceInput(
+>>>>>>                             field_name="exec_total_comp",
+>>>>>>                             subject_key=subject_key,
+>>>>>>                             locator_kind="parse_text",
+>>>>>>                             source_span=line,
+>>>>>>                             source_section=source_section,
+>>>>>>                             raw_value=exec_match.group("amount"),
+>>>>>>                             normalized_value=str(float(amount)),
+                               )
+                           )
+>>>>>>                 continue
+       
+>>>>>>             holder_match = holder_pattern.match(line)
+>>>>>>             if holder_match is not None:
+>>>>>>                 shares = coerce_numeric_value(holder_match.group("shares"))
+>>>>>>                 pct = coerce_numeric_value(holder_match.group("pct"))
+>>>>>>                 if shares is not None and pct is not None:
+>>>>>>                     holder_index += 1
+>>>>>>                     subject_key = f"holder:{holder_index}"
+>>>>>>                     facts.append(
+>>>>>>                         FactInput(
+>>>>>>                             field_name="holder_beneficial_ownership_shares",
+>>>>>>                             subject_key=subject_key,
+>>>>>>                             value_numeric=float(shares),
+>>>>>>                             confidence=0.99,
+                               )
+                           )
+>>>>>>                     facts.append(
+>>>>>>                         FactInput(
+>>>>>>                             field_name="holder_beneficial_ownership_pct",
+>>>>>>                             subject_key=subject_key,
+>>>>>>                             value_numeric=float(pct),
+>>>>>>                             confidence=0.99,
+                               )
+                           )
+>>>>>>                     evidences.append(
+>>>>>>                         EvidenceInput(
+>>>>>>                             field_name="holder_beneficial_ownership_shares",
+>>>>>>                             subject_key=subject_key,
+>>>>>>                             locator_kind="parse_text",
+>>>>>>                             source_span=line,
+>>>>>>                             source_section=source_section,
+>>>>>>                             raw_value=holder_match.group("shares"),
+>>>>>>                             normalized_value=str(float(shares)),
+                               )
+                           )
+>>>>>>                     evidences.append(
+>>>>>>                         EvidenceInput(
+>>>>>>                             field_name="holder_beneficial_ownership_pct",
+>>>>>>                             subject_key=subject_key,
+>>>>>>                             locator_kind="parse_text",
+>>>>>>                             source_span=line,
+>>>>>>                             source_section=source_section,
+>>>>>>                             raw_value=holder_match.group("pct"),
+>>>>>>                             normalized_value=str(float(pct)),
+                               )
+                           )
+       
+>>>>>>     if not facts:
+>>>>>>         return None
+>>>>>>     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+       
+       
+    7: def build_bundles_from_provider(
+           *,
+    1:     security: Any,
+    1:     route: RouteName,
+    1:     start_accepted_at: datetime,
+    1:     repo: PipelineRepository,
+    1:     run_id: str,
+    1:     fetch_filings=fetch_filings_for_security,
+    1: ) -> list[FilingBundle]:
+   72:     envelopes = fetch_filings(
+   36:         security=security,
+   36:         route=route,
+   36:         start_accepted_at=start_accepted_at,
+           )
+   36:     if not envelopes:
+>>>>>>         return []
+       
+   36:     numeric_engine = NumericExtractionEngine()
+   36:     text_engine = TextExtractionEngine()
+   72:     route_numeric_specs = tuple(
+   72:         sorted(
+ 1980:             (spec for spec in all_numeric_field_specs() if spec.route == route),
+  584:             key=lambda spec: spec.field_name,
+               )
+           )
+   72:     route_numeric_specs_by_field = {
+  548:         spec.field_name: spec
+  620:         for spec in route_numeric_specs
+           }
+   72:     route_text_specs = tuple(
+   72:         sorted(
+  612:             (spec for spec in all_text_field_specs() if spec.route == route),
+  186:             key=lambda spec: spec.field_name,
+               )
+           )
+       
+   36:     bundles: list[FilingBundle] = []
+  108:     for envelope in sorted(
+   36:         envelopes,
+   72:         key=lambda env: (_normalize_to_utc(env.accepted_at), env.accession_no),
+           ):
+   72:         filing = FilingRecord(
+   36:             accession_no=envelope.accession_no,
+   36:             cik=envelope.cik,
+   36:             ticker=getattr(security, "ticker", None),
+   36:             form_type=envelope.form_type,
+   36:             filed_at=envelope.filed_at,
+   36:             accepted_at=envelope.accepted_at,
+   36:             period_end=envelope.period_end,
+   36:             is_amendment=envelope.form_type.endswith("/A"),
+   36:             amendment_no=envelope.amendment_no,
+               )
+       
+   36:         facts: list[FactInput] = []
+   36:         evidences: list[EvidenceInput] = []
+   36:         form_family = classify_form_family(envelope.form_type)
+   36:         if route == "owner" and form_family in {"3", "4", "5"}:
+    9:             if _supports_text_extraction_surface(envelope.filing):
+   27:                 owner_text_specs = tuple(
+   45:                     spec
+   63:                     for spec in route_text_specs
+   45:                     if form_family in spec.form_families
+                       )
+   25:                 for spec in owner_text_specs:
+   16:                     outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+   16:                     if outcome["status"] != "ok":
+    6:                         _safe_write_log(
+    3:                             repo,
+    3:                             run_id=run_id,
+    3:                             route=route,
+    3:                             stage="extract",
+    3:                             level="ERROR",
+    3:                             message="text field extraction failed",
+    3:                             cik=envelope.cik,
+    3:                             accession_no=envelope.accession_no,
+    3:                             error_type=outcome["error_code"],
+                               )
+    3:                         continue
+   26:                     facts.append(
+   26:                         FactInput(
+   13:                             field_name=spec.field_name,
+   13:                             subject_key="document",
+   13:                             value_text=outcome["value_text"],
+   13:                             value_json=outcome["value_json"],
+   13:                             confidence=0.99,
+                               )
+                           )
+   26:                     evidences.append(
+   26:                         EvidenceInput(
+   13:                             field_name=spec.field_name,
+   13:                             subject_key="document",
+   13:                             locator_kind=outcome["locator_kind"],
+   13:                             source_span=outcome["source_span"],
+   13:                             source_section=outcome["source_section"],
+   13:                             source_item_no=outcome["source_item_no"],
+   13:                             source_xpath=outcome["locator_path"],
+   13:                             source_locator_json=outcome["source_locator_json"],
+   13:                             source_heading_path_json=outcome["source_heading_path_json"],
+   13:                             source_block_offsets_json=outcome["source_block_offsets_json"],
+   13:                             adequacy_signals_json=outcome["adequacy_signals_json"],
+   13:                             retry_history_json=outcome["retry_history_json"],
+   13:                             selection_trace_json=outcome["selection_trace_json"],
+   13:                             raw_value=outcome["value_text"],
+   13:                             normalized_value=outcome["value_text"],
+                               )
+                           )
+       
+    9:             owner_outcome = build_owner_ownership_bundle(envelope=envelope, filing=filing)
+    9:             owner_bundle = owner_outcome.bundle
+    9:             if owner_bundle is None:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="owner ownership extraction failed",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="OWNERSHIP_OBJ_UNAVAILABLE",
+    1:                     error_detail=owner_outcome.error_detail,
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    8:             if not owner_bundle.facts:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="owner ownership extracted no rows",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="NO_OWNER_ROWS_EXTRACTED",
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    7:             owner_facts: list[FactInput] = []
+    7:             owner_evidences: list[EvidenceInput] = []
+   14:             if not _extend_specialized_numeric_bundle_if_valid(
+    7:                 route=route,
+    7:                 bundle=owner_bundle,
+    7:                 facts=owner_facts,
+    7:                 evidences=owner_evidences,
+    7:                 numeric_specs_by_field=route_numeric_specs_by_field,
+    7:                 repo=repo,
+    7:                 run_id=run_id,
+    7:                 cik=envelope.cik,
+    7:                 accession_no=envelope.accession_no,
+    7:                 violation_message="owner ownership bundle violated numeric subject contract",
+                   ):
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+   12:             merged_bundle = FilingBundle(
+    6:                 filing=owner_bundle.filing,
+    6:                 facts=[*owner_facts, *facts],
+    6:                 evidences=[*owner_evidences, *evidences],
+                   )
+    6:             bundles.append(merged_bundle)
+    6:             continue
+       
+   27:         if route == "owner" and form_family in {"13D", "13G"}:
+   11:             if _supports_text_extraction_surface(envelope.filing):
+   33:                 schedule_text_specs = tuple(
+   55:                     spec
+   77:                     for spec in route_text_specs
+   55:                     if form_family in spec.form_families
+                       )
+   28:                 for spec in schedule_text_specs:
+   17:                     outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+   17:                     if outcome["status"] != "ok":
+    4:                         _safe_write_log(
+    2:                             repo,
+    2:                             run_id=run_id,
+    2:                             route=route,
+    2:                             stage="extract",
+    2:                             level="ERROR",
+    2:                             message="text field extraction failed",
+    2:                             cik=envelope.cik,
+    2:                             accession_no=envelope.accession_no,
+    2:                             error_type=outcome["error_code"],
+                               )
+    2:                         continue
+   30:                     facts.append(
+   30:                         FactInput(
+   15:                             field_name=spec.field_name,
+   15:                             subject_key="document",
+   15:                             value_text=outcome["value_text"],
+   15:                             value_json=outcome["value_json"],
+   15:                             confidence=0.99,
+                               )
+                           )
+   30:                     evidences.append(
+   30:                         EvidenceInput(
+   15:                             field_name=spec.field_name,
+   15:                             subject_key="document",
+   15:                             locator_kind=outcome["locator_kind"],
+   15:                             source_span=outcome["source_span"],
+   15:                             source_section=outcome["source_section"],
+   15:                             source_item_no=outcome["source_item_no"],
+   15:                             source_xpath=outcome["locator_path"],
+   15:                             source_locator_json=outcome["source_locator_json"],
+   15:                             source_heading_path_json=outcome["source_heading_path_json"],
+   15:                             source_block_offsets_json=outcome["source_block_offsets_json"],
+   15:                             adequacy_signals_json=outcome["adequacy_signals_json"],
+   15:                             retry_history_json=outcome["retry_history_json"],
+   15:                             selection_trace_json=outcome["selection_trace_json"],
+   15:                             raw_value=outcome["value_text"],
+   15:                             normalized_value=outcome["value_text"],
+                               )
+                           )
+       
+   22:             schedule_outcome = build_owner_schedule_13dg_bundle(
+   11:                 envelope=envelope,
+   11:                 filing=filing,
+   11:                 form_family=form_family,
+                   )
+   11:             schedule_bundle = schedule_outcome.bundle
+   11:             if schedule_bundle is None:
+    4:                 _safe_write_log(
+    2:                     repo,
+    2:                     run_id=run_id,
+    2:                     route=route,
+    2:                     stage="extract",
+    2:                     level="ERROR",
+    2:                     message="owner schedule extraction failed",
+    2:                     cik=envelope.cik,
+    2:                     accession_no=envelope.accession_no,
+    2:                     error_type="OWNER_XML_UNAVAILABLE",
+    2:                     error_detail=schedule_outcome.error_detail,
+                       )
+    4:                 _append_partial_bundle_if_any(
+    2:                     filing=filing,
+    2:                     facts=facts,
+    2:                     evidences=evidences,
+    2:                     bundles=bundles,
+                       )
+    2:                 continue
+   27:             has_owner_rows = any(
+   14:                 subject_key_has_type(
+    7:                     route=route,
+    7:                     subject_key=fact.subject_key,
+    7:                     subject_type="reporting_person",
+                       )
+   20:                 for fact in schedule_bundle.facts
+                   )
+   18:             if not _extend_specialized_numeric_bundle_if_valid(
+    9:                 route=route,
+    9:                 bundle=schedule_bundle,
+    9:                 facts=facts,
+    9:                 evidences=evidences,
+    9:                 numeric_specs_by_field=route_numeric_specs_by_field,
+    9:                 repo=repo,
+    9:                 run_id=run_id,
+    9:                 cik=envelope.cik,
+    9:                 accession_no=envelope.accession_no,
+    9:                 violation_message="owner schedule bundle violated numeric subject contract",
+                   ):
+    4:                 _append_partial_bundle_if_any(
+    2:                     filing=filing,
+    2:                     facts=facts,
+    2:                     evidences=evidences,
+    2:                     bundles=bundles,
+                       )
+    2:                 continue
+    7:             if not has_owner_rows:
+    4:                 _safe_write_log(
+    2:                     repo,
+    2:                     run_id=run_id,
+    2:                     route=route,
+    2:                     stage="extract",
+    2:                     level="ERROR",
+    2:                     message="owner schedule extracted no rows",
+    2:                     cik=envelope.cik,
+    2:                     accession_no=envelope.accession_no,
+    2:                     error_type="NO_OWNER_ROWS_EXTRACTED",
+                       )
+    4:                 _append_partial_bundle_if_any(
+    2:                     filing=filing,
+    2:                     facts=facts,
+    2:                     evidences=evidences,
+    2:                     bundles=bundles,
+                       )
+    2:                 continue
+   10:             merged_bundle = FilingBundle(
+    5:                 filing=schedule_bundle.filing,
+    5:                 facts=[*schedule_bundle.facts, *facts],
+    5:                 evidences=[*schedule_bundle.evidences, *evidences],
+                   )
+    5:             bundles.append(merged_bundle)
+    5:             continue
+   16:         if route == "owner" and form_family == "144":
+    6:             if _supports_text_extraction_surface(envelope.filing):
+   15:                 form144_text_specs = tuple(
+   25:                     spec
+   35:                     for spec in route_text_specs
+   25:                     if form_family in spec.form_families
+                       )
+   10:                 for spec in form144_text_specs:
+    5:                     outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+    5:                     if outcome["status"] != "ok":
+    2:                         _safe_write_log(
+    1:                             repo,
+    1:                             run_id=run_id,
+    1:                             route=route,
+    1:                             stage="extract",
+    1:                             level="ERROR",
+    1:                             message="text field extraction failed",
+    1:                             cik=envelope.cik,
+    1:                             accession_no=envelope.accession_no,
+    1:                             error_type=outcome["error_code"],
+                               )
+    1:                         continue
+    8:                     facts.append(
+    8:                         FactInput(
+    4:                             field_name=spec.field_name,
+    4:                             subject_key="document",
+    4:                             value_text=outcome["value_text"],
+    4:                             value_json=outcome["value_json"],
+    4:                             confidence=0.99,
+                               )
+                           )
+    8:                     evidences.append(
+    8:                         EvidenceInput(
+    4:                             field_name=spec.field_name,
+    4:                             subject_key="document",
+    4:                             locator_kind=outcome["locator_kind"],
+    4:                             source_span=outcome["source_span"],
+    4:                             source_section=outcome["source_section"],
+    4:                             source_item_no=outcome["source_item_no"],
+    4:                             source_xpath=outcome["locator_path"],
+    4:                             source_locator_json=outcome["source_locator_json"],
+    4:                             source_heading_path_json=outcome["source_heading_path_json"],
+    4:                             source_block_offsets_json=outcome["source_block_offsets_json"],
+    4:                             adequacy_signals_json=outcome["adequacy_signals_json"],
+    4:                             retry_history_json=outcome["retry_history_json"],
+    4:                             selection_trace_json=outcome["selection_trace_json"],
+    4:                             raw_value=outcome["value_text"],
+    4:                             normalized_value=outcome["value_text"],
+                               )
+                           )
+       
+    6:             form144_outcome = build_owner_form144_bundle(envelope=envelope, filing=filing)
+    6:             form144_bundle = form144_outcome.bundle
+    6:             if form144_bundle is None:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="owner form144 extraction failed",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="OWNER_OBJ_UNAVAILABLE",
+    1:                     error_detail=form144_outcome.error_detail,
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+   15:             has_sale_rows = any(
+    8:                 subject_key_has_type(
+    4:                     route=route,
+    4:                     subject_key=fact.subject_key,
+    4:                     subject_type="form144_notice",
+                       )
+   11:                 for fact in form144_bundle.facts
+                   )
+    5:             form144_facts: list[FactInput] = []
+    5:             form144_evidences: list[EvidenceInput] = []
+   10:             if not _extend_specialized_numeric_bundle_if_valid(
+    5:                 route=route,
+    5:                 bundle=form144_bundle,
+    5:                 facts=form144_facts,
+    5:                 evidences=form144_evidences,
+    5:                 numeric_specs_by_field=route_numeric_specs_by_field,
+    5:                 repo=repo,
+    5:                 run_id=run_id,
+    5:                 cik=envelope.cik,
+    5:                 accession_no=envelope.accession_no,
+    5:                 violation_message="owner form144 bundle violated numeric subject contract",
+                   ):
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    4:             if not has_sale_rows:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="owner form144 extracted no rows",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="NO_OWNER_ROWS_EXTRACTED",
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    6:             merged_bundle = FilingBundle(
+    3:                 filing=form144_bundle.filing,
+    3:                 facts=[*form144_facts, *facts],
+    3:                 evidences=[*form144_evidences, *evidences],
+                   )
+    3:             bundles.append(merged_bundle)
+    3:             continue
+       
+   10:         if route == "issuer" and form_family == "8-K":
+>>>>>>             vote_outcome = build_issuer_8k_vote_bundle(
+>>>>>>                 envelope=envelope,
+>>>>>>                 filing=filing,
+                   )
+>>>>>>             vote_bundle = vote_outcome.bundle
+>>>>>>             vote_item_present = vote_outcome.item_present
+>>>>>>             if vote_bundle is not None:
+>>>>>>                 vote_facts: list[FactInput] = []
+>>>>>>                 vote_evidences: list[EvidenceInput] = []
+>>>>>>                 vote_bundle_valid = _extend_specialized_numeric_bundle_if_valid(
+>>>>>>                     route=route,
+>>>>>>                     bundle=vote_bundle,
+>>>>>>                     facts=vote_facts,
+>>>>>>                     evidences=vote_evidences,
+>>>>>>                     numeric_specs_by_field=route_numeric_specs_by_field,
+>>>>>>                     repo=repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     violation_message="issuer 8-K vote bundle violated numeric subject contract",
+                       )
+>>>>>>                 if vote_bundle_valid:
+>>>>>>                     has_vote_rows = any(
+>>>>>>                         subject_key_has_type(
+>>>>>>                             route=route,
+>>>>>>                             subject_key=fact.subject_key,
+>>>>>>                             subject_type="proposal",
+                               )
+>>>>>>                         for fact in vote_bundle.facts
+                           )
+>>>>>>                     if vote_item_present and not has_vote_rows:
+>>>>>>                         _safe_write_log(
+>>>>>>                             repo,
+>>>>>>                             run_id=run_id,
+>>>>>>                             route=route,
+>>>>>>                             stage="extract",
+>>>>>>                             level="ERROR",
+>>>>>>                             message="issuer 8-K vote extraction failed",
+>>>>>>                             cik=envelope.cik,
+>>>>>>                             accession_no=envelope.accession_no,
+>>>>>>                             error_type="NO_VOTE_ROWS_EXTRACTED",
+>>>>>>                             error_detail=vote_outcome.error_detail,
+                               )
+>>>>>>                     if has_vote_rows:
+>>>>>>                         facts.extend(vote_facts)
+>>>>>>                         evidences.extend(vote_evidences)
+       
+   10:         if route == "holding" and form_family == "13F-HR/A":
+   15:             holding_text_specs = tuple(
+   10:                 spec
+   20:                 for spec in route_text_specs
+   10:                 if form_family in spec.form_families
+                   )
+   10:             for spec in holding_text_specs:
+    5:                 outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+    5:                 if outcome["status"] != "ok":
+    2:                     _safe_write_log(
+    1:                         repo,
+    1:                         run_id=run_id,
+    1:                         route=route,
+    1:                         stage="extract",
+    1:                         level="ERROR",
+    1:                         message="text field extraction failed",
+    1:                         cik=envelope.cik,
+    1:                         accession_no=envelope.accession_no,
+    1:                         error_type=outcome["error_code"],
+                           )
+    1:                     continue
+    8:                 facts.append(
+    8:                     FactInput(
+    4:                         field_name=spec.field_name,
+    4:                         subject_key="document",
+    4:                         value_text=outcome["value_text"],
+    4:                         value_json=outcome["value_json"],
+    4:                         confidence=0.99,
+                           )
+                       )
+    8:                 evidences.append(
+    8:                     EvidenceInput(
+    4:                         field_name=spec.field_name,
+    4:                         subject_key="document",
+    4:                         locator_kind=outcome["locator_kind"],
+    4:                         source_span=outcome["source_span"],
+    4:                         source_section=outcome["source_section"],
+    4:                         source_item_no=outcome["source_item_no"],
+    4:                         source_xpath=outcome["locator_path"],
+    4:                         source_locator_json=outcome["source_locator_json"],
+    4:                         source_heading_path_json=outcome["source_heading_path_json"],
+    4:                         source_block_offsets_json=outcome["source_block_offsets_json"],
+    4:                         adequacy_signals_json=outcome["adequacy_signals_json"],
+    4:                         retry_history_json=outcome["retry_history_json"],
+    4:                         selection_trace_json=outcome["selection_trace_json"],
+    4:                         raw_value=outcome["value_text"],
+    4:                         normalized_value=outcome["value_text"],
+                           )
+                       )
+       
+    5:             holding_outcome = build_holding_13f_bundle(envelope=envelope, filing=filing)
+    5:             holding_bundle = holding_outcome.bundle
+    5:             if holding_bundle is None:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="holding 13F extraction failed",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="HOLDING_OBJ_UNAVAILABLE",
+    1:                     error_detail=holding_outcome.error_detail,
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+   12:             has_position_rows = any(
+    6:                 subject_key_has_type(
+    3:                     route=route,
+    3:                     subject_key=fact.subject_key,
+    3:                     subject_type="holding_position",
+                       )
+    9:                 for fact in holding_bundle.facts
+                   )
+    4:             holding_facts: list[FactInput] = []
+    4:             holding_evidences: list[EvidenceInput] = []
+    8:             if not _extend_specialized_numeric_bundle_if_valid(
+    4:                 route=route,
+    4:                 bundle=holding_bundle,
+    4:                 facts=holding_facts,
+    4:                 evidences=holding_evidences,
+    4:                 numeric_specs_by_field=route_numeric_specs_by_field,
+    4:                 repo=repo,
+    4:                 run_id=run_id,
+    4:                 cik=envelope.cik,
+    4:                 accession_no=envelope.accession_no,
+    4:                 violation_message="holding 13F amendment bundle violated numeric subject contract",
+                   ):
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    3:             if not has_position_rows:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="holding 13F amendment extracted no position rows",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="NO_HOLDING_ROWS_EXTRACTED",
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    4:             merged_bundle = FilingBundle(
+    2:                 filing=holding_bundle.filing,
+    2:                 facts=[*holding_facts, *facts],
+    2:                 evidences=[*holding_evidences, *evidences],
+                   )
+    2:             bundles.append(merged_bundle)
+    2:             continue
+       
+    5:         if route == "holding" and form_family == "13F-HR":
+   15:             holding_text_specs = tuple(
+   10:                 spec
+   20:                 for spec in route_text_specs
+   10:                 if form_family in spec.form_families
+                   )
+   10:             for spec in holding_text_specs:
+    5:                 outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+    5:                 if outcome["status"] != "ok":
+    2:                     _safe_write_log(
+    1:                         repo,
+    1:                         run_id=run_id,
+    1:                         route=route,
+    1:                         stage="extract",
+    1:                         level="ERROR",
+    1:                         message="text field extraction failed",
+    1:                         cik=envelope.cik,
+    1:                         accession_no=envelope.accession_no,
+    1:                         error_type=outcome["error_code"],
+                           )
+    1:                     continue
+    8:                 facts.append(
+    8:                     FactInput(
+    4:                         field_name=spec.field_name,
+    4:                         subject_key="document",
+    4:                         value_text=outcome["value_text"],
+    4:                         value_json=outcome["value_json"],
+    4:                         confidence=0.99,
+                           )
+                       )
+    8:                 evidences.append(
+    8:                     EvidenceInput(
+    4:                         field_name=spec.field_name,
+    4:                         subject_key="document",
+    4:                         locator_kind=outcome["locator_kind"],
+    4:                         source_span=outcome["source_span"],
+    4:                         source_section=outcome["source_section"],
+    4:                         source_item_no=outcome["source_item_no"],
+    4:                         source_xpath=outcome["locator_path"],
+    4:                         source_locator_json=outcome["source_locator_json"],
+    4:                         source_heading_path_json=outcome["source_heading_path_json"],
+    4:                         source_block_offsets_json=outcome["source_block_offsets_json"],
+    4:                         adequacy_signals_json=outcome["adequacy_signals_json"],
+    4:                         retry_history_json=outcome["retry_history_json"],
+    4:                         selection_trace_json=outcome["selection_trace_json"],
+    4:                         raw_value=outcome["value_text"],
+    4:                         normalized_value=outcome["value_text"],
+                           )
+                       )
+       
+    5:             holding_outcome = build_holding_13f_bundle(envelope=envelope, filing=filing)
+    5:             holding_bundle = holding_outcome.bundle
+    5:             if holding_bundle is None:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="holding 13F extraction failed",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="HOLDING_OBJ_UNAVAILABLE",
+    1:                     error_detail=holding_outcome.error_detail,
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+   12:             has_position_rows = any(
+    6:                 subject_key_has_type(
+    3:                     route=route,
+    3:                     subject_key=fact.subject_key,
+    3:                     subject_type="holding_position",
+                       )
+    9:                 for fact in holding_bundle.facts
+                   )
+    4:             holding_facts: list[FactInput] = []
+    4:             holding_evidences: list[EvidenceInput] = []
+    8:             if not _extend_specialized_numeric_bundle_if_valid(
+    4:                 route=route,
+    4:                 bundle=holding_bundle,
+    4:                 facts=holding_facts,
+    4:                 evidences=holding_evidences,
+    4:                 numeric_specs_by_field=route_numeric_specs_by_field,
+    4:                 repo=repo,
+    4:                 run_id=run_id,
+    4:                 cik=envelope.cik,
+    4:                 accession_no=envelope.accession_no,
+    4:                 violation_message="holding 13F bundle violated numeric subject contract",
+                   ):
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    3:             if not has_position_rows:
+    2:                 _safe_write_log(
+    1:                     repo,
+    1:                     run_id=run_id,
+    1:                     route=route,
+    1:                     stage="extract",
+    1:                     level="ERROR",
+    1:                     message="holding 13F extracted no rows",
+    1:                     cik=envelope.cik,
+    1:                     accession_no=envelope.accession_no,
+    1:                     error_type="NO_HOLDING_ROWS_EXTRACTED",
+                       )
+    2:                 _append_partial_bundle_if_any(
+    1:                     filing=filing,
+    1:                     facts=facts,
+    1:                     evidences=evidences,
+    1:                     bundles=bundles,
+                       )
+    1:                 continue
+    4:             merged_bundle = FilingBundle(
+    2:                 filing=holding_bundle.filing,
+    2:                 facts=[*holding_facts, *facts],
+    2:                 evidences=[*holding_evidences, *evidences],
+                   )
+    2:             bundles.append(merged_bundle)
+    2:             continue
+       
+>>>>>>         filing_numeric_specs = route_numeric_specs
+>>>>>>         filing_text_specs = route_text_specs
+>>>>>>         if route == "issuer" and form_family == "10-Q":
+>>>>>>             filing_numeric_specs = tuple(
+>>>>>>                 spec
+>>>>>>                 for spec in route_numeric_specs
+>>>>>>                 if spec.xbrl_enabled_form_families and form_family in spec.xbrl_enabled_form_families
+                   )
+>>>>>>             filing_text_specs = (
+>>>>>>                 tuple(
+>>>>>>                     spec
+>>>>>>                     for spec in route_text_specs
+>>>>>>                     if form_family in spec.form_families
+                       )
+>>>>>>                 if _supports_text_extraction_surface(envelope.filing)
+>>>>>>                 else ()
+                   )
+>>>>>>         elif route == "issuer" and form_family == "8-K":
+>>>>>>             filing_numeric_specs = tuple(
+>>>>>>                 spec
+>>>>>>                 for spec in route_numeric_specs
+>>>>>>                 if spec.field_name not in _ISSUER_VOTE_FIELDS
+                   )
+>>>>>>             text_sections = _extract_text_sections(envelope.filing)
+>>>>>>             deal_bundle = _build_issuer_deal_text_facts(
+>>>>>>                 filing=filing,
+>>>>>>                 text_sections=text_sections,
+                   )
+>>>>>>             if deal_bundle is not None:
+>>>>>>                 _extend_specialized_numeric_bundle_if_valid(
+>>>>>>                     route=route,
+>>>>>>                     bundle=deal_bundle,
+>>>>>>                     facts=facts,
+>>>>>>                     evidences=evidences,
+>>>>>>                     numeric_specs_by_field=route_numeric_specs_by_field,
+>>>>>>                     repo=repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     violation_message="issuer deal bundle violated numeric subject contract",
+                       )
+>>>>>>         elif route == "issuer" and form_family in {"S-1", "424B4"}:
+>>>>>>             text_sections = _extract_text_sections(envelope.filing)
+>>>>>>             offering_bundle = _build_issuer_offering_text_facts(
+>>>>>>                 filing=filing,
+>>>>>>                 text_sections=text_sections,
+                   )
+>>>>>>             if offering_bundle is not None:
+>>>>>>                 _extend_specialized_numeric_bundle_if_valid(
+>>>>>>                     route=route,
+>>>>>>                     bundle=offering_bundle,
+>>>>>>                     facts=facts,
+>>>>>>                     evidences=evidences,
+>>>>>>                     numeric_specs_by_field=route_numeric_specs_by_field,
+>>>>>>                     repo=repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     violation_message="issuer offering bundle violated numeric subject contract",
+                       )
+>>>>>>             row_numeric_bundle = _build_issuer_row_numeric_text_facts(
+>>>>>>                 filing=filing,
+>>>>>>                 text_sections=text_sections,
+                   )
+>>>>>>             if row_numeric_bundle is not None:
+>>>>>>                 _extend_specialized_numeric_bundle_if_valid(
+>>>>>>                     route=route,
+>>>>>>                     bundle=row_numeric_bundle,
+>>>>>>                     facts=facts,
+>>>>>>                     evidences=evidences,
+>>>>>>                     numeric_specs_by_field=route_numeric_specs_by_field,
+>>>>>>                     repo=repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     violation_message="issuer row-numeric bundle violated numeric subject contract",
+                       )
+>>>>>>         elif route == "issuer" and form_family == "DEF 14A":
+>>>>>>             text_sections = _extract_text_sections(envelope.filing)
+>>>>>>             row_numeric_bundle = _build_issuer_row_numeric_text_facts(
+>>>>>>                 filing=filing,
+>>>>>>                 text_sections=text_sections,
+                   )
+>>>>>>             if row_numeric_bundle is not None:
+>>>>>>                 _extend_specialized_numeric_bundle_if_valid(
+>>>>>>                     route=route,
+>>>>>>                     bundle=row_numeric_bundle,
+>>>>>>                     facts=facts,
+>>>>>>                     evidences=evidences,
+>>>>>>                     numeric_specs_by_field=route_numeric_specs_by_field,
+>>>>>>                     repo=repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     violation_message="issuer row-numeric bundle violated numeric subject contract",
+                       )
+>>>>>>         elif route == "issuer" and form_family in {"SC TO-I", "SC 13E3"}:
+>>>>>>             text_sections = _extract_text_sections(envelope.filing)
+>>>>>>             deal_bundle = _build_issuer_deal_text_facts(
+>>>>>>                 filing=filing,
+>>>>>>                 text_sections=text_sections,
+                   )
+>>>>>>             if deal_bundle is not None:
+>>>>>>                 _extend_specialized_numeric_bundle_if_valid(
+>>>>>>                     route=route,
+>>>>>>                     bundle=deal_bundle,
+>>>>>>                     facts=facts,
+>>>>>>                     evidences=evidences,
+>>>>>>                     numeric_specs_by_field=route_numeric_specs_by_field,
+>>>>>>                     repo=repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     violation_message="issuer deal bundle violated numeric subject contract",
+                       )
+>>>>>>         elif route == "issuer" and form_family in {"NT 10-Q", "NT 10-K"}:
+>>>>>>             delay_days = _extract_delay_days_from_text(envelope.filing)
+>>>>>>             if delay_days is not None:
+>>>>>>                 facts.append(
+>>>>>>                     FactInput(
+>>>>>>                         field_name="filing_delay_days",
+>>>>>>                         subject_key="document",
+>>>>>>                         value_numeric=delay_days,
+>>>>>>                         confidence=0.99,
+                           )
+                       )
+>>>>>>                 evidences.append(
+>>>>>>                     EvidenceInput(
+>>>>>>                         field_name="filing_delay_days",
+>>>>>>                         subject_key="document",
+>>>>>>                         locator_kind="parse_text",
+>>>>>>                         source_span="calendar_days",
+>>>>>>                         raw_value=str(int(delay_days)),
+>>>>>>                         normalized_value=str(delay_days),
+                           )
+                       )
+       
+>>>>>>         if route == "issuer" and form_family in {"DEF 14A", "S-1", "424B4"}:
+>>>>>>             filing_numeric_specs = tuple(
+>>>>>>                 spec
+>>>>>>                 for spec in filing_numeric_specs
+>>>>>>                 if spec.field_name
+>>>>>>                 not in {
+                           "exec_total_comp",
+                           "holder_beneficial_ownership_shares",
+                           "holder_beneficial_ownership_pct",
+                       }
+                   )
+       
+>>>>>>         for spec in filing_numeric_specs:
+>>>>>>             if form_family not in spec.form_families:
+>>>>>>                 continue
+       
+>>>>>>             outcome = numeric_engine.extract_field(filing=envelope.filing, field_spec=spec)
+>>>>>>             if outcome["status"] != "ok":
+>>>>>>                 if outcome["error_code"] != "FIELD_NOT_FOUND":
+>>>>>>                     _safe_write_log(
+>>>>>>                         repo,
+>>>>>>                         run_id=run_id,
+>>>>>>                         route=route,
+>>>>>>                         stage="extract",
+>>>>>>                         level="ERROR",
+>>>>>>                         message="numeric field extraction failed",
+>>>>>>                         cik=envelope.cik,
+>>>>>>                         accession_no=envelope.accession_no,
+>>>>>>                         error_type=outcome["error_code"],
+                           )
+>>>>>>                 continue
+       
+>>>>>>             facts.append(
+>>>>>>                 FactInput(
+>>>>>>                     field_name=spec.field_name,
+>>>>>>                     subject_key="document",
+>>>>>>                     value_numeric=float(outcome["value_normalized"]),
+>>>>>>                     confidence=0.99,
+                       )
+                   )
+>>>>>>             evidences.append(
+>>>>>>                 EvidenceInput(
+>>>>>>                     field_name=spec.field_name,
+>>>>>>                     subject_key="document",
+>>>>>>                     locator_kind=outcome["locator_kind"],
+>>>>>>                     source_span=outcome.get("source_span", outcome["locator_path"]),
+>>>>>>                     source_xpath=outcome.get("source_xpath"),
+>>>>>>                     xbrl_concept=outcome.get("xbrl_concept"),
+>>>>>>                     selection_trace_json=outcome.get("selection_trace_json"),
+>>>>>>                     raw_value=str(outcome["value_raw"]),
+>>>>>>                     normalized_value=str(outcome["value_normalized"]),
+                       )
+                   )
+       
+>>>>>>         for spec in filing_text_specs:
+>>>>>>             if form_family not in spec.form_families:
+>>>>>>                 continue
+       
+>>>>>>             outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+>>>>>>             if outcome["status"] != "ok":
+>>>>>>                 _safe_write_log(
+>>>>>>                     repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     route=route,
+>>>>>>                     stage="extract",
+>>>>>>                     level="ERROR",
+>>>>>>                     message="text field extraction failed",
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     error_type=outcome["error_code"],
+                       )
+>>>>>>                 continue
+       
+>>>>>>             facts.append(
+>>>>>>                 FactInput(
+>>>>>>                     field_name=spec.field_name,
+>>>>>>                     subject_key="document",
+>>>>>>                     value_text=outcome["value_text"],
+>>>>>>                     value_json=outcome["value_json"],
+>>>>>>                     confidence=0.99,
+                       )
+                   )
+>>>>>>             evidences.append(
+>>>>>>                 EvidenceInput(
+>>>>>>                     field_name=spec.field_name,
+>>>>>>                     subject_key="document",
+>>>>>>                     locator_kind=outcome["locator_kind"],
+>>>>>>                     source_span=outcome["source_span"],
+>>>>>>                     source_section=outcome["source_section"],
+>>>>>>                     source_item_no=outcome["source_item_no"],
+>>>>>>                     source_xpath=outcome["locator_path"],
+>>>>>>                     source_locator_json=outcome["source_locator_json"],
+>>>>>>                     source_heading_path_json=outcome["source_heading_path_json"],
+>>>>>>                     source_block_offsets_json=outcome["source_block_offsets_json"],
+>>>>>>                     adequacy_signals_json=outcome["adequacy_signals_json"],
+>>>>>>                     retry_history_json=outcome["retry_history_json"],
+>>>>>>                     selection_trace_json=outcome["selection_trace_json"],
+>>>>>>                     raw_value=outcome["value_text"],
+>>>>>>                     normalized_value=outcome["value_text"],
+                       )
+                   )
+       
+>>>>>>         if not facts:
+>>>>>>             if route == "issuer" and form_family == "10-Q":
+>>>>>>                 _safe_write_log(
+>>>>>>                     repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     route=route,
+>>>>>>                     stage="extract",
+>>>>>>                     level="ERROR",
+>>>>>>                     message="issuer 10-Q slice extracted no target fields",
+>>>>>>                     cik=envelope.cik,
+>>>>>>                     accession_no=envelope.accession_no,
+>>>>>>                     error_type="NO_TARGET_FIELDS_EXTRACTED",
+                       )
+>>>>>>                 continue
+       
+>>>>>>             bundles.append(
+>>>>>>                 FilingBundle(
+>>>>>>                     filing=filing,
+>>>>>>                     facts=[],
+>>>>>>                     evidences=[],
+                       )
+                   )
+>>>>>>             continue
+       
+>>>>>>         bundles.append(
+>>>>>>             FilingBundle(
+>>>>>>                 filing=filing,
+>>>>>>                 facts=facts,
+>>>>>>                 evidences=evidences,
+                   )
+               )
+       
+   36:     return bundles

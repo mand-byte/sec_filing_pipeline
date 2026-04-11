@@ -1,0 +1,19 @@
+    1: import sys
+    1: import warnings
+       
+    1: from clickhouse_connect.driver import create_client, create_async_client
+       
+       
+    1: if sys.version_info < (3, 10):
+>>>>>>     warnings.warn(
+>>>>>>         "Python 3.9 support is deprecated and will be removed in a future release. "
+               "This version of clickhouse-connect may stop working with Python 3.9 unexpectedly.",
+>>>>>>         DeprecationWarning,
+>>>>>>         stacklevel=2
+           )
+       
+       
+    1: driver_name = 'clickhousedb'
+       
+    1: get_client = create_client
+    1: get_async_client = create_async_client

@@ -1,0 +1,19 @@
+    1: from dataclasses import dataclass
+    1: from datetime import datetime
+    1: from typing import Literal
+       
+       
+    1: RouteName = Literal["issuer", "owner", "holding"]
+       
+       
+    3: @dataclass(slots=True, frozen=True)
+    2: class FilingRecord:
+    1:     accession_no: str
+    1:     cik: str
+    1:     ticker: str | None
+    1:     form_type: str
+    1:     filed_at: datetime | None
+    1:     accepted_at: datetime
+    1:     period_end: datetime | None
+    1:     is_amendment: bool
+    1:     amendment_no: int | None

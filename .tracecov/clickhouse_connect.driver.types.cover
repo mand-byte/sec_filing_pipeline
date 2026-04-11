@@ -1,0 +1,50 @@
+    1: from abc import ABC, abstractmethod
+    1: from typing import Sequence, Any
+       
+    1: Matrix = Sequence[Sequence[Any]]
+       
+       
+    2: class Closable(ABC):
+    2:     @abstractmethod
+    2:     def close(self):
+>>>>>>         pass
+       
+       
+    2: class ByteSource(Closable):
+    1:     last_message:bytes = None
+       
+    2:     @abstractmethod
+    2:     def read_leb128(self) -> int:
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_leb128_str(self) -> str:
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_uint64(self) -> int:
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_bytes(self, sz: int) -> bytes:
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_str_col(self, num_rows: int, encoding: str, nullable: bool = False, null_obj: Any = None):
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_bytes_col(self, sz: int, num_rows: int):
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_fixed_str_col(self, sz: int, num_rows: int, encoding: str):
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_array(self, array_type: str, num_rows: int):
+>>>>>>         pass
+       
+    2:     @abstractmethod
+    2:     def read_byte(self) -> int:
+>>>>>>         pass

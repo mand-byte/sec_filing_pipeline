@@ -1,0 +1,39 @@
+    1: from functools import lru_cache
+       
+    1: from sqlalchemy import Engine, create_engine
+    1: from sqlalchemy.orm import Session, sessionmaker
+       
+    1: from src.config import Settings
+       
+       
+    2: @lru_cache(maxsize=None)
+    2: def _engine_for_dsn(pg_dsn: str) -> Engine:
+>>>>>>     return create_engine(pg_dsn)
+       
+       
+    2: @lru_cache(maxsize=None)
+    2: def _session_factory_for_dsn(pg_dsn: str) -> sessionmaker[Session]:
+>>>>>>     return sessionmaker(
+>>>>>>         bind=_engine_for_dsn(pg_dsn),
+>>>>>>         class_=Session,
+>>>>>>         autoflush=False,
+>>>>>>         expire_on_commit=False,
+           )
+       
+       
+    1: def build_engine(settings: Settings | None = None) -> Engine:
+>>>>>>     effective_settings = settings or Settings()
+>>>>>>     return _engine_for_dsn(str(effective_settings.pg_dsn))
+       
+       
+    1: def build_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
+>>>>>>     effective_settings = settings or Settings()
+>>>>>>     return _session_factory_for_dsn(str(effective_settings.pg_dsn))
+       
+       
+    1: def get_engine(settings: Settings | None = None) -> Engine:
+>>>>>>     return build_engine(settings)
+       
+       
+    1: def get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
+>>>>>>     return build_session_factory(settings)

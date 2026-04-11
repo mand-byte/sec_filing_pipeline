@@ -1,0 +1,12 @@
+    2: class SchedulerAlreadyRunningError(Exception):
+    1:     """Raised when attempting to start or configure the scheduler when it's already running."""
+       
+    1:     def __str__(self):
+>>>>>>         return "Scheduler is already running"
+       
+       
+    2: class SchedulerNotRunningError(Exception):
+    1:     """Raised when attempting to shutdown the scheduler when it's not running."""
+       
+    1:     def __str__(self):
+>>>>>>         return "Scheduler is not running"

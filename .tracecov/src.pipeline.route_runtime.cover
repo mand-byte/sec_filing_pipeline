@@ -1,0 +1,355 @@
+    1: from __future__ import annotations
+       
+    1: from dataclasses import dataclass, field
+    1: from datetime import date, datetime, time, timezone
+    1: import traceback
+    1: from typing import Any, Callable
+       
+    1: from src.db.repositories import PipelineRepository
+    1: from src.pipeline.edgar_provider import classify_form_family
+    1: from src.pipeline.extraction.text_registry import all_text_field_specs
+    1: from src.pipeline.review.review_gate import ReviewGateInput, evaluate_review_gate
+    1: from src.pipeline.review.stats import SqlAlchemyReviewStats
+    1: from src.pipeline.rules import is_filing_eligible, should_skip_delisted_route
+    1: from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
+    1: from src.pipeline.types import FilingRecord, RouteName
+       
+       
+    3: @dataclass(frozen=True)
+    2: class FilingBundle:
+    1:     filing: FilingRecord
+    1:     facts: list[FactInput] = field(default_factory=list)
+    1:     evidences: list[EvidenceInput] = field(default_factory=list)
+       
+       
+    3: @dataclass(frozen=True)
+    2: class BundleBuildOutcome:
+    1:     bundle: FilingBundle | None
+    1:     error_detail: str | None = None
+    1:     item_present: bool = False
+       
+       
+    1: def _normalize_to_utc(value: datetime) -> datetime:
+   36:     if value.tzinfo is None:
+>>>>>>         return value.replace(tzinfo=timezone.utc)
+       
+   36:     return value.astimezone(timezone.utc)
+       
+       
+    1: def _as_utc_start_of_day(start_date: date) -> datetime:
+>>>>>>     return datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+       
+       
+    1: def _bundle_sort_key(bundle: FilingBundle) -> tuple[datetime, str]:
+>>>>>>     return (_normalize_to_utc(bundle.filing.accepted_at), bundle.filing.accession_no)
+       
+       
+    1: def _format_exception_detail(exc: BaseException) -> str:
+>>>>>>     return "".join(traceback.TracebackException.from_exception(exc).format()).strip()
+       
+       
+    5: def _load_route_filing_bundles(
+           *,
+    1:     security: Any,
+    1:     route: RouteName,
+    1:     start_accepted_at: datetime,
+    1: ) -> list[FilingBundle]:
+>>>>>>     del start_accepted_at
+>>>>>>     bundles_by_route = getattr(security, "filing_bundles_by_route", None)
+>>>>>>     if not isinstance(bundles_by_route, dict):
+>>>>>>         return []
+       
+>>>>>>     bundles = bundles_by_route.get(route, [])
+>>>>>>     if not isinstance(bundles, list):
+>>>>>>         return []
+       
+>>>>>>     return sorted(
+>>>>>>         [bundle for bundle in bundles if isinstance(bundle, FilingBundle)],
+>>>>>>         key=_bundle_sort_key,
+           )
+       
+       
+   12: def _safe_write_log(
+    1:     repo: PipelineRepository,
+           *,
+    1:     run_id: str,
+    1:     route: RouteName,
+    1:     stage: str,
+    1:     level: str,
+    1:     message: str,
+    2:     cik: str | None = None,
+    2:     accession_no: str | None = None,
+    2:     error_type: str | None = None,
+    2:     error_detail: str | None = None,
+    1: ) -> None:
+   26:     try:
+   52:         repo.write_log(
+   26:             run_id=run_id,
+   26:             route=route,
+   26:             stage=stage,
+   26:             level=level,
+   26:             message=message,
+   26:             cik=cik,
+   26:             accession_no=accession_no,
+   26:             error_type=error_type,
+   26:             error_detail=error_detail,
+               )
+>>>>>>     except Exception:
+>>>>>>         pass
+       
+       
+    1: def _review_metric_for_gate(fact: FactInput) -> float | None:
+>>>>>>     if isinstance(fact.value_numeric, (int, float)) and not isinstance(fact.value_numeric, bool):
+>>>>>>         return float(fact.value_numeric)
+       
+>>>>>>     if isinstance(fact.value_text, str):
+>>>>>>         text_length = len(fact.value_text.strip())
+>>>>>>         if text_length > 0:
+>>>>>>             return float(text_length)
+       
+>>>>>>     return None
+       
+       
+    1: def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stats: SqlAlchemyReviewStats) -> None:
+>>>>>>     form_family = classify_form_family(bundle.filing.form_type)
+>>>>>>     text_field_names = {
+>>>>>>         spec.field_name
+>>>>>>         for spec in all_text_field_specs()
+>>>>>>         if spec.route == route and form_family in spec.form_families
+           }
+>>>>>>     if not text_field_names:
+>>>>>>         return
+       
+>>>>>>     evidence_by_field: dict[str, EvidenceInput] = {}
+>>>>>>     for evidence in bundle.evidences:
+>>>>>>         if evidence.field_name not in evidence_by_field:
+>>>>>>             evidence_by_field[evidence.field_name] = evidence
+       
+>>>>>>     for index, fact in enumerate(bundle.facts):
+>>>>>>         if fact.field_name not in text_field_names:
+>>>>>>             continue
+       
+>>>>>>         evidence = evidence_by_field.get(fact.field_name)
+>>>>>>         metric = _review_metric_for_gate(fact)
+>>>>>>         review_decision = evaluate_review_gate(
+>>>>>>             candidate=ReviewGateInput(
+>>>>>>                 cik=bundle.filing.cik,
+>>>>>>                 route=route,
+>>>>>>                 field_name=fact.field_name,
+>>>>>>                 template_hash=evidence.source_xpath if evidence else None,
+>>>>>>                 value_numeric=metric,
+                   ),
+>>>>>>             stats=stats,
+               )
+       
+>>>>>>         bundle.facts[index] = FactInput(
+>>>>>>             field_name=fact.field_name,
+>>>>>>             subject_key=fact.subject_key,
+>>>>>>             value_numeric=fact.value_numeric,
+>>>>>>             value_text=fact.value_text,
+>>>>>>             value_json=fact.value_json,
+>>>>>>             value_unit=fact.value_unit,
+>>>>>>             confidence=0.49 if review_decision["decision"] == "needs_review" else 0.99,
+>>>>>>             review_priority=review_decision["priority"],
+>>>>>>             review_reason=review_decision["reason"],
+               )
+       
+       
+    3: @dataclass(frozen=True)
+    2: class RouteProcessor:
+    1:     repo: PipelineRepository
+    1:     persistence_service: PersistenceService
+    1:     start_date: date
+    1:     provider_bundle_builder: Callable[..., list[FilingBundle]]
+       
+    1:     def run(self, *, security: Any, route: RouteName, run_id: str) -> None:
+>>>>>>         cik = getattr(security, "cik", None)
+>>>>>>         if cik is None:
+>>>>>>             return
+       
+>>>>>>         active_attr = getattr(security, "active", None)
+>>>>>>         if not isinstance(active_attr, bool):
+>>>>>>             return
+>>>>>>         active = active_attr
+>>>>>>         composite_figi = getattr(security, "composite_figi", None)
+>>>>>>         delisted_utc = getattr(security, "delisted_utc", None)
+       
+>>>>>>         completion = None
+>>>>>>         if composite_figi is not None:
+>>>>>>             completion = self.repo.get_delisted_route_completion(
+>>>>>>                 composite_figi=composite_figi,
+>>>>>>                 cik=cik,
+>>>>>>                 route=route,
+                   )
+       
+>>>>>>         if active and completion is not None and bool(getattr(completion, "is_completed", False)):
+>>>>>>             try:
+>>>>>>                 self.repo.invalidate_delisted_route_completion(
+>>>>>>                     composite_figi=composite_figi,
+>>>>>>                     cik=cik,
+>>>>>>                     route=route,
+                       )
+>>>>>>             except Exception as exc:
+>>>>>>                 _safe_write_log(
+>>>>>>                     self.repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     route=route,
+>>>>>>                     cik=cik,
+>>>>>>                     stage="persist",
+>>>>>>                     level="ERROR",
+>>>>>>                     message="delisted completion invalidation failed",
+>>>>>>                     error_type=exc.__class__.__name__,
+>>>>>>                     error_detail=_format_exception_detail(exc),
+                       )
+>>>>>>             completion = None
+       
+>>>>>>         if should_skip_delisted_route(
+>>>>>>             active=active,
+>>>>>>             is_completed=bool(getattr(completion, "is_completed", False)),
+>>>>>>             snapshot=getattr(completion, "delisted_utc_snapshot", None),
+>>>>>>             current_delisted_utc=delisted_utc,
+               ):
+>>>>>>             return
+       
+>>>>>>         watermark = self.repo.get_route_watermark(cik, route)
+>>>>>>         start_accepted_at = watermark or _as_utc_start_of_day(self.start_date)
+       
+>>>>>>         bundles = _load_route_filing_bundles(
+>>>>>>             security=security,
+>>>>>>             route=route,
+>>>>>>             start_accepted_at=start_accepted_at,
+               )
+>>>>>>         if not bundles:
+>>>>>>             bundles = self.provider_bundle_builder(
+>>>>>>                 security=security,
+>>>>>>                 route=route,
+>>>>>>                 start_accepted_at=start_accepted_at,
+>>>>>>                 repo=self.repo,
+>>>>>>                 run_id=run_id,
+                   )
+       
+>>>>>>         eligible_bundles: list[FilingBundle] = []
+>>>>>>         normalized_start = _normalize_to_utc(start_accepted_at)
+>>>>>>         for bundle in bundles:
+>>>>>>             accepted_at = _normalize_to_utc(bundle.filing.accepted_at)
+>>>>>>             if accepted_at <= normalized_start:
+>>>>>>                 continue
+>>>>>>             if not is_filing_eligible(active=active, delisted_utc=delisted_utc, accepted_at=accepted_at):
+>>>>>>                 continue
+>>>>>>             eligible_bundles.append(bundle)
+       
+>>>>>>         eligible_bundles.sort(key=_bundle_sort_key)
+       
+>>>>>>         last_seen_accepted_at = watermark
+>>>>>>         if eligible_bundles:
+>>>>>>             review_stats = SqlAlchemyReviewStats(self.repo.session)
+>>>>>>             processed_bundles: list[FilingBundle] = []
+>>>>>>             for bundle in eligible_bundles:
+>>>>>>                 try:
+>>>>>>                     self.repo.upsert_filing_attempt(
+>>>>>>                         run_id=run_id,
+>>>>>>                         route=route,
+>>>>>>                         accession_no=bundle.filing.accession_no,
+>>>>>>                         cik=cik,
+>>>>>>                         accepted_at=bundle.filing.accepted_at,
+>>>>>>                         status="in_progress",
+                           )
+>>>>>>                     _apply_review_gate_to_bundle(bundle=bundle, route=route, stats=review_stats)
+>>>>>>                     self.persistence_service.persist_filing_bundle(
+>>>>>>                         filing=bundle.filing,
+>>>>>>                         route=route,
+>>>>>>                         facts=bundle.facts,
+>>>>>>                         evidences=bundle.evidences,
+                           )
+>>>>>>                     self.repo.upsert_filing_attempt(
+>>>>>>                         run_id=run_id,
+>>>>>>                         route=route,
+>>>>>>                         accession_no=bundle.filing.accession_no,
+>>>>>>                         cik=cik,
+>>>>>>                         accepted_at=bundle.filing.accepted_at,
+>>>>>>                         status="completed",
+                           )
+>>>>>>                     processed_bundles.append(bundle)
+>>>>>>                     _safe_write_log(
+>>>>>>                         self.repo,
+>>>>>>                         run_id=run_id,
+>>>>>>                         route=route,
+>>>>>>                         cik=cik,
+>>>>>>                         accession_no=bundle.filing.accession_no,
+>>>>>>                         stage="persist",
+>>>>>>                         level="INFO",
+>>>>>>                         message="filing persisted",
+                           )
+>>>>>>                 except Exception as exc:
+>>>>>>                     try:
+>>>>>>                         self.repo.session.rollback()
+>>>>>>                     except Exception:
+>>>>>>                         pass
+>>>>>>                     try:
+>>>>>>                         self.repo.upsert_filing_attempt(
+>>>>>>                             run_id=run_id,
+>>>>>>                             route=route,
+>>>>>>                             accession_no=bundle.filing.accession_no,
+>>>>>>                             cik=cik,
+>>>>>>                             accepted_at=bundle.filing.accepted_at,
+>>>>>>                             status="failed",
+>>>>>>                             error_type=exc.__class__.__name__,
+>>>>>>                             error_detail=_format_exception_detail(exc),
+                               )
+>>>>>>                     except Exception:
+>>>>>>                         pass
+>>>>>>                     _safe_write_log(
+>>>>>>                         self.repo,
+>>>>>>                         run_id=run_id,
+>>>>>>                         route=route,
+>>>>>>                         cik=cik,
+>>>>>>                         accession_no=bundle.filing.accession_no,
+>>>>>>                         stage="persist",
+>>>>>>                         level="ERROR",
+>>>>>>                         message="filing persistence failed",
+>>>>>>                         error_type=exc.__class__.__name__,
+>>>>>>                         error_detail=_format_exception_detail(exc),
+                           )
+       
+>>>>>>             if processed_bundles:
+>>>>>>                 max_accepted_at = max(
+>>>>>>                     (_normalize_to_utc(bundle.filing.accepted_at) for bundle in processed_bundles),
+>>>>>>                     key=lambda value: value,
+                       )
+>>>>>>                 try:
+>>>>>>                     self.repo.upsert_route_watermark(cik=cik, route=route, accepted_at=max_accepted_at)
+>>>>>>                     last_seen_accepted_at = max_accepted_at
+>>>>>>                 except Exception as exc:
+>>>>>>                     _safe_write_log(
+>>>>>>                         self.repo,
+>>>>>>                         run_id=run_id,
+>>>>>>                         route=route,
+>>>>>>                         cik=cik,
+>>>>>>                         stage="persist",
+>>>>>>                         level="ERROR",
+>>>>>>                         message="watermark update failed",
+>>>>>>                         error_type=exc.__class__.__name__,
+>>>>>>                         error_detail=_format_exception_detail(exc),
+                           )
+       
+>>>>>>         if (not active) and composite_figi is not None:
+>>>>>>             try:
+>>>>>>                 self.repo.mark_delisted_route_completed(
+>>>>>>                     composite_figi=composite_figi,
+>>>>>>                     cik=cik,
+>>>>>>                     route=route,
+>>>>>>                     delisted_utc_snapshot=delisted_utc,
+>>>>>>                     last_seen_accepted_at=last_seen_accepted_at,
+                       )
+>>>>>>             except Exception as exc:
+>>>>>>                 _safe_write_log(
+>>>>>>                     self.repo,
+>>>>>>                     run_id=run_id,
+>>>>>>                     route=route,
+>>>>>>                     cik=cik,
+>>>>>>                     stage="persist",
+>>>>>>                     level="ERROR",
+>>>>>>                     message="delisted completion update failed",
+>>>>>>                     error_type=exc.__class__.__name__,
+>>>>>>                     error_detail=_format_exception_detail(exc),
+                       )
