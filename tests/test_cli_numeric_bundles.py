@@ -1432,6 +1432,74 @@ def test_build_bundles_from_provider_emits_def14a_exec_and_holder_rows(monkeypat
     assert evidence[("holder_beneficial_ownership_pct", "holder:1")].source_section == "Beneficial Ownership Table"
 
 
+def test_build_bundles_from_provider_logs_invalid_def14a_row_contract_without_blocking_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 17, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000023A",
+        cik="0000789019",
+        form_type="DEF 14A",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="DEF 14A",
+            sections=[
+                "Proposal 1\nThe board recommends election of the nominee.",
+                "CD&A\nThe company emphasizes pay for performance in executive compensation.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_row_bundle(*, filing, text_sections):
+        del text_sections
+        return FilingBundle(
+            filing=filing,
+            facts=[
+                FactInput(
+                    field_name="exec_total_comp",
+                    subject_key="document",
+                    value_numeric=1250000.0,
+                    confidence=0.99,
+                )
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name="exec_total_comp",
+                    subject_key="document",
+                    locator_kind="parse_text",
+                    source_span="Jane Doe Total 1,250,000",
+                    source_section="Summary Compensation Table",
+                    raw_value="1250000",
+                    normalized_value="1250000.0",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(provider_module, "_build_issuer_row_numeric_text_facts", build_invalid_row_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-def14a-invalid-row-contract",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("proxy_proposal_quant", "document")] == "election"
+    assert text_facts[("comp_policy_quant", "document")] == "pay for performance"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("exec_total_comp", "document") not in numeric_fields
+    assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_sc_13e3_deal_numeric_fields(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 15, tzinfo=timezone.utc)
     envelope = FilingEnvelope(
