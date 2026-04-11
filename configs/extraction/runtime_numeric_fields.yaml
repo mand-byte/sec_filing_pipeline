@@ -2,6 +2,7 @@ fields:
 - field_name: total_revenue
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -17,10 +18,12 @@ fields:
   - 70
   - 110
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: operating_income
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -34,10 +37,12 @@ fields:
   - 70
   - 110
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: net_income
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -52,10 +57,12 @@ fields:
   - 70
   - 110
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: diluted_eps
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -70,10 +77,12 @@ fields:
   - 70
   - 110
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: cash_and_equivalents
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -87,10 +96,12 @@ fields:
   xbrl_prefer_dimensionless: true
   xbrl_period_type: instant
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: total_debt
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -106,10 +117,12 @@ fields:
   xbrl_prefer_dimensionless: true
   xbrl_period_type: instant
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: operating_cash_flow
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -128,10 +141,12 @@ fields:
   - 180
   - 270
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: capex
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -151,10 +166,12 @@ fields:
   - 180
   - 270
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: shares_outstanding
   route: issuer
   form_families:
+  - 10-K
   - 10-Q
   value_type: float
   locators:
@@ -167,6 +184,7 @@ fields:
   xbrl_prefer_dimensionless: true
   xbrl_period_type: instant
   xbrl_enabled_form_families:
+  - 10-K
   - 10-Q
 - field_name: filing_delay_days
   route: issuer

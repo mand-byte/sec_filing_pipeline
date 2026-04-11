@@ -10,6 +10,15 @@ cases:
         status: ok
         value_text: event
         truth_tier: gold
+  - case_id: default-delay-reason-001
+    route: issuer
+    form_type: NT 10-Q
+    fixture_file: default-delay-reason-001.txt
+    expected:
+      delay_reason_quant:
+        status: ok
+        value_text: audit
+        truth_tier: gold
   - case_id: default-beneficial-ownership-001
     route: owner
     form_type: 13D
@@ -18,6 +27,24 @@ cases:
       beneficial_ownership_intent_quant:
         status: ok
         value_text: passive
+        truth_tier: gold
+  - case_id: default-source-of-funds-001
+    route: owner
+    form_type: 13D
+    fixture_file: default-source-of-funds-001.txt
+    expected:
+      source_of_funds_quant:
+        status: ok
+        value_text: cash
+        truth_tier: gold
+  - case_id: default-manager-structure-001
+    route: holding
+    form_type: 13F-HR
+    fixture_file: default-manager-structure-001.txt
+    expected:
+      manager_structure_quant:
+        status: ok
+        value_text: holdings
         truth_tier: gold
   - case_id: default-amendment-scope-001
     route: holding

@@ -218,7 +218,7 @@ def test_extract_field_allows_negative_net_income() -> None:
     assert outcome["value_normalized"] == -25.0
 
 
-def test_xbrl_logic_does_not_run_outside_enabled_form_families() -> None:
+def test_xbrl_logic_supports_10k_for_existing_issuer_numeric_slice() -> None:
     engine = NumericExtractionEngine()
     filing = FakeFiling(
         form="10-K",
@@ -237,7 +237,10 @@ def test_xbrl_logic_does_not_run_outside_enabled_form_families() -> None:
 
     outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_revenue"))
 
-    assert outcome == {"status": "error", "error_code": "FIELD_NOT_FOUND"}
+    assert outcome["status"] == "ok"
+    assert outcome["value_normalized"] == 999.0
+    assert outcome["xbrl_concept"] == "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert outcome["source_xpath"] == "rev-annual"
 
 
 class FakeObjFirstFiling(FakeFiling):

@@ -18,9 +18,9 @@ def test_default_tier2_assets_cover_current_vertical_slice(tmp_path: Path) -> No
     )
 
     assert result.summary["coverage"] == {
-        "total_cases": 3,
-        "total_candidates": 3,
-        "gold_applicable_rows": 3,
+        "total_cases": 6,
+        "total_candidates": 6,
+        "gold_applicable_rows": 6,
         "silver_applicable_rows": 0,
         "invariant_rows": 0,
     }
@@ -29,18 +29,21 @@ def test_default_tier2_assets_cover_current_vertical_slice(tmp_path: Path) -> No
 
     by_field = json.loads((tmp_path / "phase-gate-default" / "by_field.json").read_text(encoding="utf-8"))
     assert by_field["current_event_quant"]["matched"] == 1
+    assert by_field["delay_reason_quant"]["matched"] == 1
     assert by_field["beneficial_ownership_intent_quant"]["matched"] == 1
+    assert by_field["source_of_funds_quant"]["matched"] == 1
+    assert by_field["manager_structure_quant"]["matched"] == 1
     assert by_field["amendment_scope_quant"]["matched"] == 1
 
 
 def test_default_tier2_assets_support_route_filtered_phase_gates(tmp_path: Path) -> None:
     expectations = {
-        "issuer": "current_event_quant",
-        "owner": "beneficial_ownership_intent_quant",
-        "holding": "amendment_scope_quant",
+        "issuer": {"current_event_quant", "delay_reason_quant"},
+        "owner": {"beneficial_ownership_intent_quant", "source_of_funds_quant"},
+        "holding": {"manager_structure_quant", "amendment_scope_quant"},
     }
 
-    for route, field_name in expectations.items():
+    for route, field_names in expectations.items():
         result = run_offline_tier2_evaluation(
             regex_config_path=tier2_path("regex", "default.yaml"),
             golden_set_path=tier2_path("golden_set", "default.yaml"),
@@ -52,9 +55,9 @@ def test_default_tier2_assets_support_route_filtered_phase_gates(tmp_path: Path)
         )
 
         assert result.summary["selectors"]["route"] == route
-        assert result.summary["coverage"]["total_cases"] == 1
-        assert result.summary["coverage"]["total_candidates"] == 1
+        assert result.summary["coverage"]["total_cases"] == 2
+        assert result.summary["coverage"]["total_candidates"] == 2
         assert result.summary["metrics"]["pass_rate"] == 1.0
 
         by_field = json.loads((tmp_path / f"phase-gate-{route}" / "by_field.json").read_text(encoding="utf-8"))
-        assert list(by_field.keys()) == [field_name]
+        assert set(by_field.keys()) == field_names

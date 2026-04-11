@@ -21,6 +21,46 @@ fields:
       cash_impact_usd_nullable: true
       dilution_pct_nullable: true
       one_time_cost_usd_nullable: true
+  mdna_outlook_quant:
+    route: issuer
+    form_families:
+    - 10-K
+    - 10-Q
+    - 20-F
+    - 6-K-financial
+    - S-1
+    - 424B4
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - md&a
+    - operating and financial review
+    - prospects
+    regex_patterns:
+    - (?i)\b(up|down|flat)\b
+    output_kind: text
+    qa_rules: {}
+  risk_factor_quant:
+    route: issuer
+    form_families:
+    - 10-K
+    - 10-Q
+    - 20-F
+    - S-1
+    - 424B4
+    - SC TO-I
+    - SC 13E3
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - risk factors
+    - risk considerations
+    regex_patterns:
+    - (?i)\b(cybersecurity|litigation|regulatory|competition)\b
+    output_kind: text
+    qa_rules: {}
   beneficial_ownership_intent_quant:
     route: owner
     form_families:
@@ -44,6 +84,161 @@ fields:
       allow_medium: true
       allow_long: true
       allow_unclear: true
+  delay_reason_quant:
+    route: issuer
+    form_families:
+    - NT 10-Q
+    - NT 10-K
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - delay
+    - unable to timely file
+    - could not file
+    regex_patterns:
+    - (?i)\b(audit|transaction|valuation|system)\b
+    output_kind: text
+    qa_rules: {}
+  use_of_proceeds_quant:
+    route: issuer
+    form_families:
+    - S-1
+    - 424B4
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - use of proceeds
+    - proceeds
+    regex_patterns:
+    - (?i)\b(working capital|debt repayment|acquisition|general corporate)\b
+    output_kind: text
+    qa_rules: {}
+  proxy_proposal_quant:
+    route: issuer
+    form_families:
+    - DEF 14A
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - proposal
+    - board recommends
+    regex_patterns:
+    - (?i)\b(election|say on pay|equity plan|auditor)\b
+    output_kind: text
+    qa_rules: {}
+  comp_policy_quant:
+    route: issuer
+    form_families:
+    - DEF 14A
+    - S-1
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - cd&a
+    - compensation discussion and analysis
+    - executive compensation
+    regex_patterns:
+    - (?i)\b(pay for performance|fixed pay|variable pay|equity pay)\b
+    output_kind: text
+    qa_rules: {}
+  tender_going_private_quant:
+    route: issuer
+    form_families:
+    - SC TO-I
+    - SC 13E3
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - summary term sheet
+    - special factors
+    - fairness
+    regex_patterns:
+    - (?i)\b(cash merger|self tender|exchange offer|reverse split)\b
+    output_kind: text
+    qa_rules: {}
+  source_of_funds_quant:
+    route: owner
+    form_families:
+    - 13D
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - item 3
+    - source and amount of funds
+    - funds
+    regex_patterns:
+    - (?i)\b(cash|margin loan|debt|seller financing)\b
+    output_kind: text
+    qa_rules: {}
+  insider_transaction_quant:
+    route: owner
+    form_families:
+    - '4'
+    - '5'
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - remarks
+    - transaction
+    - footnote
+    regex_patterns:
+    - (?i)\b(buy|sell|exercise|award|withholding|gift|conversion)\b
+    output_kind: text
+    qa_rules: {}
+  insider_role_ownership_structure_quant:
+    route: owner
+    form_families:
+    - '3'
+    - '4'
+    - '5'
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - remarks
+    - director
+    - officer
+    regex_patterns:
+    - (?i)\b(director|officer|ten percent holder)\b
+    output_kind: text
+    qa_rules: {}
+  rule144_sale_plan_quant:
+    route: owner
+    form_families:
+    - '144'
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - remarks
+    - sale plan
+    - sale reason
+    regex_patterns:
+    - (?i)\b(liquidity|diversification|tax|estate|pledge release)\b
+    output_kind: text
+    qa_rules: {}
+  manager_structure_quant:
+    route: holding
+    form_families:
+    - 13F-HR
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - cover page
+    - report type
+    - manager
+    regex_patterns:
+    - (?i)\b(holdings|notice|combination)\b
+    output_kind: text
+    qa_rules: {}
   amendment_scope_quant:
     route: holding
     form_families:

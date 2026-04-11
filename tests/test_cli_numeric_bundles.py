@@ -209,6 +209,69 @@ def test_build_bundles_from_provider_emits_numeric_xbrl_evidence(monkeypatch) ->
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_emits_10k_numeric_xbrl_evidence(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 2, tzinfo=timezone.utc)
+    filing = FakeFiling(
+        form="10-K",
+        records=[
+            {
+                "fact_key": "revenue-annual",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-12-31",
+                "value": 5000.0,
+            },
+            {
+                "fact_key": "cash-annual",
+                "concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 900.0,
+            },
+            {
+                "fact_key": "shares-annual",
+                "concept": "dei:EntityCommonStockSharesOutstanding",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 6000000.0,
+            },
+        ],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000016",
+        cik="0000789019",
+        form_type="10-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-1k",
+    )
+
+    assert len(bundles) == 1
+    facts_by_field = {fact.field_name: fact for fact in bundles[0].facts}
+    assert facts_by_field["total_revenue"].value_numeric == 5000.0
+    assert facts_by_field["cash_and_equivalents"].value_numeric == 900.0
+    assert facts_by_field["shares_outstanding"].value_numeric == 6000000.0
+
+
 def test_build_bundles_from_provider_supports_10q_amendments(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 2, tzinfo=timezone.utc)
     filing = FakeFiling(
