@@ -161,6 +161,62 @@ def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_keeps_form4_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000100D",
+        cik="0000789019",
+        form_type="4",
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        filing=FakeForm4Filing(
+            [
+                FakeTransaction(shares=100.0, price_per_share=10.5, shares_owned_following_transaction=1000.0),
+                FakeTransaction(shares=-50.0, price_per_share=11.0, shares_owned_following_transaction=950.0),
+            ],
+            [
+                {"UnderlyingShares": 500.0, "ExercisePrice": 7.5},
+                {"UnderlyingShares": 250.0, "ExercisePrice": 6.25},
+            ],
+            sections=["Remarks\nThe reporting person is a director and this was a buy transaction."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "insider_transaction_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-form4-text-failure",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts if fact.value_numeric is not None}
+    assert facts[("shares_acquired_or_disposed", "txn:1")] == 100.0
+    assert facts[("transaction_price_per_share", "txn:2")] == 11.0
+    assert facts[("derivative_underlying_shares", "dtxn:1")] == 500.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert ("insider_transaction_quant", "document") not in text_facts
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_rejects_owner_bundle_with_invalid_subject_contract(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000100A",
