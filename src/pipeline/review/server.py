@@ -322,6 +322,22 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
             <pre id="evidence-locator-json"></pre>
           </div>
           <div class="code-block">
+            <div class="code-title">Heading Path</div>
+            <pre id="evidence-heading-path"></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-title">Block Offsets</div>
+            <pre id="evidence-block-offsets"></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-title">Adequacy Signals</div>
+            <pre id="evidence-adequacy-signals"></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-title">Retry History</div>
+            <pre id="evidence-retry-history"></pre>
+          </div>
+          <div class="code-block">
             <div class="code-title">Raw Value</div>
             <pre id="evidence-raw"></pre>
           </div>
@@ -388,6 +404,10 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
       meta: document.getElementById("task-meta"),
       evidenceFields: document.getElementById("evidence-fields"),
       evidenceLocatorJson: document.getElementById("evidence-locator-json"),
+      evidenceHeadingPath: document.getElementById("evidence-heading-path"),
+      evidenceBlockOffsets: document.getElementById("evidence-block-offsets"),
+      evidenceAdequacySignals: document.getElementById("evidence-adequacy-signals"),
+      evidenceRetryHistory: document.getElementById("evidence-retry-history"),
       evidenceRaw: document.getElementById("evidence-raw"),
       evidenceNormalized: document.getElementById("evidence-normalized"),
       factPayload: document.getElementById("fact-payload"),
@@ -499,6 +519,10 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
         elements.meta.innerHTML = "";
         elements.evidenceFields.innerHTML = "";
         elements.evidenceLocatorJson.textContent = "";
+        elements.evidenceHeadingPath.textContent = "";
+        elements.evidenceBlockOffsets.textContent = "";
+        elements.evidenceAdequacySignals.textContent = "";
+        elements.evidenceRetryHistory.textContent = "";
         elements.evidenceRaw.textContent = "";
         elements.evidenceNormalized.textContent = "";
         elements.factPayload.textContent = "";
@@ -523,6 +547,10 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
         ["Item", evidence.source_item_no || ""],
       ]);
       elements.evidenceLocatorJson.textContent = pretty(evidence.source_locator_json);
+      elements.evidenceHeadingPath.textContent = pretty(evidence.source_heading_path_json);
+      elements.evidenceBlockOffsets.textContent = pretty(evidence.source_block_offsets_json);
+      elements.evidenceAdequacySignals.textContent = pretty(evidence.adequacy_signals_json);
+      elements.evidenceRetryHistory.textContent = pretty(evidence.retry_history_json);
       elements.evidenceRaw.textContent = pretty(evidence.raw_value);
       elements.evidenceNormalized.textContent = pretty(evidence.normalized_value);
       elements.factPayload.textContent = pretty(detail.fact || {{}});

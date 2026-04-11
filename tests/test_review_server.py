@@ -61,6 +61,11 @@ def _seed_review_task(session: Session) -> None:
                 subject_key="txn:1",
                 locator_kind="obj",
                 source_span="transactions[0].shares",
+                source_locator_json='{"kind":"obj","path":"transactions[0].shares"}',
+                source_heading_path_json='["Ownership Table"]',
+                source_block_offsets_json='{"source_start":12,"source_end":17}',
+                adequacy_signals_json='{"window_found":true,"span_policy_applied":false}',
+                retry_history_json="[]",
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -77,6 +82,8 @@ def test_build_review_server_html_contains_interactive_surface() -> None:
     assert "Evidence Pane" in html
     assert "Extracted Result" in html
     assert "Locator JSON" in html
+    assert "Heading Path" in html
+    assert "Adequacy Signals" in html
 
 
 def test_review_server_http_flow_lists_and_resolves_tasks(tmp_path: Path) -> None:
@@ -108,6 +115,8 @@ def test_review_server_http_flow_lists_and_resolves_tasks(tmp_path: Path) -> Non
             detail = json.loads(response.read().decode("utf-8"))
         assert detail["task"]["subject_key"] == "txn:1"
         assert detail["primary_evidence"]["source_locator_json"] is not None
+        assert detail["primary_evidence"]["source_heading_path_json"] == '["Ownership Table"]'
+        assert detail["primary_evidence"]["adequacy_signals_json"] == '{"window_found":true,"span_policy_applied":false}'
 
         bad_request = Request(
             f"{base_url}/api/tasks/{task_id}/resolve",

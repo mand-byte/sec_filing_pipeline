@@ -20,6 +20,7 @@ from src.db.models import (
     ReviewTask,
 )
 from src.pipeline.review.workflow import ReviewWorkflowService
+from src.pipeline.review.error_codes import normalize_review_error_code
 from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
 from src.pipeline.types import FilingRecord
 
@@ -68,6 +69,10 @@ def _seed_review_task(session: Session) -> None:
                 locator_kind="obj",
                 source_span="transactions[0].shares",
                 source_locator_json='{"kind":"obj","path":"transactions[0].shares"}',
+                source_heading_path_json='["Ownership Table"]',
+                source_block_offsets_json='{"source_start":12,"source_end":17}',
+                adequacy_signals_json='{"window_found":true,"span_policy_applied":false}',
+                retry_history_json="[]",
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -91,6 +96,10 @@ def test_review_workflow_service_lists_and_shows_task_detail() -> None:
         assert detail.primary_evidence is not None
         assert detail.primary_evidence["source_span"] == "transactions[0].shares"
         assert detail.primary_evidence["source_locator_json"] == '{"kind":"obj","path":"transactions[0].shares"}'
+        assert detail.primary_evidence["source_heading_path_json"] == '["Ownership Table"]'
+        assert detail.primary_evidence["source_block_offsets_json"] == '{"source_start":12,"source_end":17}'
+        assert detail.primary_evidence["adequacy_signals_json"] == '{"window_found":true,"span_policy_applied":false}'
+        assert detail.primary_evidence["retry_history_json"] == "[]"
 
 
 def test_review_workflow_service_corrected_updates_fact_and_persists_decision() -> None:
@@ -136,6 +145,8 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         assert golden_truth.truth_source == "manual_review"
         assert golden_run.run_id == f"review-capture::{task.task_id}"
         assert "unit_scaling" in golden_packet.packet_json
+        assert '"source_heading_path_json": "[\\"Ownership Table\\"]"' in golden_packet.packet_json
+        assert '"adequacy_signals_json": "{\\"window_found\\":true,\\"span_policy_applied\\":false}"' in golden_packet.packet_json
 
 
 def test_review_workflow_service_reject_removes_fact() -> None:
@@ -166,6 +177,7 @@ def test_review_workflow_service_reject_removes_fact() -> None:
         assert golden_case.case_id == "manual-review::0000000000-24-000020"
         assert golden_subject.subject_key == "txn:1"
         assert "locator_miss" in golden_packet.packet_json
+        assert '"source_heading_path_json": "[\\"Ownership Table\\"]"' in golden_packet.packet_json
         assert session.query(GoldenTruth).all() == []
 
 
@@ -208,6 +220,14 @@ def test_review_workflow_service_rejects_unknown_error_code() -> None:
             assert "error_code must be one of:" in str(exc)
         else:  # pragma: no cover - defensive branch
             raise AssertionError("expected invalid error_code to fail")
+
+
+def test_normalize_review_error_code_accepts_runtime_text_failures() -> None:
+    assert normalize_review_error_code("window-not-found") == "window_not_found"
+    assert normalize_review_error_code("multiple_candidates") == "multiple_candidates"
+    assert normalize_review_error_code("QA_FAILED") == "qa_failed"
+    assert normalize_review_error_code("span-policy-failed") == "span_policy_failed"
+    assert normalize_review_error_code("field_not_found") == "field_not_found"
 
 
 def test_cli_review_commands_operate_on_seeded_queue(monkeypatch) -> None:

@@ -112,6 +112,38 @@ def test_persist_filing_bundle_derives_source_locator_json_when_missing() -> Non
     )
 
 
+def test_persist_filing_bundle_preserves_rich_text_evidence_metadata() -> None:
+    session = _session()
+    service = PersistenceService(session)
+
+    service.persist_filing_bundle(
+        filing=_filing(),
+        route="issuer",
+        facts=[FactInput(field_name="current_event_quant", value_text="event", confidence=0.99)],
+        evidences=[
+            EvidenceInput(
+                field_name="current_event_quant",
+                locator_kind="section_window",
+                source_span="12:17",
+                source_xpath="sections[Current report]",
+                source_locator_json='{"locator_kind":"section_window"}',
+                source_heading_path_json='["Current report"]',
+                source_block_offsets_json='{"source_start":12,"source_end":17}',
+                adequacy_signals_json='{"window_found":true}',
+                retry_history_json="[]",
+                raw_value="event",
+                normalized_value="event",
+            )
+        ],
+    )
+
+    evidence = session.query(ExtractionEvidence).one()
+    assert evidence.source_heading_path_json == '["Current report"]'
+    assert evidence.source_block_offsets_json == '{"source_start":12,"source_end":17}'
+    assert evidence.adequacy_signals_json == '{"window_found":true}'
+    assert evidence.retry_history_json == "[]"
+
+
 def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:
     session = _session()
     service = PersistenceService(session)

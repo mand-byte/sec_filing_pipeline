@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Literal, TypedDict
@@ -15,6 +16,11 @@ class TextExtractionOk(TypedDict):
     locator_kind: TextLocatorKind
     locator_path: str
     source_span: str
+    source_locator_json: str
+    source_heading_path_json: str
+    source_block_offsets_json: str
+    adequacy_signals_json: str
+    retry_history_json: str
 
 
 class TextExtractionFailure(TypedDict):
@@ -26,6 +32,62 @@ TextExtractionOutcome = TextExtractionOk | TextExtractionFailure
 
 
 class TextExtractionEngine:
+    def _heading_path_json(self, *, window_hit: Mapping[str, object]) -> str:
+        locator_path = str(window_hit["locator_path"])
+        heading = locator_path
+        if "[" in locator_path and locator_path.endswith("]"):
+            heading = locator_path.split("[", 1)[1][:-1]
+        return json.dumps([heading], ensure_ascii=False)
+
+    def _block_offsets_json(
+        self,
+        *,
+        window_hit: Mapping[str, object],
+        span_start: int,
+        span_end: int,
+        source_start: int,
+        source_end: int,
+    ) -> str:
+        payload = {
+            "window_base": int(window_hit["window_base"]),
+            "span_start_in_window": span_start,
+            "span_end_in_window": span_end,
+            "source_start": source_start,
+            "source_end": source_end,
+        }
+        if "item_body_offset" in window_hit and isinstance(window_hit.get("item_body_offset"), int):
+            payload["item_body_offset"] = int(window_hit["item_body_offset"])
+        if "section_body_offset" in window_hit and isinstance(window_hit.get("section_body_offset"), int):
+            payload["section_body_offset"] = int(window_hit["section_body_offset"])
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def _adequacy_signals_json(
+        self,
+        *,
+        field_spec: TextFieldSpec,
+        window_text: str,
+        pattern: str,
+        distinct_match_count: int,
+        value_text: str,
+    ) -> str:
+        window_token_count = len(re.findall(r"\S+", window_text))
+        value_token_count = len(re.findall(r"\S+", value_text))
+        preferred_tokens_match = None
+        if field_spec.span_policy is not None and field_spec.span_policy.preferred_tokens is not None:
+            minimum, maximum = field_spec.span_policy.preferred_tokens
+            preferred_tokens_match = minimum <= window_token_count <= maximum
+        payload = {
+            "window_found": True,
+            "pattern": pattern,
+            "distinct_match_count": distinct_match_count,
+            "window_token_count": window_token_count,
+            "value_token_count": value_token_count,
+            "value_length": len(value_text),
+            "span_policy_applied": field_spec.span_policy is not None,
+            "preferred_tokens_match": preferred_tokens_match,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
     def _span_policy_error(self, *, window_text: str, span_policy: SpanPolicy) -> str | None:
         lowered_window = window_text.casefold()
         header_text = window_text.splitlines()[0].strip().casefold() if window_text.splitlines() else ""
@@ -158,6 +220,31 @@ class TextExtractionEngine:
                     "locator_kind": window_hit["locator_kind"],
                     "locator_path": window_hit["locator_path"],
                     "source_span": source_span,
+                    "source_locator_json": json.dumps(
+                        {
+                            "locator_kind": window_hit["locator_kind"],
+                            "locator_path": window_hit["locator_path"],
+                            "source_span": source_span,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    "source_heading_path_json": self._heading_path_json(window_hit=window_hit),
+                    "source_block_offsets_json": self._block_offsets_json(
+                        window_hit=window_hit,
+                        span_start=span_start,
+                        span_end=span_end,
+                        source_start=source_start,
+                        source_end=source_end,
+                    ),
+                    "adequacy_signals_json": self._adequacy_signals_json(
+                        field_spec=field_spec,
+                        window_text=window_text,
+                        pattern=pattern,
+                        distinct_match_count=len(distinct_matches),
+                        value_text=value_text,
+                    ),
+                    "retry_history_json": "[]",
                 }
 
         if not saw_window:

@@ -75,6 +75,22 @@ def _render_task_card(packet: dict[str, Any]) -> str:
         <pre>{escape(_json_pretty(evidence.get('source_locator_json')))}</pre>
       </div>
       <div class="code-block">
+        <div class="code-title">Heading Path</div>
+        <pre>{escape(_json_pretty(evidence.get('source_heading_path_json')))}</pre>
+      </div>
+      <div class="code-block">
+        <div class="code-title">Block Offsets</div>
+        <pre>{escape(_json_pretty(evidence.get('source_block_offsets_json')))}</pre>
+      </div>
+      <div class="code-block">
+        <div class="code-title">Adequacy Signals</div>
+        <pre>{escape(_json_pretty(evidence.get('adequacy_signals_json')))}</pre>
+      </div>
+      <div class="code-block">
+        <div class="code-title">Retry History</div>
+        <pre>{escape(_json_pretty(evidence.get('retry_history_json')))}</pre>
+      </div>
+      <div class="code-block">
         <div class="code-title">Raw Value</div>
         <pre>{escape(_json_pretty(evidence.get('raw_value')))}</pre>
       </div>

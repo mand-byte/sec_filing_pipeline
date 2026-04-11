@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
+from typing import Any
+
+import clickhouse_connect
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -74,7 +77,68 @@ def _load_from_security_master(session: Session) -> list[SecurityUniverseRow]:
     ]
 
 
+def _rows_from_clickhouse_result(result: Any) -> list[dict[str, Any]]:
+    if result is None:
+        return []
+
+    named_results = getattr(result, "named_results", None)
+    if isinstance(named_results, list):
+        return [dict(row) for row in named_results if isinstance(row, dict)]
+
+    result_rows = getattr(result, "result_rows", None)
+    column_names = getattr(result, "column_names", None)
+    if isinstance(result_rows, list) and isinstance(column_names, list):
+        normalized_rows: list[dict[str, Any]] = []
+        for row in result_rows:
+            if isinstance(row, (list, tuple)) and len(row) == len(column_names):
+                normalized_rows.append(dict(zip(column_names, row)))
+        return normalized_rows
+
+    return []
+
+
+def _load_from_clickhouse(settings: Settings) -> list[SecurityUniverseRow] | None:
+    ch_dsn = getattr(settings, "ch_dsn", None)
+    if ch_dsn is None:
+        return None
+
+    table_name = settings.security_universe_table.strip()
+    if not table_name or not _IDENTIFIER_RE.fullmatch(table_name):
+        return None
+
+    query = f"""
+        SELECT ticker, composite_figi, cik, active, delisted_utc
+        FROM {table_name}
+        ORDER BY cik ASC, composite_figi ASC
+    """
+
+    try:
+        client = clickhouse_connect.get_client(dsn=ch_dsn)
+        result = client.query(query)
+        rows = _rows_from_clickhouse_result(result)
+        if hasattr(client, "close"):
+            client.close()
+    except Exception:
+        return None
+
+    normalized_rows = [
+        SecurityUniverseRow(
+            ticker=str(row["ticker"]),
+            composite_figi=str(row["composite_figi"]),
+            cik=str(row["cik"]),
+            active=_coerce_bool(row["active"]),
+            delisted_utc=_normalize_to_utc(row.get("delisted_utc")),
+        )
+        for row in rows
+    ]
+    return sorted(normalized_rows, key=lambda row: (row.cik, row.composite_figi))
+
+
 def load_security_universe(*, session: Session, settings: Settings) -> list[SecurityUniverseRow]:
+    clickhouse_rows = _load_from_clickhouse(settings)
+    if clickhouse_rows is not None:
+        return clickhouse_rows
+
     table_name = settings.security_universe_table.strip()
     if not table_name or not _IDENTIFIER_RE.fullmatch(table_name):
         return _load_from_security_master(session)

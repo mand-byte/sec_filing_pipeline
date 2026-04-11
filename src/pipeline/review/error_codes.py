@@ -9,6 +9,11 @@ REVIEW_ERROR_CODES: tuple[str, ...] = (
     "dimension_selection",
     "schema_mismatch",
     "not_applicable_false_positive",
+    "window_not_found",
+    "multiple_candidates",
+    "qa_failed",
+    "span_policy_failed",
+    "field_not_found",
 )
 
 

@@ -16,4 +16,8 @@ def test_schema_rollout_sql_exists_for_new_runtime_tables_and_columns() -> None:
 
     assert "ALTER TABLE extraction_evidence" in payload
     assert "ADD COLUMN IF NOT EXISTS source_locator_json TEXT" in payload
+    assert "ADD COLUMN IF NOT EXISTS source_heading_path_json TEXT" in payload
+    assert "ADD COLUMN IF NOT EXISTS source_block_offsets_json TEXT" in payload
+    assert "ADD COLUMN IF NOT EXISTS adequacy_signals_json TEXT" in payload
+    assert "ADD COLUMN IF NOT EXISTS retry_history_json TEXT" in payload
     assert "CREATE TABLE IF NOT EXISTS filing_attempt" in payload

@@ -271,6 +271,11 @@ def build_bundles_from_provider(
                         locator_kind=outcome["locator_kind"],
                         source_span=outcome["source_span"],
                         source_xpath=outcome["locator_path"],
+                        source_locator_json=outcome["source_locator_json"],
+                        source_heading_path_json=outcome["source_heading_path_json"],
+                        source_block_offsets_json=outcome["source_block_offsets_json"],
+                        adequacy_signals_json=outcome["adequacy_signals_json"],
+                        retry_history_json=outcome["retry_history_json"],
                         raw_value=outcome["value_text"],
                         normalized_value=outcome["value_text"],
                     )
@@ -454,6 +459,11 @@ def build_bundles_from_provider(
                     locator_kind=outcome["locator_kind"],
                     source_span=outcome["source_span"],
                     source_xpath=outcome["locator_path"],
+                    source_locator_json=outcome["source_locator_json"],
+                    source_heading_path_json=outcome["source_heading_path_json"],
+                    source_block_offsets_json=outcome["source_block_offsets_json"],
+                    adequacy_signals_json=outcome["adequacy_signals_json"],
+                    retry_history_json=outcome["retry_history_json"],
                     raw_value=outcome["value_text"],
                     normalized_value=outcome["value_text"],
                 )

@@ -44,6 +44,9 @@ def test_extract_field_honors_span_policy() -> None:
     assert outcome["status"] == "ok"
     assert outcome["value_text"] == "passive"
     assert outcome["locator_kind"] == "section_window"
+    assert outcome["source_heading_path_json"] == '["Purpose of Transaction"]'
+    assert '"window_found": true' in outcome["adequacy_signals_json"]
+    assert outcome["retry_history_json"] == "[]"
 
 
 def test_extract_field_rejects_span_policy_failures() -> None:

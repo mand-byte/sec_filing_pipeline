@@ -28,6 +28,7 @@ from src.pipeline.route_runtime import (
     _normalize_to_utc,
     _safe_write_log,
 )
+from src.pipeline.release_gates import evaluate_fix_once_release_gate
 from src.pipeline.routers.holding import HoldingRouter
 from src.pipeline.routers.issuer import IssuerRouter
 from src.pipeline.routers.owner import OwnerRouter
@@ -549,6 +550,22 @@ def review_serve(
             limit=limit,
         ),
     )
+
+
+@app.command("release-gate")
+def release_gate(
+    output_dir: Path = typer.Option(
+        Path("artifacts/release_gate"),
+        "--output-dir",
+        help="Directory for exported fix-once regression packets and summary",
+    ),
+) -> None:
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        result = evaluate_fix_once_release_gate(session=session, output_dir=output_dir)
+    typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    if not result.passed:
+        raise typer.Exit(code=1)
 
 
 @app.command("schedule")

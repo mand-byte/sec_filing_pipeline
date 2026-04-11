@@ -33,6 +33,10 @@ class EvidenceInput:
     source_xpath: str | None = None
     xbrl_concept: str | None = None
     source_locator_json: str | None = None
+    source_heading_path_json: str | None = None
+    source_block_offsets_json: str | None = None
+    adequacy_signals_json: str | None = None
+    retry_history_json: str | None = None
     raw_value: str | None = None
     normalized_value: str | None = None
 
@@ -151,6 +155,10 @@ class PersistenceService:
                     ExtractionEvidence.raw_value == evidence.raw_value,
                     ExtractionEvidence.normalized_value == evidence.normalized_value,
                     ExtractionEvidence.source_locator_json == source_locator_json,
+                    ExtractionEvidence.source_heading_path_json == evidence.source_heading_path_json,
+                    ExtractionEvidence.source_block_offsets_json == evidence.source_block_offsets_json,
+                    ExtractionEvidence.adequacy_signals_json == evidence.adequacy_signals_json,
+                    ExtractionEvidence.retry_history_json == evidence.retry_history_json,
                 )
             )
             evidence_row = existing_evidence
@@ -167,6 +175,10 @@ class PersistenceService:
                     xbrl_concept=evidence.xbrl_concept,
                     source_span=evidence.source_span,
                     source_locator_json=source_locator_json,
+                    source_heading_path_json=evidence.source_heading_path_json,
+                    source_block_offsets_json=evidence.source_block_offsets_json,
+                    adequacy_signals_json=evidence.adequacy_signals_json,
+                    retry_history_json=evidence.retry_history_json,
                     raw_value=evidence.raw_value,
                     normalized_value=evidence.normalized_value,
                     created_at=now,
