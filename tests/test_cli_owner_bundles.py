@@ -326,10 +326,65 @@ def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch)
     assert numeric_facts[("beneficial_ownership_pct", "filer:1")] == 9.9
     assert numeric_facts[("source_of_funds_amount", "filer:1")] == 1250000.0
     assert numeric_facts[("source_of_funds_amount", "filer:2")] == 950000.0
-    assert numeric_facts[("aggregate_purchase_price", "document")] == 2500000.0
+    assert numeric_facts[("aggregate_purchase_price", "filer:1")] == 1250000.0
+    assert numeric_facts[("aggregate_purchase_price", "filer:2")] == 950000.0
+    assert ("aggregate_purchase_price", "document") not in numeric_facts
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
     assert text_facts[("source_of_funds_quant", "document")] == "Cash"
+    assert repo.logs == []
+
+
+def test_build_bundles_from_provider_uses_single_filer_top_level_funds_fallback(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000103A",
+        cik="0001326380",
+        form_type="SCHEDULE 13D",
+        accepted_at=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SCHEDULE 13D",
+            xml_text="""
+<submission>
+  <fundsSource>Item 3. Source and Amount of Funds. Total funds used was $3,500,000 in cash.</fundsSource>
+  <reportingPerson>
+    <aggregateAmountOwned>450000</aggregateAmountOwned>
+    <percentOfClass>11.1</percentOfClass>
+    <soleVotingPower>450000</soleVotingPower>
+    <sharedVotingPower>0</sharedVotingPower>
+    <soleDispositivePower>450000</soleDispositivePower>
+    <sharedDispositivePower>0</sharedDispositivePower>
+  </reportingPerson>
+</submission>
+""",
+            sections=[
+                "Purpose of Transaction\nThis filer is activist.",
+                "Item 3 Source and Amount of Funds\nCash on hand was used for the purchases.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-4a",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert numeric_facts[("source_of_funds_amount", "filer:1")] == 3500000.0
+    assert numeric_facts[("aggregate_purchase_price", "filer:1")] == 3500000.0
+    assert ("aggregate_purchase_price", "document") not in numeric_facts
     assert repo.logs == []
 
 

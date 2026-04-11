@@ -571,6 +571,35 @@ def build_owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, for
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
+    emitted_source_of_funds_subjects: set[str] = set()
+    emitted_aggregate_purchase_subjects: set[str] = set()
+
+    def append_13d_funds_amount_fact(
+        *,
+        field_name: str,
+        subject_key: str,
+        source_span: str,
+        raw_value: str | None,
+        numeric_value: float,
+    ) -> None:
+        facts.append(
+            FactInput(
+                field_name=field_name,
+                subject_key=subject_key,
+                value_numeric=float(numeric_value),
+                confidence=0.99,
+            )
+        )
+        evidences.append(
+            EvidenceInput(
+                field_name=field_name,
+                subject_key=subject_key,
+                locator_kind="obj",
+                source_span=source_span,
+                raw_value=str(raw_value),
+                normalized_value=str(float(numeric_value)),
+            )
+        )
 
     for index, block in enumerate(person_blocks, start=1):
         subject_key = f"filer:{index}"
@@ -604,47 +633,45 @@ def build_owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, for
         funds_source_text = xml_child_text(block, "fundsSource")
         funds_amount = extract_monetary_amount(funds_source_text)
         if funds_amount is not None:
-            facts.append(
-                FactInput(
-                    field_name="source_of_funds_amount",
-                    subject_key=subject_key,
-                    value_numeric=float(funds_amount),
-                    confidence=0.99,
-                )
+            source_span = f"xml.{strip_namespace(block.tag)}[{index - 1}].fundsSource"
+            append_13d_funds_amount_fact(
+                field_name="source_of_funds_amount",
+                subject_key=subject_key,
+                source_span=source_span,
+                raw_value=funds_source_text,
+                numeric_value=float(funds_amount),
             )
-            evidences.append(
-                EvidenceInput(
-                    field_name="source_of_funds_amount",
-                    subject_key=subject_key,
-                    locator_kind="obj",
-                    source_span=f"xml.{strip_namespace(block.tag)}[{index - 1}].fundsSource",
-                    raw_value=str(funds_source_text),
-                    normalized_value=str(float(funds_amount)),
-                )
+            emitted_source_of_funds_subjects.add(subject_key)
+            append_13d_funds_amount_fact(
+                field_name="aggregate_purchase_price",
+                subject_key=subject_key,
+                source_span=source_span,
+                raw_value=funds_source_text,
+                numeric_value=float(funds_amount),
             )
+            emitted_aggregate_purchase_subjects.add(subject_key)
 
-    if form_family == "13D":
+    if form_family == "13D" and len(person_blocks) == 1:
+        subject_key = "filer:1"
         funds_source_text = xml_direct_child_text(root, "fundsSource")
-        aggregate_purchase_price = extract_monetary_amount(funds_source_text)
-        if aggregate_purchase_price is not None:
-            facts.append(
-                FactInput(
-                    field_name="aggregate_purchase_price",
-                    subject_key="document",
-                    value_numeric=float(aggregate_purchase_price),
-                    confidence=0.99,
-                )
-            )
-            evidences.append(
-                EvidenceInput(
-                    field_name="aggregate_purchase_price",
-                    subject_key="document",
-                    locator_kind="obj",
+        funds_amount = extract_monetary_amount(funds_source_text)
+        if funds_amount is not None:
+            if subject_key not in emitted_source_of_funds_subjects:
+                append_13d_funds_amount_fact(
+                    field_name="source_of_funds_amount",
+                    subject_key=subject_key,
                     source_span="xml.fundsSource",
-                    raw_value=str(funds_source_text),
-                    normalized_value=str(float(aggregate_purchase_price)),
+                    raw_value=funds_source_text,
+                    numeric_value=float(funds_amount),
                 )
-            )
+            if subject_key not in emitted_aggregate_purchase_subjects:
+                append_13d_funds_amount_fact(
+                    field_name="aggregate_purchase_price",
+                    subject_key=subject_key,
+                    source_span="xml.fundsSource",
+                    raw_value=funds_source_text,
+                    numeric_value=float(funds_amount),
+                )
 
     return BundleBuildOutcome(bundle=FilingBundle(filing=filing, facts=facts, evidences=evidences))
 
