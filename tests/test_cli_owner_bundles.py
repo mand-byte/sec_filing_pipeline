@@ -167,7 +167,10 @@ def test_build_bundles_from_provider_rejects_owner_bundle_with_invalid_subject_c
         cik="0000789019",
         form_type="4",
         accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-        filing=FakeForm4Filing([], sections=[]),
+        filing=FakeForm4Filing(
+            [],
+            sections=["Remarks\nThe reporting person is a director and this was a buy transaction."],
+        ),
     )
 
     monkeypatch.setattr(
@@ -214,7 +217,12 @@ def test_build_bundles_from_provider_rejects_owner_bundle_with_invalid_subject_c
         run_id="run-owner-invalid-ownership",
     )
 
-    assert bundles == []
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("insider_transaction_quant", "document")] == "buy"
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("shares_acquired_or_disposed", "document") not in numeric_fields
     assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
     assert "shares_acquired_or_disposed:document" in str(repo.logs[-1]["error_detail"])
 
@@ -335,7 +343,7 @@ def test_build_bundles_from_provider_rejects_schedule_bundle_with_invalid_subjec
         filing=FakeXmlFiling(
             form="SC 13G",
             xml_text="<submission />",
-            sections=[],
+            sections=["Purpose of Transaction\nThis filing is passive."],
         ),
     )
 
@@ -383,7 +391,11 @@ def test_build_bundles_from_provider_rejects_schedule_bundle_with_invalid_subjec
         run_id="run-owner-invalid-13g",
     )
 
-    assert bundles == []
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("beneficial_ownership_intent_quant", "document")] == "passive"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("beneficially_owned_shares", "document") not in numeric_fields
     assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
     assert "beneficially_owned_shares:document" in str(repo.logs[-1]["error_detail"])
 

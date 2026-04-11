@@ -159,7 +159,7 @@ def test_build_bundles_from_provider_rejects_invalid_holding_bundle_subject_cont
             Fake13F(
                 form="13F-HR",
                 rows=[],
-                sections=[],
+                sections=["Cover page\nThis is a holdings report filed by the manager."],
             )
         ),
     )
@@ -208,7 +208,11 @@ def test_build_bundles_from_provider_rejects_invalid_holding_bundle_subject_cont
         run_id="run-holding-invalid-contract",
     )
 
-    assert bundles == []
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("manager_structure_quant", "document")] == "holdings"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("position_value_usd", "document") not in numeric_fields
     assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
     assert "position_value_usd:document" in str(repo.logs[-1]["error_detail"])
 

@@ -100,6 +100,26 @@ def _extend_specialized_numeric_bundle_if_valid(
     return True
 
 
+def _append_partial_bundle_if_any(
+    *,
+    filing: FilingRecord,
+    facts: list[FactInput],
+    evidences: list[EvidenceInput],
+    bundles: list[FilingBundle],
+) -> bool:
+    if not facts:
+        return False
+
+    bundles.append(
+        FilingBundle(
+            filing=filing,
+            facts=list(facts),
+            evidences=list(evidences),
+        )
+    )
+    return True
+
+
 def _supports_text_extraction_surface(filing: object) -> bool:
     for attr_name in ("sections", "parse", "text", "items"):
         attr = getattr(filing, attr_name, None)
@@ -623,6 +643,12 @@ def build_bundles_from_provider(
                     error_type="OWNERSHIP_OBJ_UNAVAILABLE",
                     error_detail=owner_outcome.error_detail,
                 )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             if not owner_bundle.facts:
                 _safe_write_log(
@@ -635,6 +661,12 @@ def build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="NO_OWNER_ROWS_EXTRACTED",
+                )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
                 )
                 continue
             owner_facts: list[FactInput] = []
@@ -651,6 +683,12 @@ def build_bundles_from_provider(
                 accession_no=envelope.accession_no,
                 violation_message="owner ownership bundle violated numeric subject contract",
             ):
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             merged_bundle = FilingBundle(
                 filing=owner_bundle.filing,
@@ -661,6 +699,56 @@ def build_bundles_from_provider(
             continue
 
         if route == "owner" and form_family in {"13D", "13G"}:
+            if _supports_text_extraction_surface(envelope.filing):
+                schedule_text_specs = tuple(
+                    spec
+                    for spec in route_text_specs
+                    if form_family in spec.form_families
+                )
+                for spec in schedule_text_specs:
+                    outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+                    if outcome["status"] != "ok":
+                        _safe_write_log(
+                            repo,
+                            run_id=run_id,
+                            route=route,
+                            stage="extract",
+                            level="ERROR",
+                            message="text field extraction failed",
+                            cik=envelope.cik,
+                            accession_no=envelope.accession_no,
+                            error_type=outcome["error_code"],
+                        )
+                        continue
+                    facts.append(
+                        FactInput(
+                            field_name=spec.field_name,
+                            subject_key="document",
+                            value_text=outcome["value_text"],
+                            value_json=outcome["value_json"],
+                            confidence=0.99,
+                        )
+                    )
+                    evidences.append(
+                        EvidenceInput(
+                            field_name=spec.field_name,
+                            subject_key="document",
+                            locator_kind=outcome["locator_kind"],
+                            source_span=outcome["source_span"],
+                            source_section=outcome["source_section"],
+                            source_item_no=outcome["source_item_no"],
+                            source_xpath=outcome["locator_path"],
+                            source_locator_json=outcome["source_locator_json"],
+                            source_heading_path_json=outcome["source_heading_path_json"],
+                            source_block_offsets_json=outcome["source_block_offsets_json"],
+                            adequacy_signals_json=outcome["adequacy_signals_json"],
+                            retry_history_json=outcome["retry_history_json"],
+                            selection_trace_json=outcome["selection_trace_json"],
+                            raw_value=outcome["value_text"],
+                            normalized_value=outcome["value_text"],
+                        )
+                    )
+
             schedule_outcome = build_owner_schedule_13dg_bundle(
                 envelope=envelope,
                 filing=filing,
@@ -679,6 +767,12 @@ def build_bundles_from_provider(
                     accession_no=envelope.accession_no,
                     error_type="OWNER_XML_UNAVAILABLE",
                     error_detail=schedule_outcome.error_detail,
+                )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
                 )
                 continue
             has_owner_rows = any(
@@ -701,6 +795,12 @@ def build_bundles_from_provider(
                 accession_no=envelope.accession_no,
                 violation_message="owner schedule bundle violated numeric subject contract",
             ):
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             if not has_owner_rows:
                 _safe_write_log(
@@ -714,7 +814,20 @@ def build_bundles_from_provider(
                     accession_no=envelope.accession_no,
                     error_type="NO_OWNER_ROWS_EXTRACTED",
                 )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
+            merged_bundle = FilingBundle(
+                filing=schedule_bundle.filing,
+                facts=[*schedule_bundle.facts, *facts],
+                evidences=[*schedule_bundle.evidences, *evidences],
+            )
+            bundles.append(merged_bundle)
+            continue
         if route == "owner" and form_family == "144":
             if _supports_text_extraction_surface(envelope.filing):
                 form144_text_specs = tuple(
@@ -781,6 +894,12 @@ def build_bundles_from_provider(
                     error_type="OWNER_OBJ_UNAVAILABLE",
                     error_detail=form144_outcome.error_detail,
                 )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             has_sale_rows = any(
                 subject_key_has_type(
@@ -804,6 +923,12 @@ def build_bundles_from_provider(
                 accession_no=envelope.accession_no,
                 violation_message="owner form144 bundle violated numeric subject contract",
             ):
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             if not has_sale_rows:
                 _safe_write_log(
@@ -816,6 +941,12 @@ def build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="NO_OWNER_ROWS_EXTRACTED",
+                )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -939,6 +1070,12 @@ def build_bundles_from_provider(
                     error_type="HOLDING_OBJ_UNAVAILABLE",
                     error_detail=holding_outcome.error_detail,
                 )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             has_position_rows = any(
                 subject_key_has_type(
@@ -962,6 +1099,12 @@ def build_bundles_from_provider(
                 accession_no=envelope.accession_no,
                 violation_message="holding 13F amendment bundle violated numeric subject contract",
             ):
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             if not has_position_rows:
                 _safe_write_log(
@@ -974,6 +1117,12 @@ def build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="NO_HOLDING_ROWS_EXTRACTED",
+                )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -1049,6 +1198,12 @@ def build_bundles_from_provider(
                     error_type="HOLDING_OBJ_UNAVAILABLE",
                     error_detail=holding_outcome.error_detail,
                 )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             has_position_rows = any(
                 subject_key_has_type(
@@ -1072,6 +1227,12 @@ def build_bundles_from_provider(
                 accession_no=envelope.accession_no,
                 violation_message="holding 13F bundle violated numeric subject contract",
             ):
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
+                )
                 continue
             if not has_position_rows:
                 _safe_write_log(
@@ -1084,6 +1245,12 @@ def build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     error_type="NO_HOLDING_ROWS_EXTRACTED",
+                )
+                _append_partial_bundle_if_any(
+                    filing=filing,
+                    facts=facts,
+                    evidences=evidences,
+                    bundles=bundles,
                 )
                 continue
             merged_bundle = FilingBundle(
