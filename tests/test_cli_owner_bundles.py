@@ -482,6 +482,66 @@ def test_build_bundles_from_provider_emits_13g_owner_rows(monkeypatch) -> None:
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_keeps_13g_schedule_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000102D",
+        cik="0001067983",
+        form_type="SC 13G",
+        accepted_at=datetime(2024, 5, 3, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SC 13G",
+            xml_text="""
+<submission>
+  <coverPageHeaderReportingPersonDetails>
+    <reportingPersonBeneficiallyOwnedAggregateNumberOfShares>1234567</reportingPersonBeneficiallyOwnedAggregateNumberOfShares>
+    <classPercent>7.5</classPercent>
+    <soleVotingPower>1200000</soleVotingPower>
+    <sharedVotingPower>34567</sharedVotingPower>
+    <soleDispositivePower>1100000</soleDispositivePower>
+    <sharedDispositivePower>14567</sharedDispositivePower>
+  </coverPageHeaderReportingPersonDetails>
+</submission>
+""",
+            sections=["Purpose of Transaction\nThis filing is passive."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "beneficial_ownership_intent_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-13g-text-failure",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert numeric_facts[("beneficially_owned_shares", "filer:1")] == 1234567.0
+    assert numeric_facts[("beneficial_ownership_pct", "filer:1")] == 7.5
+    assert numeric_facts[("sole_voting_power", "filer:1")] == 1200000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert ("beneficial_ownership_intent_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_rejects_schedule_bundle_with_invalid_subject_contract(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000102A",
