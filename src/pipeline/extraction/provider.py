@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 
 from src.db.repositories import PipelineRepository
@@ -11,6 +12,7 @@ from src.pipeline.extraction.bundles import (
     build_owner_form144_bundle,
     build_owner_ownership_bundle,
     build_owner_schedule_13dg_bundle,
+    coerce_numeric_value,
 )
 from src.pipeline.extraction.engine import NumericExtractionEngine
 from src.pipeline.extraction.registry import all_numeric_field_specs
@@ -44,6 +46,222 @@ def _supports_text_extraction_surface(filing: object) -> bool:
         if attr:
             return True
     return False
+
+
+def _extract_delay_days_from_text(filing: object) -> float | None:
+    text_sources: list[str] = []
+    for attr_name in ("parse", "text", "sections"):
+        attr = getattr(filing, attr_name, None)
+        if callable(attr):
+            try:
+                value = attr()
+            except Exception:
+                continue
+        else:
+            value = attr
+
+        if isinstance(value, str) and value.strip():
+            text_sources.append(value)
+        elif isinstance(value, list):
+            text_sources.extend(str(item) for item in value if str(item).strip())
+        elif isinstance(value, dict):
+            text_sources.extend(str(item) for item in value.values() if str(item).strip())
+
+    pattern = re.compile(r"(?i)\b(\d+)\s+calendar\s+days?\b")
+    for source in text_sources:
+        match = pattern.search(source)
+        if match is not None:
+            return float(match.group(1))
+    return None
+
+
+def _extract_text_sources(filing: object) -> list[str]:
+    text_sources: list[str] = []
+    for attr_name in ("parse", "text", "sections"):
+        attr = getattr(filing, attr_name, None)
+        if callable(attr):
+            try:
+                value = attr()
+            except Exception:
+                continue
+        else:
+            value = attr
+
+        if isinstance(value, str) and value.strip():
+            text_sources.append(value)
+        elif isinstance(value, list):
+            text_sources.extend(str(item) for item in value if str(item).strip())
+        elif isinstance(value, dict):
+            text_sources.extend(str(item) for item in value.values() if str(item).strip())
+    return text_sources
+
+
+def _extract_first_currency(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
+    for source in text_sources:
+        normalized = " ".join(source.split())
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match is None:
+                continue
+            candidate = coerce_numeric_value(match.group(1))
+            if candidate is not None:
+                return float(candidate)
+    return None
+
+
+def _extract_first_count(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
+    for source in text_sources:
+        normalized = " ".join(source.split())
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match is None:
+                continue
+            candidate = coerce_numeric_value(match.group(1))
+            if candidate is not None:
+                return float(candidate)
+    return None
+
+
+def _build_issuer_offering_text_facts(*, filing: FilingRecord, source_texts: list[str]) -> FilingBundle | None:
+    field_extractors = {
+        "gross_proceeds": _extract_first_currency(
+            (
+                r"(?i)gross proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)aggregate offering price(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "net_proceeds": _extract_first_currency(
+            (
+                r"(?i)net proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)estimated net proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "offering_price_per_share": _extract_first_currency(
+            (
+                r"(?i)offering price per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)\$([\d,]+(?:\.\d+)?)\s+per share",
+            ),
+            source_texts,
+        ),
+        "underwriter_discount_total": _extract_first_currency(
+            (
+                r"(?i)underwriting discounts and commissions(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "financing_commitment_amount": _extract_first_currency(
+            (
+                r"(?i)financing commitment(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)backstop amount(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "securities_offered_qty": _extract_first_count(
+            (
+                r"(?i)([\d,]+)\s+shares?\s+of common stock",
+                r"(?i)offering of\s+([\d,]+)\s+shares?",
+            ),
+            source_texts,
+        ),
+    }
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+    for field_name, value in field_extractors.items():
+        if value is None:
+            continue
+        facts.append(
+            FactInput(
+                field_name=field_name,
+                subject_key="document",
+                value_numeric=value,
+                confidence=0.99,
+            )
+        )
+        evidences.append(
+            EvidenceInput(
+                field_name=field_name,
+                subject_key="document",
+                locator_kind="parse_text",
+                source_span="offering_text",
+                raw_value=str(value),
+                normalized_value=str(value),
+            )
+        )
+
+    if not facts:
+        return None
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+
+
+def _build_issuer_deal_text_facts(*, filing: FilingRecord, source_texts: list[str]) -> FilingBundle | None:
+    field_extractors = {
+        "deal_value": _extract_first_currency(
+            (
+                r"(?i)deal value(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)transaction value(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "offer_price_per_share": _extract_first_currency(
+            (
+                r"(?i)offer price per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)cash consideration per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "tender_shares_sought": _extract_first_count(
+            (
+                r"(?i)([\d,]+)\s+shares?\s+sought",
+                r"(?i)maximum number of shares(?: is| are)?\s+([\d,]+)",
+            ),
+            source_texts,
+        ),
+        "financing_commitment_amount": _extract_first_currency(
+            (
+                r"(?i)financing commitment(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)backstop amount(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+        "termination_fee": _extract_first_currency(
+            (
+                r"(?i)termination fee(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+                r"(?i)break-up fee(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
+            ),
+            source_texts,
+        ),
+    }
+
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+    for field_name, value in field_extractors.items():
+        if value is None:
+            continue
+        facts.append(
+            FactInput(
+                field_name=field_name,
+                subject_key="document",
+                value_numeric=value,
+                confidence=0.99,
+            )
+        )
+        evidences.append(
+            EvidenceInput(
+                field_name=field_name,
+                subject_key="document",
+                locator_kind="parse_text",
+                source_span="deal_text",
+                raw_value=str(value),
+                normalized_value=str(value),
+            )
+        )
+
+    if not facts:
+        return None
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
 def build_bundles_from_provider(
@@ -565,6 +783,53 @@ def build_bundles_from_provider(
                 for spec in route_numeric_specs
                 if spec.field_name not in _ISSUER_VOTE_FIELDS
             )
+            source_texts = _extract_text_sources(envelope.filing)
+            deal_bundle = _build_issuer_deal_text_facts(
+                filing=filing,
+                source_texts=source_texts,
+            )
+            if deal_bundle is not None:
+                facts.extend(deal_bundle.facts)
+                evidences.extend(deal_bundle.evidences)
+        elif route == "issuer" and form_family in {"S-1", "424B4"}:
+            source_texts = _extract_text_sources(envelope.filing)
+            offering_bundle = _build_issuer_offering_text_facts(
+                filing=filing,
+                source_texts=source_texts,
+            )
+            if offering_bundle is not None:
+                facts.extend(offering_bundle.facts)
+                evidences.extend(offering_bundle.evidences)
+        elif route == "issuer" and form_family in {"SC TO-I", "SC 13E3"}:
+            source_texts = _extract_text_sources(envelope.filing)
+            deal_bundle = _build_issuer_deal_text_facts(
+                filing=filing,
+                source_texts=source_texts,
+            )
+            if deal_bundle is not None:
+                facts.extend(deal_bundle.facts)
+                evidences.extend(deal_bundle.evidences)
+        elif route == "issuer" and form_family in {"NT 10-Q", "NT 10-K"}:
+            delay_days = _extract_delay_days_from_text(envelope.filing)
+            if delay_days is not None:
+                facts.append(
+                    FactInput(
+                        field_name="filing_delay_days",
+                        subject_key="document",
+                        value_numeric=delay_days,
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name="filing_delay_days",
+                        subject_key="document",
+                        locator_kind="parse_text",
+                        source_span="calendar_days",
+                        raw_value=str(int(delay_days)),
+                        normalized_value=str(delay_days),
+                    )
+                )
 
         for spec in filing_numeric_specs:
             if form_family not in spec.form_families:

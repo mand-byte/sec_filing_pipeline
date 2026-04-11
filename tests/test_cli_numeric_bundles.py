@@ -789,7 +789,7 @@ def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> Non
         accepted_at=accepted_at,
         filing=FakeTextFiling(
             form="NT 10-Q",
-            sections=["Delay reason\nThe filing was delayed because of the audit review."],
+            sections=["Delay reason\nThe filing was delayed because of the audit review and the registrant expects to file within 5 calendar days."],
         ),
     )
 
@@ -812,8 +812,11 @@ def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> Non
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("delay_reason_quant", "document")] == "audit"
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("filing_delay_days", "document")] == 5.0
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("delay_reason_quant", "document")].source_section in {"delay", "Delay reason"}
+    assert evidence[("filing_delay_days", "document")].locator_kind == "parse_text"
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
@@ -1036,3 +1039,167 @@ def test_build_bundles_from_provider_emits_tender_going_private_text(monkeypatch
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("tender_going_private_quant", "document")].source_section in {"summary term sheet", "Summary term sheet"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_emits_s1_offering_numeric_fields(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 13, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000019",
+        cik="0000789019",
+        form_type="S-1",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="S-1",
+            sections=[
+                "Use of Proceeds\nGross proceeds of $5,000,000 are expected. Net proceeds of $4,500,000 after underwriting discounts and commissions of $500,000. The offering price per share was $10.00 with an offering of 500,000 shares of common stock. Financing commitment of $2,000,000 has been arranged."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-s1-offering",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("gross_proceeds", "document")] == 5000000.0
+    assert numeric_facts[("net_proceeds", "document")] == 4500000.0
+    assert numeric_facts[("underwriter_discount_total", "document")] == 500000.0
+    assert numeric_facts[("offering_price_per_share", "document")] == 10.0
+    assert numeric_facts[("securities_offered_qty", "document")] == 500000.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 2000000.0
+
+
+def test_build_bundles_from_provider_emits_sc_toi_deal_numeric_fields(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 14, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000020",
+        cik="0000789019",
+        form_type="SC TO-I",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="SC TO-I",
+            sections=[
+                "Summary term sheet\nTransaction value of $12,000,000. Offer price per share was $24.00. 500,000 shares sought. Financing commitment of $8,000,000. Termination fee of $600,000."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-sc-toi-deal",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("deal_value", "document")] == 12000000.0
+    assert numeric_facts[("offer_price_per_share", "document")] == 24.0
+    assert numeric_facts[("tender_shares_sought", "document")] == 500000.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 8000000.0
+    assert numeric_facts[("termination_fee", "document")] == 600000.0
+
+
+def test_build_bundles_from_provider_emits_sc_13e3_deal_numeric_fields(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 15, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000021",
+        cik="0000789019",
+        form_type="SC 13E3",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="SC 13E3",
+            sections=[
+                "Special factors\nDeal value of $9,500,000. Cash consideration per share was $19.00. Financing commitment of $4,000,000. Break-up fee of $350,000."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-sc-13e3-deal",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("deal_value", "document")] == 9500000.0
+    assert numeric_facts[("offer_price_per_share", "document")] == 19.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 4000000.0
+    assert numeric_facts[("termination_fee", "document")] == 350000.0
+
+
+def test_build_bundles_from_provider_emits_8k_deal_numeric_fields(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 16, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 1.01"],
+            item_map={"Item 1.01": "Entry into a material definitive agreement."},
+        ),
+        sections=[
+            "Current report\nTransaction value of $7,250,000. Cash consideration per share was $14.50. Financing commitment of $3,000,000. Termination fee of $250,000."
+        ],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000022",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-8k-deal",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("deal_value", "document")] == 7250000.0
+    assert numeric_facts[("offer_price_per_share", "document")] == 14.5
+    assert numeric_facts[("financing_commitment_amount", "document")] == 3000000.0
+    assert numeric_facts[("termination_fee", "document")] == 250000.0
