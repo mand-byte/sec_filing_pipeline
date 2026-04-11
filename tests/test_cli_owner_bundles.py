@@ -440,6 +440,7 @@ def test_build_bundles_from_provider_emits_owner_holding_rows(monkeypatch) -> No
                 {"UnderlyingShares": 450.0, "ExercisePrice": 5.25},
             ],
             form="3",
+            sections=["Remarks\nThe reporting person is a director and holds shares directly."],
         ),
     )
 
@@ -468,12 +469,69 @@ def test_build_bundles_from_provider_emits_owner_holding_rows(monkeypatch) -> No
     assert facts[("derivative_underlying_shares", "dhold:2")] == 450.0
     assert facts[("exercise_or_conversion_price", "dhold:1")] == 4.5
     assert facts[("exercise_or_conversion_price", "dhold:2")] == 5.25
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
 
     evidence_keys = {(e.field_name, e.subject_key) for e in bundle.evidences}
     assert ("non_derivative_shares_owned", "nhold:1") in evidence_keys
     assert ("derivative_underlying_shares", "dhold:2") in evidence_keys
     assert ("exercise_or_conversion_price", "dhold:1") in evidence_keys
     assert repo.logs == []
+
+
+def test_build_bundles_from_provider_keeps_form3_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000101A",
+        cik="0000789019",
+        form_type="3",
+        accepted_at=datetime(2024, 5, 2, tzinfo=timezone.utc),
+        filing=FakeForm4Filing(
+            transactions=[],
+            non_derivative_holding_rows=[
+                {"Shares": 1500.0},
+            ],
+            derivative_holding_rows=[
+                {"UnderlyingShares": 300.0, "ExercisePrice": 4.5},
+            ],
+            form="3",
+            sections=["Remarks\nThe reporting person is a director and holds shares directly."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "insider_role_ownership_structure_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-form3-text-failure",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts if fact.value_numeric is not None}
+    assert facts[("non_derivative_shares_owned", "nhold:1")] == 1500.0
+    assert facts[("derivative_underlying_shares", "dhold:1")] == 300.0
+    assert facts[("exercise_or_conversion_price", "dhold:1")] == 4.5
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert ("insider_role_ownership_structure_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
 
 
 def test_build_bundles_from_provider_emits_13g_owner_rows(monkeypatch) -> None:
