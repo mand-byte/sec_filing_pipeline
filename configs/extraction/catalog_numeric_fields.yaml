@@ -1,0 +1,396 @@
+fields:
+- field_name: total_revenue
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - 6-K-financial
+  - S-1
+  - 424B4
+- field_name: operating_income
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - 6-K-financial
+  - S-1
+  - 424B4
+- field_name: net_income
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - 6-K-financial
+  - S-1
+  - 424B4
+- field_name: diluted_eps
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - 6-K-financial
+  - S-1
+  - 424B4
+- field_name: cash_and_equivalents
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+- field_name: total_debt
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+- field_name: operating_cash_flow
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+- field_name: capex
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+- field_name: shares_outstanding
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+  - DEF 14A
+- field_name: filing_delay_days
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - NT 10-Q
+  - NT 10-K
+- field_name: gross_proceeds
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - S-1
+  - 424B4
+- field_name: net_proceeds
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - S-1
+  - 424B4
+- field_name: offering_price_per_share
+  route: issuer
+  granularity: security_line
+  subject_type: filing
+  form_families:
+  - S-1
+  - 424B4
+- field_name: securities_offered_qty
+  route: issuer
+  granularity: security_line
+  subject_type: filing
+  form_families:
+  - S-1
+  - 424B4
+- field_name: underwriter_discount_total
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - S-1
+  - 424B4
+- field_name: deal_value
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 8-K
+  - 6-K
+  - SC TO-I
+  - SC 13E3
+- field_name: offer_price_per_share
+  route: issuer
+  granularity: security_line
+  subject_type: filing
+  form_families:
+  - SC TO-I
+  - SC 13E3
+  - 8-K (transaction terms)
+- field_name: tender_shares_sought
+  route: issuer
+  granularity: security_line
+  subject_type: filing
+  form_families:
+  - SC TO-I
+- field_name: financing_commitment_amount
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 8-K
+  - SC TO-I
+  - SC 13E3
+  - S-1
+- field_name: termination_fee
+  route: issuer
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 8-K
+  - SC TO-I
+  - SC 13E3
+- field_name: exec_total_comp
+  route: issuer
+  granularity: exec_line
+  subject_type: executive
+  form_families:
+  - DEF 14A
+  - S-1
+- field_name: holder_beneficial_ownership_shares
+  route: issuer
+  granularity: holder_line
+  subject_type: holder_row
+  form_families:
+  - DEF 14A
+  - S-1
+  - 424B4
+- field_name: holder_beneficial_ownership_pct
+  route: issuer
+  granularity: holder_line
+  subject_type: holder_row
+  form_families:
+  - DEF 14A
+  - S-1
+  - 424B4
+- field_name: proposal_votes_for
+  route: issuer
+  granularity: proposal_line
+  subject_type: proposal
+  form_families:
+  - 8-K (Item 5.07)
+- field_name: proposal_votes_against
+  route: issuer
+  granularity: proposal_line
+  subject_type: proposal
+  form_families:
+  - 8-K (Item 5.07)
+- field_name: proposal_votes_abstain
+  route: issuer
+  granularity: proposal_line
+  subject_type: proposal
+  form_families:
+  - 8-K (Item 5.07)
+- field_name: proposal_broker_non_votes
+  route: issuer
+  granularity: proposal_line
+  subject_type: proposal
+  form_families:
+  - 8-K (Item 5.07)
+- field_name: non_derivative_shares_owned
+  route: owner
+  granularity: holder_line
+  subject_type: transaction_row
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+- field_name: derivative_underlying_shares
+  route: owner
+  granularity: derivative_line
+  subject_type: transaction_row
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+- field_name: shares_acquired_or_disposed
+  route: owner
+  granularity: transaction_line
+  subject_type: transaction_row
+  form_families:
+  - '4'
+  - '5'
+- field_name: transaction_price_per_share
+  route: owner
+  granularity: transaction_line
+  subject_type: transaction_row
+  form_families:
+  - '4'
+  - '5'
+- field_name: shares_owned_following_txn
+  route: owner
+  granularity: transaction_line
+  subject_type: transaction_row
+  form_families:
+  - '4'
+  - '5'
+- field_name: exercise_or_conversion_price
+  route: owner
+  granularity: derivative_line
+  subject_type: transaction_row
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+- field_name: beneficially_owned_shares
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+  - 13G
+- field_name: beneficial_ownership_pct
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+  - 13G
+- field_name: sole_voting_power
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+  - 13G
+- field_name: shared_voting_power
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+  - 13G
+- field_name: sole_dispositive_power
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+  - 13G
+- field_name: shared_dispositive_power
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+  - 13G
+- field_name: aggregate_purchase_price
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+- field_name: source_of_funds_amount
+  route: owner
+  granularity: filer_line
+  subject_type: reporting_person
+  form_families:
+  - 13D
+- field_name: proposed_sale_shares
+  route: owner
+  granularity: sale_notice
+  subject_type: form144_notice
+  form_families:
+  - '144'
+- field_name: proposed_sale_market_value
+  route: owner
+  granularity: sale_notice
+  subject_type: form144_notice
+  form_families:
+  - '144'
+- field_name: shares_sold_past_3m
+  route: owner
+  granularity: sale_notice
+  subject_type: form144_notice
+  form_families:
+  - '144'
+- field_name: market_value_sold_past_3m
+  route: owner
+  granularity: sale_notice
+  subject_type: form144_notice
+  form_families:
+  - '144'
+- field_name: position_value_usd
+  route: holding
+  granularity: position_line
+  subject_type: holding_position
+  form_families:
+  - 13F-HR
+- field_name: shares_or_principal_amount
+  route: holding
+  granularity: position_line
+  subject_type: holding_position
+  form_families:
+  - 13F-HR
+- field_name: sole_voting_auth_shares
+  route: holding
+  granularity: position_line
+  subject_type: holding_position
+  form_families:
+  - 13F-HR
+- field_name: shared_voting_auth_shares
+  route: holding
+  granularity: position_line
+  subject_type: holding_position
+  form_families:
+  - 13F-HR
+- field_name: none_voting_auth_shares
+  route: holding
+  granularity: position_line
+  subject_type: holding_position
+  form_families:
+  - 13F-HR
+- field_name: other_included_managers_count
+  route: holding
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 13F-HR
+- field_name: info_table_entry_total
+  route: holding
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 13F-HR
+- field_name: info_table_value_total_usd
+  route: holding
+  granularity: document
+  subject_type: filing
+  form_families:
+  - 13F-HR

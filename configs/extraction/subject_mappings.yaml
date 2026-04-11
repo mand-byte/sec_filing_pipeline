@@ -1,0 +1,28 @@
+mappings:
+  issuer:
+    document:
+      subject_type: filing
+    security_line:
+      subject_type: filing
+    proposal_line:
+      subject_type: proposal
+    exec_line:
+      subject_type: executive
+    holder_line:
+      subject_type: holder_row
+  owner:
+    holder_line:
+      subject_type: transaction_row
+    derivative_line:
+      subject_type: transaction_row
+    transaction_line:
+      subject_type: transaction_row
+    filer_line:
+      subject_type: reporting_person
+    sale_notice:
+      subject_type: form144_notice
+  holding:
+    document:
+      subject_type: filing
+    position_line:
+      subject_type: holding_position

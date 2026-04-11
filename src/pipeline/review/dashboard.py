@@ -71,6 +71,10 @@ def _render_task_card(packet: dict[str, Any]) -> str:
         <dt>Item</dt><dd>{escape(str(evidence.get('source_item_no', '')))}</dd>
       </dl>
       <div class="code-block">
+        <div class="code-title">Locator JSON</div>
+        <pre>{escape(_json_pretty(evidence.get('source_locator_json')))}</pre>
+      </div>
+      <div class="code-block">
         <div class="code-title">Raw Value</div>
         <pre>{escape(_json_pretty(evidence.get('raw_value')))}</pre>
       </div>

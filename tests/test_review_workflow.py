@@ -67,6 +67,7 @@ def _seed_review_task(session: Session) -> None:
                 subject_key="txn:1",
                 locator_kind="obj",
                 source_span="transactions[0].shares",
+                source_locator_json='{"kind":"obj","path":"transactions[0].shares"}',
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -89,6 +90,7 @@ def test_review_workflow_service_lists_and_shows_task_detail() -> None:
         assert detail.fact is not None
         assert detail.primary_evidence is not None
         assert detail.primary_evidence["source_span"] == "transactions[0].shares"
+        assert detail.primary_evidence["source_locator_json"] == '{"kind":"obj","path":"transactions[0].shares"}'
 
 
 def test_review_workflow_service_corrected_updates_fact_and_persists_decision() -> None:
@@ -187,6 +189,27 @@ def test_review_workflow_service_rejects_non_accept_without_error_code() -> None
             raise AssertionError("expected missing error_code to fail")
 
 
+def test_review_workflow_service_rejects_unknown_error_code() -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_review_task(session)
+
+    with factory() as session:
+        service = ReviewWorkflowService(session)
+        task = service.list_tasks()[0]
+        try:
+            service.resolve_task(
+                task_id=task.task_id,
+                decision="reject",
+                reviewer="bob",
+                error_code="freeform typo code",
+            )
+        except Exception as exc:
+            assert "error_code must be one of:" in str(exc)
+        else:  # pragma: no cover - defensive branch
+            raise AssertionError("expected invalid error_code to fail")
+
+
 def test_cli_review_commands_operate_on_seeded_queue(monkeypatch) -> None:
     factory = _session_factory()
     with factory() as session:
@@ -257,3 +280,31 @@ def test_cli_review_resolve_requires_error_code_for_reject(monkeypatch) -> None:
     )
     assert reject_result.exit_code != 0
     assert "error-code" in reject_result.output
+
+
+def test_cli_review_resolve_rejects_unknown_error_code(monkeypatch) -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_review_task(session)
+
+    monkeypatch.setattr(cli_module, "Settings", lambda: object())
+    monkeypatch.setattr(cli_module, "get_session_factory", lambda settings: factory)
+
+    list_result = runner.invoke(cli_module.app, ["review-list"])
+    task_id = json.loads(list_result.stdout)[0]["task_id"]
+
+    reject_result = runner.invoke(
+        cli_module.app,
+        [
+            "review-resolve",
+            str(task_id),
+            "--decision",
+            "reject",
+            "--reviewer",
+            "carol",
+            "--error-code",
+            "freeform typo code",
+        ],
+    )
+    assert reject_result.exit_code != 0
+    assert "error_code must be one of:" in reject_result.output

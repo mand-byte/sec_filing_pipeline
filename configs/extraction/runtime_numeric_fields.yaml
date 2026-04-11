@@ -1,0 +1,698 @@
+fields:
+- field_name: total_revenue
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax
+  - us-gaap:Revenues
+  - us-gaap:SalesRevenueNet
+  xbrl_statement_type: IncomeStatement
+  xbrl_prefer_dimensionless: true
+  xbrl_duration_days_range:
+  - 70
+  - 110
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: operating_income
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:OperatingIncomeLoss
+  xbrl_statement_type: IncomeStatement
+  xbrl_prefer_dimensionless: true
+  xbrl_duration_days_range:
+  - 70
+  - 110
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: net_income
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:NetIncomeLoss
+  - us-gaap:ProfitLoss
+  xbrl_statement_type: IncomeStatement
+  xbrl_prefer_dimensionless: true
+  xbrl_duration_days_range:
+  - 70
+  - 110
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: diluted_eps
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:EarningsPerShareDiluted
+  - us-gaap:EarningsPerShareBasicAndDiluted
+  xbrl_statement_type: IncomeStatement
+  xbrl_prefer_dimensionless: true
+  xbrl_duration_days_range:
+  - 70
+  - 110
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: cash_and_equivalents
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:CashAndCashEquivalentsAtCarryingValue
+  - us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+  - us-gaap:Cash
+  xbrl_statement_type: BalanceSheet
+  xbrl_prefer_dimensionless: true
+  xbrl_period_type: instant
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: total_debt
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules:
+    nonnegative: true
+  xbrl_concepts:
+  - us-gaap:LongTermDebtAndFinanceLeaseObligations
+  - us-gaap:LongTermDebtAndCapitalLeaseObligations
+  - us-gaap:LongTermDebt
+  - us-gaap:LongTermDebtNoncurrent
+  xbrl_statement_type: BalanceSheet
+  xbrl_prefer_dimensionless: true
+  xbrl_period_type: instant
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: operating_cash_flow
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:NetCashProvidedByUsedInOperatingActivities
+  - us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
+  xbrl_statement_type: CashFlowStatement
+  xbrl_prefer_dimensionless: true
+  xbrl_duration_days_range:
+  - 70
+  - 280
+  xbrl_preferred_duration_days:
+  - 90
+  - 180
+  - 270
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: capex
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - us-gaap:PaymentsToAcquirePropertyPlantAndEquipment
+  - us-gaap:CapitalExpendituresIncurredButNotYetPaid
+  - us-gaap:PropertyPlantAndEquipmentAdditions
+  xbrl_statement_type: CashFlowStatement
+  xbrl_prefer_dimensionless: true
+  xbrl_duration_days_range:
+  - 70
+  - 280
+  xbrl_preferred_duration_days:
+  - 90
+  - 180
+  - 270
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: shares_outstanding
+  route: issuer
+  form_families:
+  - 10-Q
+  value_type: float
+  locators:
+  - xbrl_xml
+  qa_rules: {}
+  xbrl_concepts:
+  - dei:EntityCommonStockSharesOutstanding
+  - us-gaap:CommonStockSharesOutstanding
+  xbrl_statement_type: BalanceSheet
+  xbrl_prefer_dimensionless: true
+  xbrl_period_type: instant
+  xbrl_enabled_form_families:
+  - 10-Q
+- field_name: filing_delay_days
+  route: issuer
+  form_families:
+  - NT 10-Q
+  - NT 10-K
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: gross_proceeds
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: net_proceeds
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: offering_price_per_share
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: securities_offered_qty
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: underwriter_discount_total
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: deal_value
+  route: issuer
+  form_families:
+  - 8-K
+  - 6-K
+  - SC TO-I
+  - SC 13E3
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: offer_price_per_share
+  route: issuer
+  form_families:
+  - 8-K
+  - SC TO-I
+  - SC 13E3
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: tender_shares_sought
+  route: issuer
+  form_families:
+  - SC TO-I
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: financing_commitment_amount
+  route: issuer
+  form_families:
+  - 8-K
+  - SC TO-I
+  - SC 13E3
+  - S-1
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: termination_fee
+  route: issuer
+  form_families:
+  - 8-K
+  - SC TO-I
+  - SC 13E3
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: exec_total_comp
+  route: issuer
+  form_families:
+  - DEF 14A
+  - S-1
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: holder_beneficial_ownership_shares
+  route: issuer
+  form_families:
+  - DEF 14A
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: holder_beneficial_ownership_pct
+  route: issuer
+  form_families:
+  - DEF 14A
+  - S-1
+  - 424B4
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: proposal_votes_for
+  route: issuer
+  form_families:
+  - 8-K
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: proposal_votes_against
+  route: issuer
+  form_families:
+  - 8-K
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: proposal_votes_abstain
+  route: issuer
+  form_families:
+  - 8-K
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: proposal_broker_non_votes
+  route: issuer
+  form_families:
+  - 8-K
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: non_derivative_shares_owned
+  route: owner
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: derivative_underlying_shares
+  route: owner
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shares_acquired_or_disposed
+  route: owner
+  form_families:
+  - '4'
+  - '5'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: transaction_price_per_share
+  route: owner
+  form_families:
+  - '4'
+  - '5'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shares_owned_following_txn
+  route: owner
+  form_families:
+  - '4'
+  - '5'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: exercise_or_conversion_price
+  route: owner
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: beneficially_owned_shares
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: beneficial_ownership_pct
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: sole_voting_power
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shared_voting_power
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: sole_dispositive_power
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shared_dispositive_power
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: aggregate_purchase_price
+  route: owner
+  form_families:
+  - 13D
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: source_of_funds_amount
+  route: owner
+  form_families:
+  - 13D
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: proposed_sale_shares
+  route: owner
+  form_families:
+  - '144'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: proposed_sale_market_value
+  route: owner
+  form_families:
+  - '144'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shares_sold_past_3m
+  route: owner
+  form_families:
+  - '144'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: market_value_sold_past_3m
+  route: owner
+  form_families:
+  - '144'
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: position_value_usd
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shares_or_principal_amount
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: sole_voting_auth_shares
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: shared_voting_auth_shares
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: none_voting_auth_shares
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: other_included_managers_count
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: info_table_entry_total
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}
+- field_name: info_table_value_total_usd
+  route: holding
+  form_families:
+  - 13F-HR
+  - 13F-HR/A
+  value_type: float
+  locators:
+  - obj
+  - xbrl_xml
+  - sections_search
+  - parse_text
+  qa_rules: {}

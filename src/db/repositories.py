@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from src.db.models import DelistedRouteCompletion, PipelineLog, RouteWatermark
+from src.db.models import DelistedRouteCompletion, FilingAttempt, PipelineLog, RouteWatermark
 from src.pipeline.types import RouteName
 
 
@@ -221,4 +221,50 @@ class PipelineRepository:
                 created_at=now,
             )
         )
+        self._commit_with_rollback()
+
+    def upsert_filing_attempt(
+        self,
+        *,
+        run_id: str,
+        route: RouteName,
+        accession_no: str,
+        cik: str | None,
+        accepted_at: datetime | None,
+        status: str,
+        error_type: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        row = self.session.scalar(
+            select(FilingAttempt).where(
+                FilingAttempt.run_id == run_id,
+                FilingAttempt.route == route,
+                FilingAttempt.accession_no == accession_no,
+            )
+        )
+
+        if row is None:
+            self.session.add(
+                FilingAttempt(
+                    run_id=run_id,
+                    route=route,
+                    accession_no=accession_no,
+                    cik=cik,
+                    accepted_at=accepted_at,
+                    status=status,
+                    error_type=error_type,
+                    error_detail=error_detail,
+                    started_at=now,
+                    updated_at=now,
+                )
+            )
+        else:
+            row.cik = cik
+            row.accepted_at = accepted_at
+            row.status = status
+            row.error_type = error_type
+            row.error_detail = error_detail
+            row.updated_at = now
+
         self._commit_with_rollback()

@@ -21,6 +21,7 @@ from src.db.models import (
     ReviewDecision,
     ReviewTask,
 )
+from src.pipeline.review.error_codes import normalize_review_error_code
 
 
 REVIEW_DECISIONS = {
@@ -228,6 +229,7 @@ class ReviewWorkflowService:
                 "source_xpath": evidence.source_xpath,
                 "xbrl_concept": evidence.xbrl_concept,
                 "source_span": evidence.source_span,
+                "source_locator_json": evidence.source_locator_json,
                 "raw_value": evidence.raw_value,
                 "normalized_value": evidence.normalized_value,
             }
@@ -264,7 +266,12 @@ class ReviewWorkflowService:
             raise ReviewWorkflowError(f"review task is not open: {task_id}")
 
         normalized_decision = _normalize_decision(decision)
-        normalized_error_code = error_code.strip() if isinstance(error_code, str) and error_code.strip() else None
+        normalized_error_code = None
+        if isinstance(error_code, str) and error_code.strip():
+            try:
+                normalized_error_code = normalize_review_error_code(error_code)
+            except ValueError as exc:
+                raise ReviewWorkflowError(str(exc)) from exc
         if normalized_decision != "accept" and normalized_error_code is None:
             raise ReviewWorkflowError("non-accept decisions require --error-code")
         corrected_payload = _normalize_corrected_payload(corrected_json)

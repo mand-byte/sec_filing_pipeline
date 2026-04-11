@@ -246,12 +246,28 @@ class RouteProcessor:
             processed_bundles: list[FilingBundle] = []
             for bundle in eligible_bundles:
                 try:
+                    self.repo.upsert_filing_attempt(
+                        run_id=run_id,
+                        route=route,
+                        accession_no=bundle.filing.accession_no,
+                        cik=cik,
+                        accepted_at=bundle.filing.accepted_at,
+                        status="in_progress",
+                    )
                     _apply_review_gate_to_bundle(bundle=bundle, route=route, stats=review_stats)
                     self.persistence_service.persist_filing_bundle(
                         filing=bundle.filing,
                         route=route,
                         facts=bundle.facts,
                         evidences=bundle.evidences,
+                    )
+                    self.repo.upsert_filing_attempt(
+                        run_id=run_id,
+                        route=route,
+                        accession_no=bundle.filing.accession_no,
+                        cik=cik,
+                        accepted_at=bundle.filing.accepted_at,
+                        status="completed",
                     )
                     processed_bundles.append(bundle)
                     _safe_write_log(
@@ -267,6 +283,19 @@ class RouteProcessor:
                 except Exception as exc:
                     try:
                         self.repo.session.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        self.repo.upsert_filing_attempt(
+                            run_id=run_id,
+                            route=route,
+                            accession_no=bundle.filing.accession_no,
+                            cik=cik,
+                            accepted_at=bundle.filing.accepted_at,
+                            status="failed",
+                            error_type=exc.__class__.__name__,
+                            error_detail=_format_exception_detail(exc),
+                        )
                     except Exception:
                         pass
                     _safe_write_log(

@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.base import Base
-from src.db.models import PipelineLog
+from src.db.models import FilingAttempt, PipelineLog
 from src.db.repositories import PipelineRepository
 
 
@@ -34,3 +34,33 @@ def test_write_log_persists_error_detail() -> None:
     assert row.run_id == "run-001"
     assert row.error_type == "RuntimeError"
     assert row.error_detail == "Traceback (most recent call last): ..."
+
+
+def test_upsert_filing_attempt_updates_existing_run_route_accession() -> None:
+    session = _session()
+    repo = PipelineRepository(session)
+
+    repo.upsert_filing_attempt(
+        run_id="run-001",
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        cik="0000789019",
+        accepted_at=None,
+        status="in_progress",
+    )
+    repo.upsert_filing_attempt(
+        run_id="run-001",
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        cik="0000789019",
+        accepted_at=None,
+        status="failed",
+        error_type="RuntimeError",
+        error_detail="boom",
+    )
+
+    rows = session.query(FilingAttempt).all()
+    assert len(rows) == 1
+    assert rows[0].status == "failed"
+    assert rows[0].error_type == "RuntimeError"
+    assert rows[0].error_detail == "boom"

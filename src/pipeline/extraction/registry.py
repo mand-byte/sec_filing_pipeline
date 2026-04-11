@@ -1,224 +1,102 @@
-from typing import Literal
+from __future__ import annotations
 
-from src.pipeline.extraction.contracts import LocatorKind, NumericFieldSpec, RouteName, ValueType
+from functools import lru_cache
 
-_DEFAULT_LOCATORS: tuple[LocatorKind, ...] = ("obj", "xbrl_xml", "sections_search", "parse_text")
-_XBRL_ONLY_LOCATORS: tuple[LocatorKind, ...] = ("xbrl_xml",)
+from src.pipeline.extraction._config import load_extraction_config
+from src.pipeline.extraction.contracts import NumericFieldCatalogEntry, NumericFieldSpec
 
 
-def _spec(
-    field_name: str,
-    route: RouteName,
-    forms: tuple[str, ...],
-    *,
-    value_type: ValueType = "float",
-    locators: tuple[LocatorKind, ...] = _DEFAULT_LOCATORS,
-    qa_rules: dict[str, float | int | bool] | None = None,
-    xbrl_concepts: tuple[str, ...] = (),
-    xbrl_statement_type: str | None = None,
-    xbrl_prefer_dimensionless: bool = False,
-    xbrl_duration_days_range: tuple[int, int] | None = None,
-    xbrl_preferred_duration_days: tuple[int, ...] = (),
-    xbrl_period_type: Literal["duration", "instant"] | None = None,
-    xbrl_enabled_form_families: tuple[str, ...] = (),
-) -> NumericFieldSpec:
-    return NumericFieldSpec(
-        field_name=field_name,
-        route=route,
-        form_families=forms,
-        value_type=value_type,
-        locators=locators,
-        qa_rules=qa_rules or {},
-        xbrl_concepts=xbrl_concepts,
-        xbrl_statement_type=xbrl_statement_type,
-        xbrl_prefer_dimensionless=xbrl_prefer_dimensionless,
-        xbrl_duration_days_range=xbrl_duration_days_range,
-        xbrl_preferred_duration_days=xbrl_preferred_duration_days,
-        xbrl_period_type=xbrl_period_type,
-        xbrl_enabled_form_families=xbrl_enabled_form_families,
-    )
+@lru_cache(maxsize=None)
+def _load_subject_type_lookup() -> dict[tuple[str, str], str]:
+    payload = load_extraction_config("subject_mappings.yaml")
+    mappings = payload.get("mappings", {})
+    lookup: dict[tuple[str, str], str] = {}
+    if not isinstance(mappings, dict):
+        return lookup
+
+    for route, granularity_map in mappings.items():
+        if not isinstance(granularity_map, dict):
+            continue
+        for granularity, subject_mapping in granularity_map.items():
+            if not isinstance(subject_mapping, dict):
+                continue
+            subject_type = subject_mapping.get("subject_type")
+            if isinstance(subject_type, str) and subject_type.strip():
+                lookup[(str(route).strip(), str(granularity).strip())] = subject_type.strip()
+    return lookup
+
+
+@lru_cache(maxsize=None)
+def _numeric_catalog_tuple() -> tuple[NumericFieldCatalogEntry, ...]:
+    payload = load_extraction_config("catalog_numeric_fields.yaml")
+    fields = payload.get("fields", [])
+    entries: list[NumericFieldCatalogEntry] = []
+    if not isinstance(fields, list):
+        return ()
+
+    for raw_entry in fields:
+        if not isinstance(raw_entry, dict):
+            continue
+        entries.append(
+            NumericFieldCatalogEntry(
+                field_name=str(raw_entry["field_name"]),
+                route=str(raw_entry["route"]),
+                granularity=str(raw_entry["granularity"]),
+                subject_type=str(raw_entry["subject_type"]),
+                form_families=tuple(str(form) for form in raw_entry.get("form_families", ())),
+            )
+        )
+    return tuple(entries)
+
+
+def load_numeric_field_catalog() -> list[NumericFieldCatalogEntry]:
+    return list(_numeric_catalog_tuple())
+
+
+@lru_cache(maxsize=None)
+def _numeric_catalog_lookup() -> dict[tuple[str, str], NumericFieldCatalogEntry]:
+    return {(entry.route, entry.field_name): entry for entry in _numeric_catalog_tuple()}
+
+
+@lru_cache(maxsize=None)
+def _numeric_field_specs_tuple() -> tuple[NumericFieldSpec, ...]:
+    payload = load_extraction_config("runtime_numeric_fields.yaml")
+    fields = payload.get("fields", [])
+    if not isinstance(fields, list):
+        return ()
+
+    catalog_lookup = _numeric_catalog_lookup()
+    subject_type_lookup = _load_subject_type_lookup()
+    specs: list[NumericFieldSpec] = []
+    for raw_entry in fields:
+        if not isinstance(raw_entry, dict):
+            continue
+        field_name = str(raw_entry["field_name"])
+        route = str(raw_entry["route"])
+        catalog_entry = catalog_lookup.get((route, field_name))
+        granularity = catalog_entry.granularity if catalog_entry is not None else "document"
+        subject_type = catalog_entry.subject_type if catalog_entry is not None else subject_type_lookup.get((route, granularity), "filing")
+        specs.append(
+            NumericFieldSpec(
+                field_name=field_name,
+                route=route,
+                form_families=tuple(str(form) for form in raw_entry.get("form_families", ())),
+                granularity=granularity,
+                subject_type=subject_type,
+                value_type=str(raw_entry.get("value_type", "float")),
+                locators=tuple(str(locator) for locator in raw_entry.get("locators", ())),
+                qa_rules=dict(raw_entry.get("qa_rules", {})),
+                xbrl_concepts=tuple(str(concept) for concept in raw_entry.get("xbrl_concepts", ())),
+                xbrl_statement_type=raw_entry.get("xbrl_statement_type"),
+                xbrl_prefer_dimensionless=bool(raw_entry.get("xbrl_prefer_dimensionless", False)),
+                xbrl_duration_days_range=tuple(raw_entry["xbrl_duration_days_range"]) if raw_entry.get("xbrl_duration_days_range") else None,
+                xbrl_preferred_duration_days=tuple(raw_entry.get("xbrl_preferred_duration_days", ())),
+                xbrl_period_type=raw_entry.get("xbrl_period_type"),
+                xbrl_enabled_form_families=tuple(str(form) for form in raw_entry.get("xbrl_enabled_form_families", ())),
+            )
+        )
+    return tuple(specs)
 
 
 def all_numeric_field_specs() -> list[NumericFieldSpec]:
-    issuer = [
-        _spec(
-            "total_revenue",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=(
-                "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-                "us-gaap:Revenues",
-                "us-gaap:SalesRevenueNet",
-            ),
-            xbrl_statement_type="IncomeStatement",
-            xbrl_prefer_dimensionless=True,
-            xbrl_duration_days_range=(70, 110),
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "operating_income",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=("us-gaap:OperatingIncomeLoss",),
-            xbrl_statement_type="IncomeStatement",
-            xbrl_prefer_dimensionless=True,
-            xbrl_duration_days_range=(70, 110),
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "net_income",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=("us-gaap:NetIncomeLoss", "us-gaap:ProfitLoss"),
-            xbrl_statement_type="IncomeStatement",
-            xbrl_prefer_dimensionless=True,
-            xbrl_duration_days_range=(70, 110),
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "diluted_eps",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=(
-                "us-gaap:EarningsPerShareDiluted",
-                "us-gaap:EarningsPerShareBasicAndDiluted",
-            ),
-            xbrl_statement_type="IncomeStatement",
-            xbrl_prefer_dimensionless=True,
-            xbrl_duration_days_range=(70, 110),
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "cash_and_equivalents",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=(
-                "us-gaap:CashAndCashEquivalentsAtCarryingValue",
-                "us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-                "us-gaap:Cash",
-            ),
-            xbrl_statement_type="BalanceSheet",
-            xbrl_prefer_dimensionless=True,
-            xbrl_period_type="instant",
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "total_debt",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            qa_rules={"nonnegative": True},
-            xbrl_concepts=(
-                "us-gaap:LongTermDebtAndFinanceLeaseObligations",
-                "us-gaap:LongTermDebtAndCapitalLeaseObligations",
-                "us-gaap:LongTermDebt",
-                "us-gaap:LongTermDebtNoncurrent",
-            ),
-            xbrl_statement_type="BalanceSheet",
-            xbrl_prefer_dimensionless=True,
-            xbrl_period_type="instant",
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "operating_cash_flow",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=(
-                "us-gaap:NetCashProvidedByUsedInOperatingActivities",
-                "us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
-            ),
-            xbrl_statement_type="CashFlowStatement",
-            xbrl_prefer_dimensionless=True,
-            xbrl_duration_days_range=(70, 280),
-            xbrl_preferred_duration_days=(90, 180, 270),
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "capex",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=(
-                "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
-                "us-gaap:CapitalExpendituresIncurredButNotYetPaid",
-                "us-gaap:PropertyPlantAndEquipmentAdditions",
-            ),
-            xbrl_statement_type="CashFlowStatement",
-            xbrl_prefer_dimensionless=True,
-            xbrl_duration_days_range=(70, 280),
-            xbrl_preferred_duration_days=(90, 180, 270),
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec(
-            "shares_outstanding",
-            "issuer",
-            ("10-Q",),
-            locators=_XBRL_ONLY_LOCATORS,
-            xbrl_concepts=(
-                "dei:EntityCommonStockSharesOutstanding",
-                "us-gaap:CommonStockSharesOutstanding",
-            ),
-            xbrl_statement_type="BalanceSheet",
-            xbrl_prefer_dimensionless=True,
-            xbrl_period_type="instant",
-            xbrl_enabled_form_families=("10-Q",),
-        ),
-        _spec("filing_delay_days", "issuer", ("NT 10-Q", "NT 10-K")),
-        _spec("gross_proceeds", "issuer", ("S-1", "424B4")),
-        _spec("net_proceeds", "issuer", ("S-1", "424B4")),
-        _spec("offering_price_per_share", "issuer", ("S-1", "424B4")),
-        _spec("securities_offered_qty", "issuer", ("S-1", "424B4")),
-        _spec("underwriter_discount_total", "issuer", ("S-1", "424B4")),
-        _spec("deal_value", "issuer", ("8-K", "6-K", "SC TO-I", "SC 13E3")),
-        _spec("offer_price_per_share", "issuer", ("8-K", "SC TO-I", "SC 13E3")),
-        _spec("tender_shares_sought", "issuer", ("SC TO-I",)),
-        _spec("financing_commitment_amount", "issuer", ("8-K", "SC TO-I", "SC 13E3", "S-1")),
-        _spec("termination_fee", "issuer", ("8-K", "SC TO-I", "SC 13E3")),
-        _spec("exec_total_comp", "issuer", ("DEF 14A", "S-1")),
-        _spec("holder_beneficial_ownership_shares", "issuer", ("DEF 14A", "S-1", "424B4")),
-        _spec("holder_beneficial_ownership_pct", "issuer", ("DEF 14A", "S-1", "424B4")),
-        _spec("proposal_votes_for", "issuer", ("8-K",)),
-        _spec("proposal_votes_against", "issuer", ("8-K",)),
-        _spec("proposal_votes_abstain", "issuer", ("8-K",)),
-        _spec("proposal_broker_non_votes", "issuer", ("8-K",)),
-    ]
-
-    owner = [
-        _spec("non_derivative_shares_owned", "owner", ("3", "4", "5")),
-        _spec("derivative_underlying_shares", "owner", ("3", "4", "5")),
-        _spec("shares_acquired_or_disposed", "owner", ("4", "5")),
-        _spec("transaction_price_per_share", "owner", ("4", "5")),
-        _spec("shares_owned_following_txn", "owner", ("4", "5")),
-        _spec("exercise_or_conversion_price", "owner", ("3", "4", "5")),
-        _spec("beneficially_owned_shares", "owner", ("13D", "13G")),
-        _spec("beneficial_ownership_pct", "owner", ("13D", "13G")),
-        _spec("sole_voting_power", "owner", ("13D", "13G")),
-        _spec("shared_voting_power", "owner", ("13D", "13G")),
-        _spec("sole_dispositive_power", "owner", ("13D", "13G")),
-        _spec("shared_dispositive_power", "owner", ("13D", "13G")),
-        _spec("aggregate_purchase_price", "owner", ("13D",)),
-        _spec("source_of_funds_amount", "owner", ("13D",)),
-        _spec("proposed_sale_shares", "owner", ("144",)),
-        _spec("proposed_sale_market_value", "owner", ("144",)),
-        _spec("shares_sold_past_3m", "owner", ("144",)),
-        _spec("market_value_sold_past_3m", "owner", ("144",)),
-    ]
-
-    holding = [
-        _spec("position_value_usd", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("shares_or_principal_amount", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("sole_voting_auth_shares", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("shared_voting_auth_shares", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("none_voting_auth_shares", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("other_included_managers_count", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("info_table_entry_total", "holding", ("13F-HR", "13F-HR/A")),
-        _spec("info_table_value_total_usd", "holding", ("13F-HR", "13F-HR/A")),
-    ]
-
-    return [*issuer, *owner, *holding]
+    return list(_numeric_field_specs_tuple())

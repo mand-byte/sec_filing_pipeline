@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -31,6 +32,7 @@ class EvidenceInput:
     source_item_no: str | None = None
     source_xpath: str | None = None
     xbrl_concept: str | None = None
+    source_locator_json: str | None = None
     raw_value: str | None = None
     normalized_value: str | None = None
 
@@ -38,6 +40,24 @@ class EvidenceInput:
 class PersistenceService:
     def __init__(self, session: Session):
         self.session = session
+
+    @staticmethod
+    def _effective_source_locator_json(evidence: EvidenceInput) -> str:
+        if evidence.source_locator_json is not None:
+            return evidence.source_locator_json
+
+        return json.dumps(
+            {
+                "locator_kind": evidence.locator_kind,
+                "source_span": evidence.source_span,
+                "source_section": evidence.source_section,
+                "source_item_no": evidence.source_item_no,
+                "source_xpath": evidence.source_xpath,
+                "xbrl_concept": evidence.xbrl_concept,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
 
     def persist_numeric_field(
         self,
@@ -115,6 +135,7 @@ class PersistenceService:
 
         evidence_rows_by_key: dict[tuple[str, str], ExtractionEvidence] = {}
         for evidence in evidences:
+            source_locator_json = self._effective_source_locator_json(evidence)
             existing_evidence = self.session.scalar(
                 select(ExtractionEvidence).where(
                     ExtractionEvidence.accession_no == filing.accession_no,
@@ -129,6 +150,7 @@ class PersistenceService:
                     ExtractionEvidence.xbrl_concept == evidence.xbrl_concept,
                     ExtractionEvidence.raw_value == evidence.raw_value,
                     ExtractionEvidence.normalized_value == evidence.normalized_value,
+                    ExtractionEvidence.source_locator_json == source_locator_json,
                 )
             )
             evidence_row = existing_evidence
@@ -144,6 +166,7 @@ class PersistenceService:
                     source_xpath=evidence.source_xpath,
                     xbrl_concept=evidence.xbrl_concept,
                     source_span=evidence.source_span,
+                    source_locator_json=source_locator_json,
                     raw_value=evidence.raw_value,
                     normalized_value=evidence.normalized_value,
                     created_at=now,

@@ -1,62 +1,80 @@
-from src.pipeline.extraction.text_contracts import TextFieldSpec
+from __future__ import annotations
+
+from functools import lru_cache
+
+from src.pipeline.extraction._config import load_extraction_config
+from src.pipeline.extraction.text_contracts import SpanPolicy, TextFieldCatalogEntry, TextFieldSpec
+
+
+@lru_cache(maxsize=None)
+def _text_catalog_tuple() -> tuple[TextFieldCatalogEntry, ...]:
+    payload = load_extraction_config("catalog_text_fields.yaml")
+    fields = payload.get("fields", [])
+    entries: list[TextFieldCatalogEntry] = []
+    if not isinstance(fields, list):
+        return ()
+
+    for raw_entry in fields:
+        if not isinstance(raw_entry, dict):
+            continue
+        entries.append(
+            TextFieldCatalogEntry(
+                field_name=str(raw_entry["field_name"]),
+                route=str(raw_entry["route"]),
+                form_families=tuple(str(form) for form in raw_entry.get("form_families", ())),
+                implemented=bool(raw_entry.get("implemented", False)),
+            )
+        )
+    return tuple(entries)
+
+
+def load_text_field_catalog() -> list[TextFieldCatalogEntry]:
+    return list(_text_catalog_tuple())
+
+
+@lru_cache(maxsize=None)
+def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
+    payload = load_extraction_config("runtime_text_fields.yaml")
+    fields = payload.get("fields", [])
+    specs: list[TextFieldSpec] = []
+    if not isinstance(fields, list):
+        return ()
+
+    for raw_entry in fields:
+        if not isinstance(raw_entry, dict):
+            continue
+        implemented = bool(raw_entry.get("implemented", True))
+        if not implemented:
+            continue
+        span_policy_raw = raw_entry.get("span_policy")
+        span_policy = None
+        if isinstance(span_policy_raw, dict):
+            span_policy = SpanPolicy(
+                anchor_headers=tuple(str(value) for value in span_policy_raw.get("anchor_headers", ())),
+                min_tokens=int(span_policy_raw.get("min_tokens", 0)),
+                max_tokens=int(span_policy_raw.get("max_tokens", 0)),
+                preferred_tokens=tuple(span_policy_raw["preferred_tokens"]) if span_policy_raw.get("preferred_tokens") else None,
+                expand_steps=tuple(span_policy_raw.get("expand_steps", ())),
+                must_include=tuple(str(value) for value in span_policy_raw.get("must_include", ())),
+                avoid=tuple(str(value) for value in span_policy_raw.get("avoid", ())),
+            )
+        specs.append(
+            TextFieldSpec(
+                field_name=str(raw_entry["field_name"]),
+                route=str(raw_entry["route"]),
+                form_families=tuple(str(form) for form in raw_entry.get("form_families", ())),
+                locators=tuple(str(locator) for locator in raw_entry.get("locators", ())),
+                anchor_terms=tuple(str(term) for term in raw_entry.get("anchor_terms", ())),
+                regex_patterns=tuple(str(pattern) for pattern in raw_entry.get("regex_patterns", ())),
+                output_kind=str(raw_entry.get("output_kind", "text")),
+                qa_rules=dict(raw_entry.get("qa_rules", {})),
+                output_schema=raw_entry.get("output_schema"),
+                span_policy=span_policy,
+                implemented=implemented,
+            )
+        )
+    return tuple(specs)
 
 
 def all_text_field_specs() -> list[TextFieldSpec]:
-    return [
-        TextFieldSpec(
-            field_name="current_event_quant",
-            route="issuer",
-            form_families=("8-K", "6-K"),
-            locators=("item_window", "section_window"),
-            anchor_terms=("item", "press release", "current report"),
-            regex_patterns=(
-                r"(?i)\b(event|announcement|transaction|agreement)\b",
-                r"(?i)\b(material\s+definitive\s+agreement|results\s+of\s+operations|financial\s+condition)\b",
-            ),
-            output_kind="text",
-            qa_rules={
-                "materiality_score_min": 0,
-                "materiality_score_max": 5,
-                "cash_impact_usd_nullable": True,
-                "dilution_pct_nullable": True,
-                "one_time_cost_usd_nullable": True,
-            },
-        ),
-        TextFieldSpec(
-            field_name="beneficial_ownership_intent_quant",
-            route="owner",
-            form_families=("13D", "13G"),
-            locators=("section_window", "parse_text_window"),
-            anchor_terms=("item 4", "purpose of transaction", "cover page"),
-            regex_patterns=(
-                r"(?i)\b(passive|engaged|activist|control)\b",
-                r"(?i)\b(board\s+seat|proxy\s+fight|group\s+formed|strategic\s+alternatives|merger)\b",
-            ),
-            output_kind="text",
-            qa_rules={
-                "require_stance_enum": True,
-                "require_group_flag": True,
-                "allow_short": True,
-                "allow_medium": True,
-                "allow_long": True,
-                "allow_unclear": True,
-            },
-        ),
-        TextFieldSpec(
-            field_name="amendment_scope_quant",
-            route="holding",
-            form_families=("13F-HR/A",),
-            locators=("section_window", "parse_text_window"),
-            anchor_terms=("amendment", "amendment note", "header"),
-            regex_patterns=(
-                r"(?i)\b(amendment|restatement|correction|addition|deletion)\b",
-                r"(?i)\b(position\s+count\s+delta|value\s+delta|restatement\s+flag)\b",
-            ),
-            output_kind="text",
-            qa_rules={
-                "position_count_delta_nullable": True,
-                "value_delta_usd_nullable": True,
-                "restatement_flag_required": True,
-            },
-        ),
-    ]
+    return list(_text_field_specs_tuple())

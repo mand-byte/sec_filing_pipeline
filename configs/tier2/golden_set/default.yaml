@@ -1,0 +1,13 @@
+cases:
+  - case_id: default-current-event-001
+    route: issuer
+    form_type: 8-K
+    fixture_file: default-current-event-001.txt
+    sections:
+      - Item 1. Event details
+    expected:
+      current_event_quant:
+        status: ok
+        value_text: event
+        truth_tier: gold
+invariants: []

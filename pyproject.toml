@@ -28,3 +28,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"configs" = "src/_bundled_configs"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "configs/**",
+    "src/db/migrations/**",
+]

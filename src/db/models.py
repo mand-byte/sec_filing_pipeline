@@ -116,6 +116,7 @@ class ExtractionEvidence(Base):
     source_xpath: Mapped[str | None] = mapped_column(Text, nullable=True)
     xbrl_concept: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_span: Mapped[str] = mapped_column(Text, nullable=False)
+    source_locator_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -135,6 +136,25 @@ class PipelineLog(Base):
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FilingAttempt(Base):
+    __tablename__ = "filing_attempt"
+    __table_args__ = (
+        UniqueConstraint("run_id", "route", "accession_no", name="uq_filing_attempt_run_route_accession"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    route: Mapped[str] = mapped_column(String(16), nullable=False)
+    accession_no: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ReviewTask(Base):

@@ -1,0 +1,65 @@
+fields:
+  current_event_quant:
+    route: issuer
+    form_families:
+    - 8-K
+    - 6-K
+    locators:
+    - item_window
+    - section_window
+    anchor_terms:
+    - item
+    - press release
+    - current report
+    regex_patterns:
+    - (?i)\b(event|announcement|transaction|agreement)\b
+    - (?i)\b(material\s+definitive\s+agreement|results\s+of\s+operations|financial\s+condition)\b
+    output_kind: text
+    qa_rules:
+      materiality_score_min: 0
+      materiality_score_max: 5
+      cash_impact_usd_nullable: true
+      dilution_pct_nullable: true
+      one_time_cost_usd_nullable: true
+  beneficial_ownership_intent_quant:
+    route: owner
+    form_families:
+    - 13D
+    - 13G
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - item 4
+    - purpose of transaction
+    - cover page
+    regex_patterns:
+    - (?i)\b(passive|engaged|activist|control)\b
+    - (?i)\b(board\s+seat|proxy\s+fight|group\s+formed|strategic\s+alternatives|merger)\b
+    output_kind: text
+    qa_rules:
+      require_stance_enum: true
+      require_group_flag: true
+      allow_short: true
+      allow_medium: true
+      allow_long: true
+      allow_unclear: true
+  amendment_scope_quant:
+    route: holding
+    form_families:
+    - 13F-HR/A
+    locators:
+    - section_window
+    - parse_text_window
+    anchor_terms:
+    - amendment
+    - amendment note
+    - header
+    regex_patterns:
+    - (?i)\b(amendment|restatement|correction|addition|deletion)\b
+    - (?i)\b(position\s+count\s+delta|value\s+delta|restatement\s+flag)\b
+    output_kind: text
+    qa_rules:
+      position_count_delta_nullable: true
+      value_delta_usd_nullable: true
+      restatement_flag_required: true

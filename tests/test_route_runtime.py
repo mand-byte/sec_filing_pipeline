@@ -38,6 +38,7 @@ class FakeRepo:
         self.upserted_watermarks: list[tuple[str, str, datetime]] = []
         self.completed_routes: list[dict[str, object]] = []
         self.invalidations: list[tuple[str, str, str]] = []
+        self.filing_attempts: list[dict[str, object]] = []
 
     def get_delisted_route_completion(self, *, composite_figi: str, cik: str, route: str) -> object | None:
         return self.completion
@@ -53,6 +54,9 @@ class FakeRepo:
 
     def write_log(self, **kwargs: object) -> None:
         self.logs.append(dict(kwargs))
+
+    def upsert_filing_attempt(self, **kwargs: object) -> None:
+        self.filing_attempts.append(dict(kwargs))
 
     def mark_delisted_route_completed(
         self,
@@ -118,6 +122,41 @@ def test_route_processor_continues_after_bundle_failure_and_advances_watermark_b
     assert repo.upserted_watermarks == [("0000789019", "owner", first_accepted_at)]
     assert [log["level"] for log in repo.logs] == ["INFO", "ERROR"]
     assert repo.logs[1]["error_type"] == "RuntimeError"
+    assert repo.filing_attempts[:3] == [
+        {
+            "run_id": "run-001",
+            "route": "owner",
+            "accession_no": "0000000000-24-000001",
+            "cik": "0000789019",
+            "accepted_at": first_accepted_at,
+            "status": "in_progress",
+        },
+        {
+            "run_id": "run-001",
+            "route": "owner",
+            "accession_no": "0000000000-24-000001",
+            "cik": "0000789019",
+            "accepted_at": first_accepted_at,
+            "status": "completed",
+        },
+        {
+            "run_id": "run-001",
+            "route": "owner",
+            "accession_no": "0000000000-24-000002",
+            "cik": "0000789019",
+            "accepted_at": second_accepted_at,
+            "status": "in_progress",
+        },
+    ]
+    failed_attempt = repo.filing_attempts[3]
+    assert failed_attempt["run_id"] == "run-001"
+    assert failed_attempt["route"] == "owner"
+    assert failed_attempt["accession_no"] == "0000000000-24-000002"
+    assert failed_attempt["cik"] == "0000789019"
+    assert failed_attempt["accepted_at"] == second_accepted_at
+    assert failed_attempt["status"] == "failed"
+    assert failed_attempt["error_type"] == "RuntimeError"
+    assert "persist exploded" in str(failed_attempt["error_detail"])
 
 
 def test_route_processor_marks_delisted_route_completion_with_latest_success() -> None:

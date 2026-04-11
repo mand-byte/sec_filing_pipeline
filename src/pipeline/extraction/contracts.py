@@ -5,6 +5,28 @@ from typing import Literal, Mapping
 RouteName = Literal["issuer", "owner", "holding"]
 ValueType = Literal["int", "float"]
 LocatorKind = Literal["obj", "xbrl_xml", "sections_search", "parse_text"]
+FieldGranularity = Literal[
+    "document",
+    "security_line",
+    "proposal_line",
+    "exec_line",
+    "holder_line",
+    "transaction_line",
+    "position_line",
+    "derivative_line",
+    "filer_line",
+    "sale_notice",
+]
+SubjectType = Literal[
+    "filing",
+    "proposal",
+    "executive",
+    "holder_row",
+    "transaction_row",
+    "reporting_person",
+    "form144_notice",
+    "holding_position",
+]
 
 
 @dataclass(frozen=True)
@@ -15,6 +37,8 @@ class NumericFieldSpec:
     value_type: ValueType
     locators: tuple[LocatorKind, ...]
     qa_rules: Mapping[str, float | int | bool]
+    granularity: FieldGranularity = "document"
+    subject_type: SubjectType = "filing"
     xbrl_concepts: tuple[str, ...] = ()
     xbrl_statement_type: str | None = None
     xbrl_prefer_dimensionless: bool = False
@@ -24,6 +48,12 @@ class NumericFieldSpec:
     xbrl_enabled_form_families: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "field_name", self.field_name.strip())
+        object.__setattr__(
+            self,
+            "form_families",
+            tuple(form.strip().upper() for form in self.form_families if form.strip()),
+        )
         object.__setattr__(self, "locators", tuple(self.locators))
         object.__setattr__(
             self,
@@ -55,6 +85,23 @@ class NumericFieldSpec:
             if normalized_range[0] > normalized_range[1]:
                 raise ValueError("xbrl_duration_days_range must be ordered")
             object.__setattr__(self, "xbrl_duration_days_range", normalized_range)
+
+
+@dataclass(frozen=True)
+class NumericFieldCatalogEntry:
+    field_name: str
+    route: RouteName
+    granularity: FieldGranularity
+    subject_type: SubjectType
+    form_families: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "field_name", self.field_name.strip())
+        object.__setattr__(
+            self,
+            "form_families",
+            tuple(form.strip().upper() for form in self.form_families if form.strip()),
+        )
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,96 @@
+fields:
+- field_name: mdna_outlook_quant
+  route: issuer
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - 6-K-financial
+  - S-1
+  - 424B4
+  implemented: false
+- field_name: risk_factor_quant
+  route: issuer
+  form_families:
+  - 10-K
+  - 10-Q
+  - 20-F
+  - S-1
+  - 424B4
+  - SC TO-I
+  - SC 13E3
+  implemented: false
+- field_name: current_event_quant
+  route: issuer
+  form_families:
+  - 8-K
+  - 6-K
+  implemented: true
+- field_name: delay_reason_quant
+  route: issuer
+  form_families:
+  - NT 10-Q
+  - NT 10-K
+  implemented: false
+- field_name: use_of_proceeds_quant
+  route: issuer
+  form_families:
+  - S-1
+  - 424B4
+  implemented: false
+- field_name: proxy_proposal_quant
+  route: issuer
+  form_families:
+  - DEF 14A
+  implemented: false
+- field_name: comp_policy_quant
+  route: issuer
+  form_families:
+  - DEF 14A
+  - S-1
+  implemented: false
+- field_name: tender_going_private_quant
+  route: issuer
+  form_families:
+  - SC TO-I
+  - SC 13E3
+  implemented: false
+- field_name: insider_transaction_quant
+  route: owner
+  form_families:
+  - '4'
+  - '5'
+  implemented: false
+- field_name: insider_role_ownership_structure_quant
+  route: owner
+  form_families:
+  - '3'
+  - '4'
+  - '5'
+  implemented: false
+- field_name: beneficial_ownership_intent_quant
+  route: owner
+  form_families:
+  - 13D
+  - 13G
+  implemented: true
+- field_name: source_of_funds_quant
+  route: owner
+  form_families:
+  - 13D
+  implemented: false
+- field_name: rule144_sale_plan_quant
+  route: owner
+  form_families:
+  - '144'
+  implemented: false
+- field_name: manager_structure_quant
+  route: holding
+  form_families:
+  - 13F-HR
+  implemented: false
+- field_name: amendment_scope_quant
+  route: holding
+  form_families:
+  - 13F-HR/A
+  implemented: true

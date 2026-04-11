@@ -56,6 +56,7 @@ def test_persist_filing_bundle_supports_multiple_subject_keys() -> None:
                 subject_key="txn:1",
                 locator_kind="obj",
                 source_span="transactions[0].shares",
+                source_locator_json='{"kind":"obj","path":"transactions[0].shares"}',
                 raw_value="100",
                 normalized_value="100.0",
             ),
@@ -64,6 +65,7 @@ def test_persist_filing_bundle_supports_multiple_subject_keys() -> None:
                 subject_key="txn:2",
                 locator_kind="obj",
                 source_span="transactions[1].shares",
+                source_locator_json='{"kind":"obj","path":"transactions[1].shares"}',
                 raw_value="200",
                 normalized_value="200.0",
             ),
@@ -77,6 +79,37 @@ def test_persist_filing_bundle_supports_multiple_subject_keys() -> None:
     evidences = session.query(ExtractionEvidence).order_by(ExtractionEvidence.subject_key).all()
     assert len(evidences) == 2
     assert [evidence.subject_key for evidence in evidences] == ["txn:1", "txn:2"]
+    assert evidences[0].source_locator_json == '{"kind":"obj","path":"transactions[0].shares"}'
+    assert evidences[1].source_locator_json == '{"kind":"obj","path":"transactions[1].shares"}'
+
+
+def test_persist_filing_bundle_derives_source_locator_json_when_missing() -> None:
+    session = _session()
+    service = PersistenceService(session)
+
+    service.persist_filing_bundle(
+        filing=_filing(),
+        route="issuer",
+        facts=[FactInput(field_name="total_revenue", value_numeric=1000.0)],
+        evidences=[
+            EvidenceInput(
+                field_name="total_revenue",
+                locator_kind="xbrl_xml",
+                source_span="instant=2024-03-31",
+                source_xpath="rev-best",
+                xbrl_concept="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                raw_value="1000",
+                normalized_value="1000.0",
+            )
+        ],
+    )
+
+    evidence = session.query(ExtractionEvidence).one()
+    assert evidence.source_locator_json == (
+        '{"locator_kind": "xbrl_xml", "source_item_no": null, "source_section": null, '
+        '"source_span": "instant=2024-03-31", "source_xpath": "rev-best", '
+        '"xbrl_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"}'
+    )
 
 
 def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:
