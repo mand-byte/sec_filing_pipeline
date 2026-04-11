@@ -14,6 +14,7 @@ from src.pipeline.extraction.bundles import (
 )
 from src.pipeline.extraction.engine import NumericExtractionEngine
 from src.pipeline.extraction.registry import all_numeric_field_specs
+from src.pipeline.extraction.subject_keys import subject_key_has_type
 from src.pipeline.extraction.text_engine import TextExtractionEngine
 from src.pipeline.extraction.text_registry import all_text_field_specs
 from src.pipeline.route_runtime import FilingBundle, _normalize_to_utc, _safe_write_log
@@ -136,7 +137,11 @@ def build_bundles_from_provider(
                 )
                 continue
             has_owner_rows = any(
-                fact.subject_key.startswith("filer:")
+                subject_key_has_type(
+                    route=route,
+                    subject_key=fact.subject_key,
+                    subject_type="reporting_person",
+                )
                 for fact in schedule_bundle.facts
             )
             if not has_owner_rows:
@@ -173,7 +178,11 @@ def build_bundles_from_provider(
                 )
                 continue
             has_sale_rows = any(
-                fact.subject_key.startswith("sale_notice:") or fact.subject_key.startswith("sold_past_3m:")
+                subject_key_has_type(
+                    route=route,
+                    subject_key=fact.subject_key,
+                    subject_type="form144_notice",
+                )
                 for fact in form144_bundle.facts
             )
             if not has_sale_rows:
@@ -201,7 +210,11 @@ def build_bundles_from_provider(
             vote_item_present = vote_outcome.item_present
             if vote_bundle is not None:
                 has_vote_rows = any(
-                    fact.subject_key.startswith("proposal:")
+                    subject_key_has_type(
+                        route=route,
+                        subject_key=fact.subject_key,
+                        subject_type="proposal",
+                    )
                     for fact in vote_bundle.facts
                 )
                 if vote_item_present and not has_vote_rows:
@@ -280,7 +293,11 @@ def build_bundles_from_provider(
                 )
                 continue
             has_position_rows = any(
-                fact.subject_key.startswith("position:")
+                subject_key_has_type(
+                    route=route,
+                    subject_key=fact.subject_key,
+                    subject_type="holding_position",
+                )
                 for fact in holding_bundle.facts
             )
             if not has_position_rows:
@@ -322,7 +339,11 @@ def build_bundles_from_provider(
                 )
                 continue
             has_position_rows = any(
-                fact.subject_key.startswith("position:")
+                subject_key_has_type(
+                    route=route,
+                    subject_key=fact.subject_key,
+                    subject_type="holding_position",
+                )
                 for fact in holding_bundle.facts
             )
             if not has_position_rows:
