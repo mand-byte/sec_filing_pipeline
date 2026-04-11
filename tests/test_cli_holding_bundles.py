@@ -532,3 +532,65 @@ def test_build_bundles_from_provider_merges_13f_amendment_text(monkeypatch) -> N
     assert evidence[("amendment_scope_quant", "document")].locator_kind == "section_window"
     assert evidence[("position_value_usd", "position:1")].source_span == "infotable[0].Value"
     assert repo.logs == []
+
+
+def test_build_bundles_from_provider_keeps_13f_amendment_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000201C",
+        cik="0001067983",
+        form_type="13F-HR/A",
+        accepted_at=datetime(2024, 5, 16, tzinfo=timezone.utc),
+        filing=Fake13FFiling(
+            Fake13F(
+                form="13F-HR/A",
+                rows=[
+                    {
+                        "Issuer": "MICROSOFT CORP",
+                        "Class": "COM",
+                        "Cusip": "594918104",
+                        "Value": 1250,
+                        "SharesPrnAmount": 10000,
+                        "SoleVoting": 9000,
+                        "SharedVoting": 500,
+                        "NonVoting": 500,
+                    }
+                ],
+                other_included_managers_count=1,
+                total_holdings=1,
+                total_value=Decimal("1250"),
+                sections=["Header\nThis filing is a correction of the prior filing."],
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "amendment_scope_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="holding",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-holding-amendment-text-failure",
+    )
+
+    assert len(bundles) == 1
+    facts = {(fact.field_name, fact.subject_key): fact for fact in bundles[0].facts}
+    assert facts[("position_value_usd", "position:1")].value_numeric == 1250000.0
+    assert facts[("info_table_value_total_usd", "document")].value_numeric == 1250000.0
+    assert ("amendment_scope_quant", "document") not in facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
