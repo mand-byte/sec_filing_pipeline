@@ -217,6 +217,51 @@ def test_build_bundles_from_provider_rejects_invalid_holding_bundle_subject_cont
     assert "position_value_usd:document" in str(repo.logs[-1]["error_detail"])
 
 
+def test_build_bundles_from_provider_preserves_holding_text_when_obj_bundle_unavailable(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000200B",
+        cik="0001067983",
+        form_type="13F-HR",
+        accepted_at=datetime(2024, 5, 15, tzinfo=timezone.utc),
+        filing=Fake13FFiling(
+            Fake13F(
+                form="13F-HR",
+                rows=[],
+                sections=["Cover page\nThis is a holdings report filed by the manager."],
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def fail_holding_bundle(*, envelope, filing):
+        del envelope, filing
+        return BundleBuildOutcome(bundle=None, error_detail="mock 13F obj failure")
+
+    monkeypatch.setattr(provider_module, "build_holding_13f_bundle", fail_holding_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="holding",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-holding-obj-unavailable",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("manager_structure_quant", "document")] == "holdings"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "HOLDING_OBJ_UNAVAILABLE"
+
+
 def test_build_bundles_from_provider_merges_13f_amendment_text(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000201",
