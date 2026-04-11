@@ -23,6 +23,7 @@ class TextExtractionOk(TypedDict):
     source_block_offsets_json: str
     adequacy_signals_json: str
     retry_history_json: str
+    selection_trace_json: str
 
 
 class TextExtractionFailure(TypedDict):
@@ -251,6 +252,17 @@ class TextExtractionEngine:
                         value_text=value_text,
                     ),
                     "retry_history_json": "[]",
+                    "selection_trace_json": json.dumps(
+                        {
+                            "pattern": pattern,
+                            "distinct_match_count": len(distinct_matches),
+                            "selected_value": value_text,
+                            "locator_kind": window_hit["locator_kind"],
+                            "locator_path": window_hit["locator_path"],
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
                 }
 
         if not saw_window:

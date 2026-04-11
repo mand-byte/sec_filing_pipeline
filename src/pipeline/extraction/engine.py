@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import inspect
 import math
 from collections.abc import Mapping, Sequence
@@ -21,6 +22,7 @@ class ExtractionOk(TypedDict, total=False):
     xbrl_concept: str
     source_span: str
     source_xpath: str
+    selection_trace_json: str
 
 
 class ExtractionFailure(TypedDict):
@@ -480,9 +482,9 @@ class NumericExtractionEngine:
             for candidate_key, record in candidate_records
         ]
         candidates.sort(key=lambda item: (-item[0], item[1]))
-        best_record = candidates[0][2]
+        best_score, best_candidate_key, best_record = candidates[0]
         concept = self._record_concept(best_record)
-        source_xpath = self._candidate_key(best_record)
+        source_xpath = best_candidate_key
         value = self._record_value(best_record)
         return {
             "value": value,
@@ -492,6 +494,24 @@ class NumericExtractionEngine:
             "xbrl_concept": concept,
             "source_xpath": source_xpath,
             "source_span": self._build_xbrl_source_span(best_record),
+            "selection_trace_json": json.dumps(
+                {
+                    "candidate_count": len(candidates),
+                    "selected_candidate_key": best_candidate_key,
+                    "selected_score": best_score,
+                    "selected_concept": concept,
+                    "top_candidates": [
+                        {
+                            "score": score,
+                            "candidate_key": candidate_key,
+                            "concept": self._record_concept(record),
+                        }
+                        for score, candidate_key, record in candidates[:3]
+                    ],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         }
 
     def _extract_locator_candidate(
@@ -555,6 +575,8 @@ class NumericExtractionEngine:
                 result["source_span"] = locator_hit["source_span"]
             if isinstance(locator_hit.get("source_xpath"), str):
                 result["source_xpath"] = locator_hit["source_xpath"]
+            if isinstance(locator_hit.get("selection_trace_json"), str):
+                result["selection_trace_json"] = locator_hit["selection_trace_json"]
             return result
 
         return {"status": "error", "error_code": best_error}

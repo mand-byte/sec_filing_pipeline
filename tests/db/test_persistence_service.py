@@ -131,6 +131,7 @@ def test_persist_filing_bundle_preserves_rich_text_evidence_metadata() -> None:
                 source_block_offsets_json='{"source_start":12,"source_end":17}',
                 adequacy_signals_json='{"window_found":true}',
                 retry_history_json="[]",
+                selection_trace_json='{"selected_value":"event"}',
                 raw_value="event",
                 normalized_value="event",
             )
@@ -142,6 +143,7 @@ def test_persist_filing_bundle_preserves_rich_text_evidence_metadata() -> None:
     assert evidence.source_block_offsets_json == '{"source_start":12,"source_end":17}'
     assert evidence.adequacy_signals_json == '{"window_found":true}'
     assert evidence.retry_history_json == "[]"
+    assert evidence.selection_trace_json == '{"selected_value":"event"}'
 
 
 def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:

@@ -143,6 +143,7 @@ def build_bundles_from_provider(
                             source_block_offsets_json=outcome["source_block_offsets_json"],
                             adequacy_signals_json=outcome["adequacy_signals_json"],
                             retry_history_json=outcome["retry_history_json"],
+                            selection_trace_json=outcome["selection_trace_json"],
                             raw_value=outcome["value_text"],
                             normalized_value=outcome["value_text"],
                         )
@@ -275,6 +276,7 @@ def build_bundles_from_provider(
                             source_block_offsets_json=outcome["source_block_offsets_json"],
                             adequacy_signals_json=outcome["adequacy_signals_json"],
                             retry_history_json=outcome["retry_history_json"],
+                            selection_trace_json=outcome["selection_trace_json"],
                             raw_value=outcome["value_text"],
                             normalized_value=outcome["value_text"],
                         )
@@ -402,6 +404,7 @@ def build_bundles_from_provider(
                         source_block_offsets_json=outcome["source_block_offsets_json"],
                         adequacy_signals_json=outcome["adequacy_signals_json"],
                         retry_history_json=outcome["retry_history_json"],
+                        selection_trace_json=outcome["selection_trace_json"],
                         raw_value=outcome["value_text"],
                         normalized_value=outcome["value_text"],
                     )
@@ -496,6 +499,7 @@ def build_bundles_from_provider(
                         source_block_offsets_json=outcome["source_block_offsets_json"],
                         adequacy_signals_json=outcome["adequacy_signals_json"],
                         retry_history_json=outcome["retry_history_json"],
+                        selection_trace_json=outcome["selection_trace_json"],
                         raw_value=outcome["value_text"],
                         normalized_value=outcome["value_text"],
                     )
@@ -598,6 +602,7 @@ def build_bundles_from_provider(
                     source_span=outcome.get("source_span", outcome["locator_path"]),
                     source_xpath=outcome.get("source_xpath"),
                     xbrl_concept=outcome.get("xbrl_concept"),
+                    selection_trace_json=outcome.get("selection_trace_json"),
                     raw_value=str(outcome["value_raw"]),
                     normalized_value=str(outcome["value_normalized"]),
                 )
@@ -645,6 +650,7 @@ def build_bundles_from_provider(
                     source_block_offsets_json=outcome["source_block_offsets_json"],
                     adequacy_signals_json=outcome["adequacy_signals_json"],
                     retry_history_json=outcome["retry_history_json"],
+                    selection_trace_json=outcome["selection_trace_json"],
                     raw_value=outcome["value_text"],
                     normalized_value=outcome["value_text"],
                 )

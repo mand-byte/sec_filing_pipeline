@@ -79,6 +79,7 @@ def test_extract_field_prefers_best_xbrl_fact() -> None:
     assert outcome["xbrl_concept"] == "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
     assert outcome["source_xpath"] == "rev-best"
     assert "duration_days=91" in outcome["source_span"]
+    assert '"selected_candidate_key": "rev-best"' in outcome["selection_trace_json"]
 
 
 def test_extract_field_rejects_dimensioned_and_wrong_duration_candidates() -> None:

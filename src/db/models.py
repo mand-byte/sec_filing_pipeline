@@ -121,6 +121,7 @@ class ExtractionEvidence(Base):
     source_block_offsets_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     adequacy_signals_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_history_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    selection_trace_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
