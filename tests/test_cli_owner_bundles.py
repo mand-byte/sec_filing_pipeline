@@ -161,6 +161,54 @@ def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_emits_form5_transaction_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000100E",
+        cik="0000789019",
+        form_type="5",
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        filing=FakeForm4Filing(
+            [
+                FakeTransaction(shares=75.0, price_per_share=9.5, shares_owned_following_transaction=1075.0),
+            ],
+            [
+                {"UnderlyingShares": 125.0, "ExercisePrice": 8.0},
+            ],
+            sections=["Remarks\nThe reporting person is a director and this was a buy transaction."],
+            form="5",
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-1b",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert facts[("shares_acquired_or_disposed", "txn:1")] == 75.0
+    assert facts[("transaction_price_per_share", "txn:1")] == 9.5
+    assert facts[("shares_owned_following_txn", "txn:1")] == 1075.0
+    assert facts[("derivative_underlying_shares", "dtxn:1")] == 125.0
+    assert facts[("exercise_or_conversion_price", "dtxn:1")] == 8.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("insider_transaction_quant", "document")] == "buy"
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
+    assert repo.logs == []
+
+
 def test_build_bundles_from_provider_keeps_form4_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000100D",
