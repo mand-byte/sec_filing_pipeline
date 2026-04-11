@@ -4,26 +4,7 @@ from functools import lru_cache
 
 from src.pipeline.extraction._config import load_extraction_config
 from src.pipeline.extraction.contracts import NumericFieldCatalogEntry, NumericFieldSpec
-
-
-@lru_cache(maxsize=None)
-def _load_subject_type_lookup() -> dict[tuple[str, str], str]:
-    payload = load_extraction_config("subject_mappings.yaml")
-    mappings = payload.get("mappings", {})
-    lookup: dict[tuple[str, str], str] = {}
-    if not isinstance(mappings, dict):
-        return lookup
-
-    for route, granularity_map in mappings.items():
-        if not isinstance(granularity_map, dict):
-            continue
-        for granularity, subject_mapping in granularity_map.items():
-            if not isinstance(subject_mapping, dict):
-                continue
-            subject_type = subject_mapping.get("subject_type")
-            if isinstance(subject_type, str) and subject_type.strip():
-                lookup[(str(route).strip(), str(granularity).strip())] = subject_type.strip()
-    return lookup
+from src.pipeline.extraction.subject_keys import load_subject_type_lookup
 
 
 @lru_cache(maxsize=None)
@@ -66,7 +47,7 @@ def _numeric_field_specs_tuple() -> tuple[NumericFieldSpec, ...]:
         return ()
 
     catalog_lookup = _numeric_catalog_lookup()
-    subject_type_lookup = _load_subject_type_lookup()
+    subject_type_lookup = load_subject_type_lookup()
     specs: list[NumericFieldSpec] = []
     for raw_entry in fields:
         if not isinstance(raw_entry, dict):

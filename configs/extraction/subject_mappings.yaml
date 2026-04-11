@@ -2,27 +2,53 @@ mappings:
   issuer:
     document:
       subject_type: filing
+      subject_key_prefixes:
+      - document
     security_line:
       subject_type: filing
+      subject_key_prefixes:
+      - security
     proposal_line:
       subject_type: proposal
+      subject_key_prefixes:
+      - proposal
     exec_line:
       subject_type: executive
+      subject_key_prefixes:
+      - exec
     holder_line:
       subject_type: holder_row
+      subject_key_prefixes:
+      - holder
   owner:
     holder_line:
       subject_type: transaction_row
+      subject_key_prefixes:
+      - nhold
     derivative_line:
       subject_type: transaction_row
+      subject_key_prefixes:
+      - dtxn
+      - dhold
     transaction_line:
       subject_type: transaction_row
+      subject_key_prefixes:
+      - txn
     filer_line:
       subject_type: reporting_person
+      subject_key_prefixes:
+      - filer
     sale_notice:
       subject_type: form144_notice
+      subject_key_prefixes:
+      - sale_notice
+      - sold_past_3m
   holding:
     document:
       subject_type: filing
+      subject_key_prefixes:
+      - document
     position_line:
       subject_type: holding_position
+      subject_key_prefixes:
+      - position

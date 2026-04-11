@@ -22,6 +22,7 @@ from src.db.models import (
     ReviewTask,
 )
 from src.pipeline.review.error_codes import normalize_review_error_code
+from src.pipeline.extraction.subject_keys import subject_type_for_key
 
 
 REVIEW_DECISIONS = {
@@ -112,27 +113,7 @@ def _coerce_numeric(value: object) -> float | None:
 
 
 def _subject_type_for(*, route: str, subject_key: str) -> str:
-    if subject_key == "document":
-        return "filing"
-    if route == "issuer":
-        if subject_key.startswith("proposal:"):
-            return "proposal"
-        if subject_key.startswith("exec:"):
-            return "executive"
-        if subject_key.startswith("holder:"):
-            return "holder_row"
-        return "filing"
-    if route == "owner":
-        if subject_key.startswith("filer:"):
-            return "reporting_person"
-        if subject_key.startswith("sale_notice:") or subject_key.startswith("sold_past_3m:"):
-            return "form144_notice"
-        return "transaction_row"
-    if route == "holding":
-        if subject_key.startswith("position:"):
-            return "holding_position"
-        return "filing"
-    return "filing"
+    return subject_type_for_key(route=route, subject_key=subject_key)
 
 
 def _decimal_or_none(value: object) -> Decimal | None:
