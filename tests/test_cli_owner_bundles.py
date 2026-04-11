@@ -270,6 +270,55 @@ def test_build_bundles_from_provider_preserves_form4_text_when_obj_bundle_unavai
     assert repo.logs[-1]["error_type"] == "OWNERSHIP_OBJ_UNAVAILABLE"
 
 
+def test_build_bundles_from_provider_preserves_form4_text_when_bundle_has_no_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000100C",
+        cik="0000789019",
+        form_type="4",
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        filing=FakeForm4Filing(
+            [],
+            sections=["Remarks\nThe reporting person is a director and this was a buy transaction."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def empty_owner_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[],
+                evidences=[],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_ownership_bundle", empty_owner_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-empty-form4",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("insider_transaction_quant", "document")] == "buy"
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "NO_OWNER_ROWS_EXTRACTED"
+
+
 def test_build_bundles_from_provider_emits_owner_holding_rows(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000101",
@@ -902,6 +951,56 @@ def test_build_bundles_from_provider_preserves_form144_text_when_row_bundle_fail
     numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_fields == set()
     assert repo.logs[-1]["error_type"] == "OWNER_OBJ_UNAVAILABLE"
+
+
+def test_build_bundles_from_provider_preserves_form144_text_when_bundle_has_no_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000106A",
+        cik="0001326380",
+        form_type="144",
+        accepted_at=datetime(2024, 5, 7, tzinfo=timezone.utc),
+        filing=FakeForm144Filing(
+            form="144",
+            securities_information=[],
+            securities_sold_past_3_months=[],
+            sections=["Remarks\nThe planned sale is for diversification."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def empty_form144_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[],
+                evidences=[],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_form144_bundle", empty_form144_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-empty-form144",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("rule144_sale_plan_quant", "document")] == "diversification"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "NO_OWNER_ROWS_EXTRACTED"
 
 
 def test_classify_form_family_normalizes_schedule_aliases() -> None:
