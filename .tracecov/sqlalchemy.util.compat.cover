@@ -1,0 +1,421 @@
+       # util/compat.py
+       # Copyright (C) 2005-2026 the SQLAlchemy authors and contributors
+       # <see AUTHORS file>
+       #
+       # This module is part of SQLAlchemy and is released under
+       # the MIT License: https://www.opensource.org/licenses/mit-license.php
+       # mypy: allow-untyped-defs, allow-untyped-calls
+       
+    1: """Handle Python version/platform incompatibilities."""
+       
+    1: from __future__ import annotations
+       
+    1: import base64
+    1: import dataclasses
+    1: import hashlib
+    1: import inspect
+    1: import operator
+    1: import platform
+    1: import sys
+    1: import sysconfig
+    1: import typing
+    1: from typing import Any
+    1: from typing import Callable
+    1: from typing import cast
+    1: from typing import Dict
+    1: from typing import Iterable
+    1: from typing import List
+    1: from typing import Mapping
+    1: from typing import Optional
+    1: from typing import Sequence
+    1: from typing import Set
+    1: from typing import Tuple
+    1: from typing import Type
+    1: from typing import TypeVar
+       
+       
+    1: py314b1 = sys.version_info >= (3, 14, 0, "beta", 1)
+    1: py314 = sys.version_info >= (3, 14)
+    1: py313 = sys.version_info >= (3, 13)
+    1: py312 = sys.version_info >= (3, 12)
+    1: py311 = sys.version_info >= (3, 11)
+    1: py310 = sys.version_info >= (3, 10)
+    1: py39 = sys.version_info >= (3, 9)
+    1: py38 = sys.version_info >= (3, 8)
+    1: pypy = platform.python_implementation() == "PyPy"
+    1: cpython = platform.python_implementation() == "CPython"
+    1: freethreading = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+       
+    1: win32 = sys.platform.startswith("win")
+    1: osx = sys.platform.startswith("darwin")
+    1: arm = "aarch" in platform.machine().lower()
+    1: is64bit = sys.maxsize > 2**32
+       
+    1: has_refcount_gc = bool(cpython)
+       
+    1: dottedgetter = operator.attrgetter
+       
+    1: _T_co = TypeVar("_T_co", covariant=True)
+       
+       
+    1: if py314:
+           # vendor a minimal form of get_annotations per
+           # https://github.com/python/cpython/issues/133684#issuecomment-2863841891
+       
+>>>>>>     from annotationlib import call_annotate_function  # type: ignore[import-not-found,unused-ignore]  # noqa: E501
+>>>>>>     from annotationlib import Format
+       
+>>>>>>     def _get_and_call_annotate(obj, format):  # noqa: A002
+>>>>>>         annotate = getattr(obj, "__annotate__", None)
+>>>>>>         if annotate is not None:
+>>>>>>             ann = call_annotate_function(annotate, format, owner=obj)
+>>>>>>             if not isinstance(ann, dict):
+>>>>>>                 raise ValueError(f"{obj!r}.__annotate__ returned a non-dict")
+>>>>>>             return ann
+>>>>>>         return None
+       
+           # this is ported from py3.13.0a7
+>>>>>>     _BASE_GET_ANNOTATIONS = type.__dict__["__annotations__"].__get__
+       
+>>>>>>     def _get_dunder_annotations(obj):
+>>>>>>         if isinstance(obj, type):
+>>>>>>             try:
+>>>>>>                 ann = _BASE_GET_ANNOTATIONS(obj)
+>>>>>>             except AttributeError:
+                       # For static types, the descriptor raises AttributeError.
+>>>>>>                 return {}
+               else:
+>>>>>>             ann = getattr(obj, "__annotations__", None)
+>>>>>>             if ann is None:
+>>>>>>                 return {}
+       
+>>>>>>         if not isinstance(ann, dict):
+>>>>>>             raise ValueError(
+>>>>>>                 f"{obj!r}.__annotations__ is neither a dict nor None"
+                   )
+>>>>>>         return dict(ann)
+       
+>>>>>>     def _vendored_get_annotations(
+>>>>>>         obj: Any, *, format: Format  # noqa: A002
+>>>>>>     ) -> Mapping[str, Any]:
+               """A sparse implementation of annotationlib.get_annotations()"""
+       
+>>>>>>         try:
+>>>>>>             ann = _get_dunder_annotations(obj)
+>>>>>>         except Exception:
+>>>>>>             pass
+               else:
+>>>>>>             if ann is not None:
+>>>>>>                 return dict(ann)
+       
+               # But if __annotations__ threw a NameError, we try calling __annotate__
+>>>>>>         ann = _get_and_call_annotate(obj, format)
+>>>>>>         if ann is None:
+                   # If that didn't work either, we have a very weird object:
+                   # evaluating
+                   # __annotations__ threw NameError and there is no __annotate__.
+                   # In that case,
+                   # we fall back to trying __annotations__ again.
+>>>>>>             ann = _get_dunder_annotations(obj)
+       
+>>>>>>         if ann is None:
+>>>>>>             if isinstance(obj, type) or callable(obj):
+>>>>>>                 return {}
+>>>>>>             raise TypeError(f"{obj!r} does not have annotations")
+       
+>>>>>>         if not ann:
+>>>>>>             return {}
+       
+>>>>>>         return dict(ann)
+       
+>>>>>>     def get_annotations(obj: Any) -> Mapping[str, Any]:
+               # FORWARDREF has the effect of giving us ForwardRefs and not
+               # actually trying to evaluate the annotations.  We need this so
+               # that the annotations act as much like
+               # "from __future__ import annotations" as possible, which is going
+               # away in future python as a separate mode
+>>>>>>         return _vendored_get_annotations(obj, format=Format.FORWARDREF)
+       
+    1: elif py310:
+       
+    1:     def get_annotations(obj: Any) -> Mapping[str, Any]:
+  517:         return inspect.get_annotations(obj)
+       
+       else:
+       
+>>>>>>     def get_annotations(obj: Any) -> Mapping[str, Any]:
+               # it's been observed that cls.__annotations__ can be non present.
+               # it's not clear what causes this, running under tox py37/38 it
+               # happens, running straight pytest it doesnt
+       
+               # https://docs.python.org/3/howto/annotations.html#annotations-howto
+>>>>>>         if isinstance(obj, type):
+>>>>>>             ann = obj.__dict__.get("__annotations__", None)
+               else:
+>>>>>>             ann = getattr(obj, "__annotations__", None)
+       
+>>>>>>         from . import _collections
+       
+>>>>>>         if ann is None:
+>>>>>>             return _collections.EMPTY_DICT
+               else:
+>>>>>>             return cast("Mapping[str, Any]", ann)
+       
+       
+    2: class FullArgSpec(typing.NamedTuple):
+    1:     args: List[str]
+    1:     varargs: Optional[str]
+    1:     varkw: Optional[str]
+    1:     defaults: Optional[Tuple[Any, ...]]
+    1:     kwonlyargs: List[str]
+    1:     kwonlydefaults: Optional[Dict[str, Any]]
+    1:     annotations: Mapping[str, Any]
+       
+       
+    1: def inspect_getfullargspec(func: Callable[..., Any]) -> FullArgSpec:
+           """Fully vendored version of getfullargspec from Python 3.3."""
+       
+  409:     if inspect.ismethod(func):
+>>>>>>         func = func.__func__
+  409:     if not inspect.isfunction(func):
+>>>>>>         raise TypeError(f"{func!r} is not a Python function")
+       
+  409:     co = func.__code__
+  409:     if not inspect.iscode(co):
+>>>>>>         raise TypeError(f"{co!r} is not a code object")
+       
+  409:     nargs = co.co_argcount
+  409:     names = co.co_varnames
+  409:     nkwargs = co.co_kwonlyargcount
+  409:     args = list(names[:nargs])
+  409:     kwonlyargs = list(names[nargs : nargs + nkwargs])
+       
+  409:     nargs += nkwargs
+  409:     varargs = None
+  409:     if co.co_flags & inspect.CO_VARARGS:
+   46:         varargs = co.co_varnames[nargs]
+   46:         nargs = nargs + 1
+  409:     varkw = None
+  409:     if co.co_flags & inspect.CO_VARKEYWORDS:
+  170:         varkw = co.co_varnames[nargs]
+       
+  818:     return FullArgSpec(
+  409:         args,
+  409:         varargs,
+  409:         varkw,
+  409:         func.__defaults__,
+  409:         kwonlyargs,
+  409:         func.__kwdefaults__,
+  409:         get_annotations(func),
+           )
+       
+       
+    1: if py39:
+           # python stubs don't have a public type for this. not worth
+           # making a protocol
+    1:     def md5_not_for_security() -> Any:
+>>>>>>         return hashlib.md5(usedforsecurity=False)
+       
+       else:
+       
+>>>>>>     def md5_not_for_security() -> Any:
+>>>>>>         return hashlib.md5()
+       
+       
+    1: if typing.TYPE_CHECKING or py38:
+    1:     from importlib import metadata as importlib_metadata
+       else:
+>>>>>>     import importlib_metadata  # noqa
+       
+       
+    1: if typing.TYPE_CHECKING or py39:
+           # pep 584 dict union
+    1:     dict_union = operator.or_  # noqa
+       else:
+       
+>>>>>>     def dict_union(a: dict, b: dict) -> dict:
+>>>>>>         a = a.copy()
+>>>>>>         a.update(b)
+>>>>>>         return a
+       
+       
+    1: if py310:
+    1:     anext_ = anext
+       else:
+>>>>>>     _NOT_PROVIDED = object()
+>>>>>>     from collections.abc import AsyncIterator
+       
+>>>>>>     async def anext_(async_iterator, default=_NOT_PROVIDED):
+               """vendored from https://github.com/python/cpython/pull/8895"""
+       
+>>>>>>         if not isinstance(async_iterator, AsyncIterator):
+>>>>>>             raise TypeError(
+>>>>>>                 f"anext expected an AsyncIterator, got {type(async_iterator)}"
+                   )
+>>>>>>         anxt = type(async_iterator).__anext__
+>>>>>>         try:
+>>>>>>             return await anxt(async_iterator)
+>>>>>>         except StopAsyncIteration:
+>>>>>>             if default is _NOT_PROVIDED:
+>>>>>>                 raise
+>>>>>>             return default
+       
+       
+    1: def importlib_metadata_get(group):
+>>>>>>     ep = importlib_metadata.entry_points()
+>>>>>>     if typing.TYPE_CHECKING or hasattr(ep, "select"):
+>>>>>>         return ep.select(group=group)
+           else:
+>>>>>>         return ep.get(group, ())
+       
+       
+    1: def b(s):
+>>>>>>     return s.encode("latin-1")
+       
+       
+    1: def b64decode(x: str) -> bytes:
+>>>>>>     return base64.b64decode(x.encode("ascii"))
+       
+       
+    1: def b64encode(x: bytes) -> str:
+>>>>>>     return base64.b64encode(x).decode("ascii")
+       
+       
+    1: def decode_backslashreplace(text: bytes, encoding: str) -> str:
+>>>>>>     return text.decode(encoding, errors="backslashreplace")
+       
+       
+    1: def cmp(a, b):
+>>>>>>     return (a > b) - (a < b)
+       
+       
+    1: def _formatannotation(annotation, base_module=None):
+           """vendored from python 3.7"""
+       
+   54:     if isinstance(annotation, str):
+   54:         return annotation
+       
+>>>>>>     if getattr(annotation, "__module__", None) == "typing":
+>>>>>>         return repr(annotation).replace("typing.", "").replace("~", "")
+>>>>>>     if isinstance(annotation, type):
+>>>>>>         if annotation.__module__ in ("builtins", base_module):
+>>>>>>             return repr(annotation.__qualname__)
+>>>>>>         return annotation.__module__ + "." + annotation.__qualname__
+>>>>>>     elif isinstance(annotation, typing.TypeVar):
+>>>>>>         return repr(annotation).replace("~", "")
+>>>>>>     return repr(annotation).replace("~", "")
+       
+       
+   15: def inspect_formatargspec(
+    1:     args: List[str],
+    2:     varargs: Optional[str] = None,
+    2:     varkw: Optional[str] = None,
+    2:     defaults: Optional[Sequence[Any]] = None,
+    2:     kwonlyargs: Optional[Sequence[str]] = (),
+    2:     kwonlydefaults: Optional[Mapping[str, Any]] = {},
+    2:     annotations: Mapping[str, Any] = {},
+    2:     formatarg: Callable[[str], str] = str,
+  222:     formatvarargs: Callable[[str], str] = lambda name: "*" + name,
+  342:     formatvarkw: Callable[[str], str] = lambda name: "**" + name,
+  172:     formatvalue: Callable[[Any], str] = lambda value: "=" + repr(value),
+   20:     formatreturns: Callable[[Any], str] = lambda text: " -> " + str(text),
+    2:     formatannotation: Callable[[Any], str] = _formatannotation,
+    1: ) -> str:
+           """Copy formatargspec from python 3.7 standard library.
+       
+           Python 3 has deprecated formatargspec and requested that Signature
+           be used instead, however this requires a full reimplementation
+           of formatargspec() in terms of creating Parameter objects and such.
+           Instead of introducing all the object-creation overhead and having
+           to reinvent from scratch, just copy their compatibility routine.
+       
+           Ultimately we would need to rewrite our "decorator" routine completely
+           which is not really worth it right now, until all Python 2.x support
+           is dropped.
+       
+           """
+       
+ 1025:     kwonlydefaults = kwonlydefaults or {}
+ 1025:     annotations = annotations or {}
+       
+ 1025:     def formatargandannotation(arg):
+ 2615:         result = formatarg(arg)
+ 2615:         if arg in annotations:
+   36:             result += ": " + formatannotation(annotations[arg])
+ 2615:         return result
+       
+ 1025:     specs = []
+ 1025:     if defaults:
+  208:         firstdefault = len(args) - len(defaults)
+           else:
+  817:         firstdefault = -1
+       
+ 2939:     for i, arg in enumerate(args):
+ 1914:         spec = formatargandannotation(arg)
+ 1914:         if defaults and i >= firstdefault:
+  463:             spec = spec + formatvalue(defaults[i - firstdefault])
+ 1914:         specs.append(spec)
+       
+ 1025:     if varargs is not None:
+  220:         specs.append(formatvarargs(formatargandannotation(varargs)))
+           else:
+  805:         if kwonlyargs:
+   33:             specs.append("*")
+       
+ 1025:     if kwonlyargs:
+  195:         for kwonlyarg in kwonlyargs:
+  141:             spec = formatargandannotation(kwonlyarg)
+  141:             if kwonlydefaults and kwonlyarg in kwonlydefaults:
+   47:                 spec += formatvalue(kwonlydefaults[kwonlyarg])
+  141:             specs.append(spec)
+       
+ 1025:     if varkw is not None:
+  340:         specs.append(formatvarkw(formatargandannotation(varkw)))
+       
+ 1025:     result = "(" + ", ".join(specs) + ")"
+ 1025:     if "return" in annotations:
+   18:         result += formatreturns(formatannotation(annotations["return"]))
+ 1025:     return result
+       
+       
+    1: def dataclass_fields(cls: Type[Any]) -> Iterable[dataclasses.Field[Any]]:
+           """Return a sequence of all dataclasses.Field objects associated
+           with a class as an already processed dataclass.
+       
+           The class must **already be a dataclass** for Field objects to be returned.
+       
+           """
+       
+>>>>>>     if dataclasses.is_dataclass(cls):
+>>>>>>         return dataclasses.fields(cls)
+           else:
+>>>>>>         return []
+       
+       
+    1: def local_dataclass_fields(cls: Type[Any]) -> Iterable[dataclasses.Field[Any]]:
+           """Return a sequence of all dataclasses.Field objects associated with
+           an already processed dataclass, excluding those that originate from a
+           superclass.
+       
+           The class must **already be a dataclass** for Field objects to be returned.
+       
+           """
+       
+>>>>>>     if dataclasses.is_dataclass(cls):
+>>>>>>         super_fields: Set[dataclasses.Field[Any]] = set()
+>>>>>>         for sup in cls.__bases__:
+>>>>>>             super_fields.update(dataclass_fields(sup))
+>>>>>>         return [f for f in dataclasses.fields(cls) if f not in super_fields]
+           else:
+>>>>>>         return []
+       
+       
+    1: if freethreading:
+>>>>>>     import threading
+       
+>>>>>>     mini_gil = threading.RLock()
+>>>>>>     """provide a threading.RLock() under python freethreading only"""
+       else:
+    1:     import contextlib
+       
+    1:     mini_gil = contextlib.nullcontext()  # type: ignore[assignment]

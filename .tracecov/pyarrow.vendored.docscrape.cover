@@ -1,0 +1,716 @@
+       # Vendored from https://github.com/numpy/numpydoc/,
+       # changeset 4ae1e00e72e522c126403c1814f0b99dc5978622
+       
+       # This file is licensed under the BSD License. See the LICENSE.txt file
+       # in the root of the `numpydoc` repository for complete details.
+       
+    1: """Extract reference documentation from the NumPy source tree.
+       
+       """
+    1: import inspect
+    1: import textwrap
+    1: import re
+    1: import pydoc
+    1: from warnings import warn
+    1: from collections import namedtuple
+    1: from collections.abc import Callable, Mapping
+    1: import copy
+    1: import sys
+       
+       
+    1: def strip_blank_lines(l):
+           "Remove leading and trailing blank lines from a list of lines"
+  233:     while l and not l[0].strip():
+>>>>>>         del l[0]
+  252:     while l and not l[-1].strip():
+   19:         del l[-1]
+  233:     return l
+       
+       
+    2: class Reader:
+    1:     """A line-based string reader.
+       
+           """
+       
+    1:     def __init__(self, data):
+               """
+               Parameters
+               ----------
+               data : str
+                  String with lines separated by '\\n'.
+       
+               """
+  216:         if isinstance(data, list):
+  216:             self._str = data
+               else:
+>>>>>>             self._str = data.split('\n')  # store string as list of lines
+       
+  216:         self.reset()
+       
+    1:     def __getitem__(self, n):
+ 2326:         return self._str[n]
+       
+    1:     def reset(self):
+  324:         self._l = 0  # current line nr
+       
+    1:     def read(self):
+  233:         if not self.eof():
+  233:             out = self[self._l]
+  233:             self._l += 1
+  233:             return out
+               else:
+>>>>>>             return ''
+       
+    1:     def seek_next_non_empty_line(self):
+  987:         for l in self[self._l:]:
+  879:             if l.strip():
+  498:                 break
+                   else:
+  381:                 self._l += 1
+       
+    1:     def eof(self):
+ 2893:         return self._l >= len(self._str)
+       
+    1:     def read_to_condition(self, condition_func):
+  482:         start = self._l
+ 1986:         for line in self[start:]:
+ 1986:             if condition_func(line):
+  374:                 return self[start:self._l]
+ 1612:             self._l += 1
+ 1612:             if self.eof():
+  108:                 return self[start:self._l+1]
+>>>>>>         return []
+       
+    1:     def read_to_next_empty_line(self):
+  249:         self.seek_next_non_empty_line()
+       
+  249:         def is_empty(line):
+ 1346:             return not line.strip()
+       
+  249:         return self.read_to_condition(is_empty)
+       
+    1:     def read_to_next_unindented_line(self):
+  233:         def is_unindented(line):
+  640:             return (line.strip() and (len(line.lstrip()) == len(line)))
+  233:         return self.read_to_condition(is_unindented)
+       
+    1:     def peek(self, n=0):
+  523:         if self._l + n < len(self._str):
+  523:             return self[self._l + n]
+               else:
+>>>>>>             return ''
+       
+    1:     def is_empty(self):
+>>>>>>         return not ''.join(self._str).strip()
+       
+       
+    2: class ParseError(Exception):
+    1:     def __str__(self):
+>>>>>>         message = self.args[0]
+>>>>>>         if hasattr(self, 'docstring'):
+>>>>>>             message = "%s in %r" % (message, self.docstring)
+>>>>>>         return message
+       
+       
+    1: Parameter = namedtuple('Parameter', ['name', 'type', 'desc'])
+       
+       
+    2: class NumpyDocString(Mapping):
+    1:     """Parses a numpydoc string to an abstract representation
+       
+           Instances define a mapping from section title to structured data.
+       
+           """
+       
+   19:     sections = {
+    1:         'Signature': '',
+    1:         'Summary': [''],
+    1:         'Extended Summary': [],
+    1:         'Parameters': [],
+    1:         'Returns': [],
+    1:         'Yields': [],
+    1:         'Receives': [],
+    1:         'Raises': [],
+    1:         'Warns': [],
+    1:         'Other Parameters': [],
+    1:         'Attributes': [],
+    1:         'Methods': [],
+    1:         'See Also': [],
+    1:         'Notes': [],
+    1:         'Warnings': [],
+    1:         'References': '',
+    1:         'Examples': '',
+    1:         'index': {}
+           }
+       
+    1:     def __init__(self, docstring, config=None):
+  108:         orig_docstring = docstring
+  108:         docstring = textwrap.dedent(docstring).split('\n')
+       
+  108:         self._doc = Reader(docstring)
+  108:         self._parsed_data = copy.deepcopy(self.sections)
+       
+  108:         try:
+  108:             self._parse()
+>>>>>>         except ParseError as e:
+>>>>>>             e.docstring = orig_docstring
+>>>>>>             raise
+       
+    1:     def __getitem__(self, key):
+  217:         return self._parsed_data[key]
+       
+    1:     def __setitem__(self, key, val):
+  224:         if key not in self._parsed_data:
+>>>>>>             self._error_location("Unknown section %s" % key, error=False)
+               else:
+  224:             self._parsed_data[key] = val
+       
+    1:     def __iter__(self):
+>>>>>>         return iter(self._parsed_data)
+       
+    1:     def __len__(self):
+>>>>>>         return len(self._parsed_data)
+       
+    1:     def _is_at_section(self):
+  357:         self._doc.seek_next_non_empty_line()
+       
+  357:         if self._doc.eof():
+  108:             return False
+       
+  249:         l1 = self._doc.peek().strip()  # e.g. Parameters
+       
+  249:         if l1.startswith('.. index::'):
+>>>>>>             return True
+       
+  249:         l2 = self._doc.peek(1).strip()  # ---------- or ==========
+  249:         if len(l2) >= 3 and (set(l2) in ({'-'}, {'='})) and len(l2) != len(l1):
+>>>>>>             snip = '\n'.join(self._doc._str[:2])+'...'
+>>>>>>             self._error_location("potentially wrong underline length... \n%s \n%s in \n%s"
+>>>>>>                                  % (l1, l2, snip), error=False)
+  249:         return l2.startswith('-'*len(l1)) or l2.startswith('='*len(l1))
+       
+    1:     def _strip(self, doc):
+  109:         i = 0
+  109:         j = 0
+  109:         for i, line in enumerate(doc):
+  109:             if line.strip():
+  109:                 break
+       
+  109:         for j, line in enumerate(doc[::-1]):
+  109:             if line.strip():
+  109:                 break
+       
+  109:         return doc[i:len(doc)-j]
+       
+    1:     def _read_to_next_section(self):
+  116:         section = self._doc.read_to_next_empty_line()
+       
+  141:         while not self._is_at_section() and not self._doc.eof():
+   25:             if not self._doc.peek(-1).strip():  # previous line was empty
+   25:                 section += ['']
+       
+   25:             section += self._doc.read_to_next_empty_line()
+       
+  116:         return section
+       
+    1:     def _read_sections(self):
+  217:         while not self._doc.eof():
+  109:             data = self._read_to_next_section()
+  109:             name = data[0].strip()
+       
+  109:             if name.startswith('..'):  # index section
+>>>>>>                 yield name, data[1:]
+  109:             elif len(data) < 2:
+>>>>>>                 yield StopIteration
+                   else:
+  109:                 yield name, self._strip(data[2:])
+       
+    1:     def _parse_param_list(self, content, single_element_is_type=False):
+  108:         content = dedent_lines(content)
+  108:         r = Reader(content)
+  108:         params = []
+  341:         while not r.eof():
+  233:             header = r.read().strip()
+  233:             if ' :' in header:
+  233:                 arg_name, arg_type = header.split(' :', maxsplit=1)
+  233:                 arg_name, arg_type = arg_name.strip(), arg_type.strip()
+                   else:
+>>>>>>                 if single_element_is_type:
+>>>>>>                     arg_name, arg_type = '', header
+                       else:
+>>>>>>                     arg_name, arg_type = header, ''
+       
+  233:             desc = r.read_to_next_unindented_line()
+  233:             desc = dedent_lines(desc)
+  233:             desc = strip_blank_lines(desc)
+       
+  233:             params.append(Parameter(arg_name, arg_type, desc))
+       
+  108:         return params
+       
+           # See also supports the following formats.
+           #
+           # <FUNCNAME>
+           # <FUNCNAME> SPACE* COLON SPACE+ <DESC> SPACE*
+           # <FUNCNAME> ( COMMA SPACE+ <FUNCNAME>)+ (COMMA | PERIOD)? SPACE*
+           # <FUNCNAME> ( COMMA SPACE+ <FUNCNAME>)* SPACE* COLON SPACE+ <DESC> SPACE*
+       
+           # <FUNCNAME> is one of
+           #   <PLAIN_FUNCNAME>
+           #   COLON <ROLE> COLON BACKTICK <PLAIN_FUNCNAME> BACKTICK
+           # where
+           #   <PLAIN_FUNCNAME> is a legal function name, and
+           #   <ROLE> is any nonempty sequence of word characters.
+           # Examples: func_f1  :meth:`func_h1` :obj:`~baz.obj_r` :class:`class_j`
+           # <DESC> is a string describing the function.
+       
+    1:     _role = r":(?P<role>(py:)?\w+):"
+    1:     _funcbacktick = r"`(?P<name>(?:~\w+\.)?[a-zA-Z0-9_\.-]+)`"
+    1:     _funcplain = r"(?P<name2>[a-zA-Z0-9_\.-]+)"
+    1:     _funcname = r"(" + _role + _funcbacktick + r"|" + _funcplain + r")"
+    1:     _funcnamenext = _funcname.replace('role', 'rolenext')
+    1:     _funcnamenext = _funcnamenext.replace('name', 'namenext')
+    1:     _description = r"(?P<description>\s*:(\s+(?P<desc>\S+.*))?)?\s*$"
+    1:     _func_rgx = re.compile(r"^\s*" + _funcname + r"\s*")
+    2:     _line_rgx = re.compile(
+    8:         r"^\s*" +
+               r"(?P<allfuncs>" +        # group for all function names
+    1:         _funcname +
+    3:         r"(?P<morefuncs>([,]\s+" + _funcnamenext + r")*)" +
+    1:         r")" +                     # end of "allfuncs"
+               # Some function lists have a trailing comma (or period)  '\s*'
+    1:         r"(?P<trailing>[,\.])?" +
+    1:         _description)
+       
+           # Empty <DESC> elements are replaced with '..'
+    1:     empty_description = '..'
+       
+    1:     def _parse_see_also(self, content):
+               """
+               func_name : Descriptive text
+                   continued text
+               another_func_name : Descriptive text
+               func_name1, func_name2, :meth:`func_name`, func_name3
+       
+               """
+       
+>>>>>>         content = dedent_lines(content)
+       
+>>>>>>         items = []
+       
+>>>>>>         def parse_item_name(text):
+                   """Match ':role:`name`' or 'name'."""
+>>>>>>             m = self._func_rgx.match(text)
+>>>>>>             if not m:
+>>>>>>                 self._error_location(f"Error parsing See Also entry {line!r}")
+>>>>>>             role = m.group('role')
+>>>>>>             name = m.group('name') if role else m.group('name2')
+>>>>>>             return name, role, m.end()
+       
+>>>>>>         rest = []
+>>>>>>         for line in content:
+>>>>>>             if not line.strip():
+>>>>>>                 continue
+       
+>>>>>>             line_match = self._line_rgx.match(line)
+>>>>>>             description = None
+>>>>>>             if line_match:
+>>>>>>                 description = line_match.group('desc')
+>>>>>>                 if line_match.group('trailing') and description:
+>>>>>>                     self._error_location(
+>>>>>>                         'Unexpected comma or period after function list at index %d of '
+>>>>>>                         'line "%s"' % (line_match.end('trailing'), line),
+>>>>>>                         error=False)
+>>>>>>             if not description and line.startswith(' '):
+>>>>>>                 rest.append(line.strip())
+>>>>>>             elif line_match:
+>>>>>>                 funcs = []
+>>>>>>                 text = line_match.group('allfuncs')
+>>>>>>                 while True:
+>>>>>>                     if not text.strip():
+>>>>>>                         break
+>>>>>>                     name, role, match_end = parse_item_name(text)
+>>>>>>                     funcs.append((name, role))
+>>>>>>                     text = text[match_end:].strip()
+>>>>>>                     if text and text[0] == ',':
+>>>>>>                         text = text[1:].strip()
+>>>>>>                 rest = list(filter(None, [description]))
+>>>>>>                 items.append((funcs, rest))
+                   else:
+>>>>>>                 self._error_location(f"Error parsing See Also entry {line!r}")
+>>>>>>         return items
+       
+    1:     def _parse_index(self, section, content):
+               """
+               .. index: default
+                  :refguide: something, else, and more
+       
+               """
+>>>>>>         def strip_each_in(lst):
+>>>>>>             return [s.strip() for s in lst]
+       
+>>>>>>         out = {}
+>>>>>>         section = section.split('::')
+>>>>>>         if len(section) > 1:
+>>>>>>             out['default'] = strip_each_in(section[1].split(','))[0]
+>>>>>>         for line in content:
+>>>>>>             line = line.split(':')
+>>>>>>             if len(line) > 2:
+>>>>>>                 out[line[1]] = strip_each_in(line[2].split(','))
+>>>>>>         return out
+       
+    1:     def _parse_summary(self):
+               """Grab signature (if given) and summary"""
+  108:         if self._is_at_section():
+>>>>>>             return
+       
+               # If several signatures present, take the last one
+  108:         while True:
+  108:             summary = self._doc.read_to_next_empty_line()
+  216:             summary_str = " ".join([s.strip() for s in summary]).strip()
+  108:             compiled = re.compile(r'^([\w., ]+=)?\s*[\w\.]+\(.*\)$')
+  108:             if compiled.match(summary_str):
+>>>>>>                 self['Signature'] = summary_str
+>>>>>>                 if not self._is_at_section():
+>>>>>>                     continue
+  108:             break
+       
+  108:         if summary is not None:
+  108:             self['Summary'] = summary
+       
+  108:         if not self._is_at_section():
+    7:             self['Extended Summary'] = self._read_to_next_section()
+       
+    1:     def _parse(self):
+  108:         self._doc.reset()
+  108:         self._parse_summary()
+       
+  108:         sections = list(self._read_sections())
+  217:         section_names = set([section for section, content in sections])
+       
+  108:         has_returns = 'Returns' in section_names
+  108:         has_yields = 'Yields' in section_names
+               # We could do more tests, but we are not. Arbitrarily.
+  108:         if has_returns and has_yields:
+>>>>>>             msg = 'Docstring contains both a Returns and Yields section.'
+>>>>>>             raise ValueError(msg)
+  108:         if not has_yields and 'Receives' in section_names:
+>>>>>>             msg = 'Docstring contains a Receives section but not Yields.'
+>>>>>>             raise ValueError(msg)
+       
+  217:         for (section, content) in sections:
+  109:             if not section.startswith('..'):
+  327:                 section = (s.capitalize() for s in section.split(' '))
+  109:                 section = ' '.join(section)
+  109:                 if self.get(section):
+>>>>>>                     self._error_location("The section %s appears twice in  %s"
+>>>>>>                                          % (section, '\n'.join(self._doc._str)))
+       
+  109:             if section in ('Parameters', 'Other Parameters', 'Attributes',
+                                  'Methods'):
+  108:                 self[section] = self._parse_param_list(content)
+    1:             elif section in ('Returns', 'Yields', 'Raises', 'Warns', 'Receives'):
+>>>>>>                 self[section] = self._parse_param_list(
+>>>>>>                     content, single_element_is_type=True)
+    1:             elif section.startswith('.. index::'):
+>>>>>>                 self['index'] = self._parse_index(section, content)
+    1:             elif section == 'See Also':
+>>>>>>                 self['See Also'] = self._parse_see_also(content)
+                   else:
+    1:                 self[section] = content
+       
+    2:     @property
+    2:     def _obj(self):
+>>>>>>         if hasattr(self, '_cls'):
+>>>>>>             return self._cls
+>>>>>>         elif hasattr(self, '_f'):
+>>>>>>             return self._f
+>>>>>>         return None
+       
+    1:     def _error_location(self, msg, error=True):
+>>>>>>         if self._obj is not None:
+                   # we know where the docs came from:
+>>>>>>             try:
+>>>>>>                 filename = inspect.getsourcefile(self._obj)
+>>>>>>             except TypeError:
+>>>>>>                 filename = None
+>>>>>>             msg += f" in the docstring of {self._obj.__name__}"
+>>>>>>             msg += f" in {filename}." if filename else ""
+>>>>>>         if error:
+>>>>>>             raise ValueError(msg)
+               else:
+>>>>>>             warn(msg)
+       
+           # string conversion routines
+       
+    1:     def _str_header(self, name, symbol='-'):
+>>>>>>         return [name, len(name)*symbol]
+       
+    1:     def _str_indent(self, doc, indent=4):
+>>>>>>         return [' '*indent + line for line in doc]
+       
+    1:     def _str_signature(self):
+>>>>>>         if self['Signature']:
+>>>>>>             return [self['Signature'].replace('*', r'\*')] + ['']
+>>>>>>         return ['']
+       
+    1:     def _str_summary(self):
+>>>>>>         if self['Summary']:
+>>>>>>             return self['Summary'] + ['']
+>>>>>>         return []
+       
+    1:     def _str_extended_summary(self):
+>>>>>>         if self['Extended Summary']:
+>>>>>>             return self['Extended Summary'] + ['']
+>>>>>>         return []
+       
+    1:     def _str_param_list(self, name):
+>>>>>>         out = []
+>>>>>>         if self[name]:
+>>>>>>             out += self._str_header(name)
+>>>>>>             for param in self[name]:
+>>>>>>                 parts = []
+>>>>>>                 if param.name:
+>>>>>>                     parts.append(param.name)
+>>>>>>                 if param.type:
+>>>>>>                     parts.append(param.type)
+>>>>>>                 out += [' : '.join(parts)]
+>>>>>>                 if param.desc and ''.join(param.desc).strip():
+>>>>>>                     out += self._str_indent(param.desc)
+>>>>>>             out += ['']
+>>>>>>         return out
+       
+    1:     def _str_section(self, name):
+>>>>>>         out = []
+>>>>>>         if self[name]:
+>>>>>>             out += self._str_header(name)
+>>>>>>             out += self[name]
+>>>>>>             out += ['']
+>>>>>>         return out
+       
+    1:     def _str_see_also(self, func_role):
+>>>>>>         if not self['See Also']:
+>>>>>>             return []
+>>>>>>         out = []
+>>>>>>         out += self._str_header("See Also")
+>>>>>>         out += ['']
+>>>>>>         last_had_desc = True
+>>>>>>         for funcs, desc in self['See Also']:
+>>>>>>             assert isinstance(funcs, list)
+>>>>>>             links = []
+>>>>>>             for func, role in funcs:
+>>>>>>                 if role:
+>>>>>>                     link = ':%s:`%s`' % (role, func)
+>>>>>>                 elif func_role:
+>>>>>>                     link = ':%s:`%s`' % (func_role, func)
+                       else:
+>>>>>>                     link = "`%s`_" % func
+>>>>>>                 links.append(link)
+>>>>>>             link = ', '.join(links)
+>>>>>>             out += [link]
+>>>>>>             if desc:
+>>>>>>                 out += self._str_indent([' '.join(desc)])
+>>>>>>                 last_had_desc = True
+                   else:
+>>>>>>                 last_had_desc = False
+>>>>>>                 out += self._str_indent([self.empty_description])
+       
+>>>>>>         if last_had_desc:
+>>>>>>             out += ['']
+>>>>>>         out += ['']
+>>>>>>         return out
+       
+    1:     def _str_index(self):
+>>>>>>         idx = self['index']
+>>>>>>         out = []
+>>>>>>         output_index = False
+>>>>>>         default_index = idx.get('default', '')
+>>>>>>         if default_index:
+>>>>>>             output_index = True
+>>>>>>         out += ['.. index:: %s' % default_index]
+>>>>>>         for section, references in idx.items():
+>>>>>>             if section == 'default':
+>>>>>>                 continue
+>>>>>>             output_index = True
+>>>>>>             out += ['   :%s: %s' % (section, ', '.join(references))]
+>>>>>>         if output_index:
+>>>>>>             return out
+>>>>>>         return ''
+       
+    1:     def __str__(self, func_role=''):
+>>>>>>         out = []
+>>>>>>         out += self._str_signature()
+>>>>>>         out += self._str_summary()
+>>>>>>         out += self._str_extended_summary()
+>>>>>>         for param_list in ('Parameters', 'Returns', 'Yields', 'Receives',
+                                  'Other Parameters', 'Raises', 'Warns'):
+>>>>>>             out += self._str_param_list(param_list)
+>>>>>>         out += self._str_section('Warnings')
+>>>>>>         out += self._str_see_also(func_role)
+>>>>>>         for s in ('Notes', 'References', 'Examples'):
+>>>>>>             out += self._str_section(s)
+>>>>>>         for param_list in ('Attributes', 'Methods'):
+>>>>>>             out += self._str_param_list(param_list)
+>>>>>>         out += self._str_index()
+>>>>>>         return '\n'.join(out)
+       
+       
+    1: def dedent_lines(lines):
+           """Deindent a list of lines maximally"""
+  341:     return textwrap.dedent("\n".join(lines)).split("\n")
+       
+       
+    2: class FunctionDoc(NumpyDocString):
+    1:     def __init__(self, func, role='func', doc=None, config=None):
+>>>>>>         self._f = func
+>>>>>>         self._role = role  # e.g. "func" or "meth"
+       
+>>>>>>         if doc is None:
+>>>>>>             if func is None:
+>>>>>>                 raise ValueError("No function or docstring given")
+>>>>>>             doc = inspect.getdoc(func) or ''
+>>>>>>         if config is None:
+>>>>>>             config = {}
+>>>>>>         NumpyDocString.__init__(self, doc, config)
+       
+    1:     def get_func(self):
+>>>>>>         func_name = getattr(self._f, '__name__', self.__class__.__name__)
+>>>>>>         if inspect.isclass(self._f):
+>>>>>>             func = getattr(self._f, '__call__', self._f.__init__)
+               else:
+>>>>>>             func = self._f
+>>>>>>         return func, func_name
+       
+    1:     def __str__(self):
+>>>>>>         out = ''
+       
+>>>>>>         func, func_name = self.get_func()
+       
+>>>>>>         roles = {'func': 'function',
+>>>>>>                  'meth': 'method'}
+       
+>>>>>>         if self._role:
+>>>>>>             if self._role not in roles:
+>>>>>>                 print("Warning: invalid role %s" % self._role)
+>>>>>>             out += '.. %s:: %s\n    \n\n' % (roles.get(self._role, ''),
+>>>>>>                                              func_name)
+       
+>>>>>>         out += super().__str__(func_role=self._role)
+>>>>>>         return out
+       
+       
+    2: class ObjDoc(NumpyDocString):
+    1:     def __init__(self, obj, doc=None, config=None):
+>>>>>>         self._f = obj
+>>>>>>         if config is None:
+>>>>>>             config = {}
+>>>>>>         NumpyDocString.__init__(self, doc, config=config)
+       
+       
+    2: class ClassDoc(NumpyDocString):
+       
+    1:     extra_public_methods = ['__call__']
+       
+    2:     def __init__(self, cls, doc=None, modulename='', func_doc=FunctionDoc,
+    1:                  config=None):
+>>>>>>         if not inspect.isclass(cls) and cls is not None:
+>>>>>>             raise ValueError("Expected a class or None, but got %r" % cls)
+>>>>>>         self._cls = cls
+       
+>>>>>>         if 'sphinx' in sys.modules:
+>>>>>>             from sphinx.ext.autodoc import ALL
+               else:
+>>>>>>             ALL = object()
+       
+>>>>>>         if config is None:
+>>>>>>             config = {}
+>>>>>>         self.show_inherited_members = config.get(
+>>>>>>             'show_inherited_class_members', True)
+       
+>>>>>>         if modulename and not modulename.endswith('.'):
+>>>>>>             modulename += '.'
+>>>>>>         self._mod = modulename
+       
+>>>>>>         if doc is None:
+>>>>>>             if cls is None:
+>>>>>>                 raise ValueError("No class or documentation string given")
+>>>>>>             doc = pydoc.getdoc(cls)
+       
+>>>>>>         NumpyDocString.__init__(self, doc)
+       
+>>>>>>         _members = config.get('members', [])
+>>>>>>         if _members is ALL:
+>>>>>>             _members = None
+>>>>>>         _exclude = config.get('exclude-members', [])
+       
+>>>>>>         if config.get('show_class_members', True) and _exclude is not ALL:
+>>>>>>             def splitlines_x(s):
+>>>>>>                 if not s:
+>>>>>>                     return []
+                       else:
+>>>>>>                     return s.splitlines()
+>>>>>>             for field, items in [('Methods', self.methods),
+>>>>>>                                  ('Attributes', self.properties)]:
+>>>>>>                 if not self[field]:
+>>>>>>                     doc_list = []
+>>>>>>                     for name in sorted(items):
+>>>>>>                         if (name in _exclude or
+>>>>>>                                 (_members and name not in _members)):
+>>>>>>                             continue
+>>>>>>                         try:
+>>>>>>                             doc_item = pydoc.getdoc(getattr(self._cls, name))
+>>>>>>                             doc_list.append(
+>>>>>>                                 Parameter(name, '', splitlines_x(doc_item)))
+>>>>>>                         except AttributeError:
+>>>>>>                             pass  # method doesn't exist
+>>>>>>                     self[field] = doc_list
+       
+    2:     @property
+    2:     def methods(self):
+>>>>>>         if self._cls is None:
+>>>>>>             return []
+>>>>>>         return [name for name, func in inspect.getmembers(self._cls)
+>>>>>>                 if ((not name.startswith('_') or
+>>>>>>                      name in self.extra_public_methods) and
+>>>>>>                     isinstance(func, Callable) and
+>>>>>>                     self._is_show_member(name))]
+       
+    2:     @property
+    2:     def properties(self):
+>>>>>>         if self._cls is None:
+>>>>>>             return []
+>>>>>>         return [name for name, func in inspect.getmembers(self._cls)
+>>>>>>                 if (not name.startswith('_') and
+>>>>>>                     (func is None or isinstance(func, property) or
+>>>>>>                      inspect.isdatadescriptor(func)) and
+>>>>>>                     self._is_show_member(name))]
+       
+    1:     def _is_show_member(self, name):
+>>>>>>         if self.show_inherited_members:
+>>>>>>             return True  # show all class members
+>>>>>>         if name not in self._cls.__dict__:
+>>>>>>             return False  # class member is inherited, we do not show it
+>>>>>>         return True
+       
+       
+    1: def get_doc_object(obj, what=None, doc=None, config=None):
+>>>>>>     if what is None:
+>>>>>>         if inspect.isclass(obj):
+>>>>>>             what = 'class'
+>>>>>>         elif inspect.ismodule(obj):
+>>>>>>             what = 'module'
+>>>>>>         elif isinstance(obj, Callable):
+>>>>>>             what = 'function'
+               else:
+>>>>>>             what = 'object'
+>>>>>>     if config is None:
+>>>>>>         config = {}
+       
+>>>>>>     if what == 'class':
+>>>>>>         return ClassDoc(obj, func_doc=FunctionDoc, doc=doc, config=config)
+>>>>>>     elif what in ('function', 'method'):
+>>>>>>         return FunctionDoc(obj, doc=doc, config=config)
+           else:
+>>>>>>         if doc is None:
+>>>>>>             doc = pydoc.getdoc(obj)
+>>>>>>         return ObjDoc(obj, doc, config=config)

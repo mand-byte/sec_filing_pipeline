@@ -1,0 +1,895 @@
+    1: import asyncio
+    1: import io
+    1: import logging
+    1: import os
+    1: from concurrent.futures.thread import ThreadPoolExecutor
+    1: from datetime import tzinfo
+    1: from typing import Literal, Optional, Union, Dict, Any, Sequence, Iterable, Generator, BinaryIO, TYPE_CHECKING
+       
+    1: from clickhouse_connect.driver.client import Client
+    1: from clickhouse_connect.driver.query import TzMode
+    1: from clickhouse_connect.driver.common import StreamContext
+    1: from clickhouse_connect.driver.httpclient import HttpClient
+    1: from clickhouse_connect.driver.external import ExternalData
+    1: from clickhouse_connect.driver.query import QueryContext, QueryResult
+    1: from clickhouse_connect.driver.summary import QuerySummary
+    1: from clickhouse_connect.datatypes.base import ClickHouseType
+    1: from clickhouse_connect.driver.insert import InsertContext
+       
+    1: if TYPE_CHECKING:
+>>>>>>     import numpy
+>>>>>>     import pandas
+>>>>>>     import pyarrow
+       
+    1: logger = logging.getLogger(__name__)
+       
+       
+    2: class DefaultThreadPoolExecutor:
+    1:     pass
+       
+       
+       # Sentinel value to preserve default behavior and also allow passing `None`
+    1: NEW_THREAD_POOL_EXECUTOR = DefaultThreadPoolExecutor()
+       
+       
+       # pylint: disable=too-many-public-methods,too-many-instance-attributes,too-many-arguments,too-many-positional-arguments,too-many-locals
+    2: class AsyncClient:
+    1:     """
+           AsyncClient is a wrapper around the ClickHouse Client object that allows for async calls to the ClickHouse server.
+           Internally, each of the methods that uses IO is wrapped in a call to EventLoop.run_in_executor.
+           """
+       
+    4:     def __init__(self,
+                        *,
+    1:                  client: Client,
+    2:                  executor_threads: int = 0,
+    2:                  executor: Union[ThreadPoolExecutor, None, DefaultThreadPoolExecutor] = NEW_THREAD_POOL_EXECUTOR):
+>>>>>>         if isinstance(client, HttpClient):
+>>>>>>             client.headers['User-Agent'] = client.headers['User-Agent'].replace('mode:sync;', 'mode:async;')
+>>>>>>         self.client = client
+>>>>>>         if executor_threads == 0:
+>>>>>>             executor_threads = min(32, (os.cpu_count() or 1) + 4)  # Mimic the default behavior
+>>>>>>         if executor is NEW_THREAD_POOL_EXECUTOR:
+>>>>>>             self.new_executor = True
+>>>>>>             self.executor = ThreadPoolExecutor(max_workers=executor_threads)
+               else:
+>>>>>>             if executor_threads != 0:
+>>>>>>                 logger.warning('executor_threads parameter is ignored when passing an executor object')
+       
+>>>>>>             self.new_executor = False
+>>>>>>             self.executor = executor
+       
+    1:     def set_client_setting(self, key: str, value: Any) -> None:
+               """
+               Set a clickhouse setting for the client after initialization.  If a setting is not recognized by ClickHouse,
+               or the setting is identified as "read_only", this call will either throw a Programming exception or attempt
+               to send the setting anyway based on the common setting 'invalid_setting_action'.
+               :param key: ClickHouse setting name
+               :param value: ClickHouse setting value
+               """
+>>>>>>         self.client.set_client_setting(key=key, value=value)
+       
+    1:     def get_client_setting(self, key: str) -> Optional[str]:
+               """
+               :param key: The setting key
+               :return: The string value of the setting, if it exists, or None
+               """
+>>>>>>         return self.client.get_client_setting(key=key)
+       
+    1:     def set_access_token(self, access_token: str) -> None:
+               """
+               Set the ClickHouse access token for the client
+               :param access_token: Access token string
+               """
+>>>>>>         self.client.set_access_token(access_token)
+       
+    1:     def min_version(self, version_str: str) -> bool:
+               """
+               Determine whether the connected server is at least the submitted version
+               For Altinity Stable versions like 22.8.15.25.altinitystable
+               the last condition in the first list comprehension expression is added
+               :param version_str: A version string consisting of up to 4 integers delimited by dots
+               :return: True if version_str is greater than the server_version, False if less than
+               """
+>>>>>>         return self.client.min_version(version_str)
+       
+    1:     async def close(self) -> None:
+               """
+               Subclass implementation to close the connection to the server/deallocate the client
+               """
+>>>>>>         self.client.close()
+       
+>>>>>>         if self.new_executor:
+>>>>>>             await asyncio.to_thread(self.executor.shutdown, True)
+       
+   19:     async def query(self,
+    2:                     query: Optional[str] = None,
+    2:                     parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                     settings: Optional[Dict[str, Any]] = None,
+    2:                     query_formats: Optional[Dict[str, str]] = None,
+    2:                     column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    2:                     encoding: Optional[str] = None,
+    2:                     use_none: Optional[bool] = None,
+    2:                     column_oriented: Optional[bool] = None,
+    2:                     use_numpy: Optional[bool] = None,
+    2:                     max_str_len: Optional[int] = None,
+    2:                     context: QueryContext = None,
+    2:                     query_tz: Optional[Union[str, tzinfo]] = None,
+    2:                     column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                     utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+    2:                     external_data: Optional[ExternalData] = None,
+    2:                     transport_settings: Optional[Dict[str, str]] = None,
+    3:                     tz_mode: Optional[TzMode] = None) -> QueryResult:
+               """
+               Main query method for SELECT, DESCRIBE and other SQL statements that return a result matrix.
+               For parameters, see the create_query_context method.
+               :return: QueryResult -- data and metadata from response
+               """
+       
+>>>>>>         def _query():
+>>>>>>             return self.client.query(query=query, parameters=parameters, settings=settings, query_formats=query_formats,
+>>>>>>                                      column_formats=column_formats, encoding=encoding, use_none=use_none,
+>>>>>>                                      column_oriented=column_oriented, use_numpy=use_numpy, max_str_len=max_str_len,
+>>>>>>                                      context=context, query_tz=query_tz, column_tzs=column_tzs,
+>>>>>>                                      tz_mode=tz_mode, utc_tz_aware=utc_tz_aware,
+>>>>>>                                      external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query)
+>>>>>>         return result
+       
+   16:     async def query_column_block_stream(self,
+    2:                                         query: Optional[str] = None,
+    2:                                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                                         settings: Optional[Dict[str, Any]] = None,
+    2:                                         query_formats: Optional[Dict[str, str]] = None,
+    2:                                         column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    2:                                         encoding: Optional[str] = None,
+    2:                                         use_none: Optional[bool] = None,
+    2:                                         context: QueryContext = None,
+    2:                                         query_tz: Optional[Union[str, tzinfo]] = None,
+    2:                                         column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                                         utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+    2:                                         external_data: Optional[ExternalData] = None,
+    2:                                         transport_settings: Optional[Dict[str, str]] = None,
+    2:                                         tz_mode: Optional[TzMode] = None,
+    1:                                         ) -> StreamContext:
+               """
+               Variation of main query method that returns a stream of column oriented blocks.
+               For parameters, see the create_query_context method.
+               :return: StreamContext -- Iterable stream context that returns column oriented blocks
+               """
+       
+>>>>>>         def _query_column_block_stream():
+>>>>>>             return self.client.query_column_block_stream(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                          query_formats=query_formats, column_formats=column_formats,
+>>>>>>                                                          encoding=encoding, use_none=use_none, context=context,
+>>>>>>                                                          query_tz=query_tz, column_tzs=column_tzs,
+>>>>>>                                                          tz_mode=tz_mode, utc_tz_aware=utc_tz_aware,
+>>>>>>                                                          external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_column_block_stream)
+>>>>>>         return result
+       
+   16:     async def query_row_block_stream(self,
+    2:                                      query: Optional[str] = None,
+    2:                                      parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                                      settings: Optional[Dict[str, Any]] = None,
+    2:                                      query_formats: Optional[Dict[str, str]] = None,
+    2:                                      column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    2:                                      encoding: Optional[str] = None,
+    2:                                      use_none: Optional[bool] = None,
+    2:                                      context: QueryContext = None,
+    2:                                      query_tz: Optional[Union[str, tzinfo]] = None,
+    2:                                      column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                                      utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+    2:                                      external_data: Optional[ExternalData] = None,
+    2:                                      transport_settings: Optional[Dict[str, str]] = None,
+    3:                                      tz_mode: Optional[TzMode] = None) -> StreamContext:
+               """
+               Variation of main query method that returns a stream of row oriented blocks.
+               For parameters, see the create_query_context method.
+               :return: StreamContext -- Iterable stream context that returns blocks of rows
+               """
+       
+>>>>>>         def _query_row_block_stream():
+>>>>>>             return self.client.query_row_block_stream(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                       query_formats=query_formats, column_formats=column_formats,
+>>>>>>                                                       encoding=encoding, use_none=use_none, context=context,
+>>>>>>                                                       query_tz=query_tz, column_tzs=column_tzs,
+>>>>>>                                                       tz_mode=tz_mode, utc_tz_aware=utc_tz_aware,
+>>>>>>                                                       external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_row_block_stream)
+>>>>>>         return result
+       
+   16:     async def query_rows_stream(self,
+    2:                                 query: Optional[str] = None,
+    2:                                 parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                                 settings: Optional[Dict[str, Any]] = None,
+    2:                                 query_formats: Optional[Dict[str, str]] = None,
+    2:                                 column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    2:                                 encoding: Optional[str] = None,
+    2:                                 use_none: Optional[bool] = None,
+    2:                                 context: QueryContext = None,
+    2:                                 query_tz: Optional[Union[str, tzinfo]] = None,
+    2:                                 column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                                 utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+    2:                                 external_data: Optional[ExternalData] = None,
+    2:                                 transport_settings: Optional[Dict[str, str]] = None,
+    3:                                 tz_mode: Optional[TzMode] = None) -> StreamContext:
+               """
+               Variation of main query method that returns a stream of row oriented blocks.
+               For parameters, see the create_query_context method.
+               :return: StreamContext -- Iterable stream context that returns blocks of rows
+               """
+       
+>>>>>>         def _query_rows_stream():
+>>>>>>             return self.client.query_rows_stream(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                  query_formats=query_formats, column_formats=column_formats,
+>>>>>>                                                  encoding=encoding, use_none=use_none, context=context,
+>>>>>>                                                  query_tz=query_tz, column_tzs=column_tzs,
+>>>>>>                                                  tz_mode=tz_mode, utc_tz_aware=utc_tz_aware,
+>>>>>>                                                  external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_rows_stream)
+>>>>>>         return result
+       
+    9:     async def raw_query(self,
+    1:                         query: str,
+    2:                         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                         settings: Optional[Dict[str, Any]] = None,
+    2:                         fmt: str = None,
+    2:                         use_database: bool = True,
+    2:                         external_data: Optional[ExternalData] = None,
+    3:                         transport_settings: Optional[Dict[str, str]] = None) -> bytes:
+               """
+               Query method that simply returns the raw ClickHouse format bytes.
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param fmt: ClickHouse output format
+               :param use_database  Send the database parameter to ClickHouse so the command will be executed in the client
+                database context
+               :param external_data  External data to send with the query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: bytes representing raw ClickHouse return value based on format
+               """
+       
+>>>>>>         def _raw_query():
+>>>>>>             return self.client.raw_query(query=query, parameters=parameters, settings=settings, fmt=fmt,
+>>>>>>                                          use_database=use_database, external_data=external_data,
+>>>>>>                                          transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _raw_query)
+>>>>>>         return result
+       
+    8:     async def raw_stream(self, query: str,
+    2:                          parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                          settings: Optional[Dict[str, Any]] = None,
+    2:                          fmt: str = None,
+    2:                          use_database: bool = True,
+    2:                          external_data: Optional[ExternalData] = None,
+    3:                          transport_settings: Optional[Dict[str, str]] = None) -> io.IOBase:
+               """
+               Query method that returns the result as an io.IOBase iterator.
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param fmt: ClickHouse output format
+               :param use_database  Send the database parameter to ClickHouse so the command will be executed in the client
+                database context
+               :param external_data  External data to send with the query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: io.IOBase stream/iterator for the result
+               """
+       
+>>>>>>         def _raw_stream():
+>>>>>>             return self.client.raw_stream(query=query, parameters=parameters, settings=settings, fmt=fmt,
+>>>>>>                                           use_database=use_database, external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _raw_stream)
+>>>>>>         return result
+       
+   13:     async def query_np(self,
+    2:                        query: Optional[str] = None,
+    2:                        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                        settings: Optional[Dict[str, Any]] = None,
+    2:                        query_formats: Optional[Dict[str, str]] = None,
+    2:                        column_formats: Optional[Dict[str, str]] = None,
+    2:                        encoding: Optional[str] = None,
+    2:                        use_none: Optional[bool] = None,
+    2:                        max_str_len: Optional[int] = None,
+    2:                        context: QueryContext = None,
+    2:                        external_data: Optional[ExternalData] = None,
+    3:                        transport_settings: Optional[Dict[str, str]] = None) -> 'numpy.ndarray':
+               """
+               Query method that returns the results as a numpy array.
+               For parameter values, see the create_query_context method.
+               :return: Numpy array representing the result set
+               """
+       
+>>>>>>         def _query_np():
+>>>>>>             return self.client.query_np(query=query, parameters=parameters, settings=settings,
+>>>>>>                                         query_formats=query_formats, column_formats=column_formats, encoding=encoding,
+>>>>>>                                         use_none=use_none, max_str_len=max_str_len, context=context,
+>>>>>>                                         external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_np)
+>>>>>>         return result
+       
+   13:     async def query_np_stream(self,
+    2:                               query: Optional[str] = None,
+    2:                               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                               settings: Optional[Dict[str, Any]] = None,
+    2:                               query_formats: Optional[Dict[str, str]] = None,
+    2:                               column_formats: Optional[Dict[str, str]] = None,
+    2:                               encoding: Optional[str] = None,
+    2:                               use_none: Optional[bool] = None,
+    2:                               max_str_len: Optional[int] = None,
+    2:                               context: QueryContext = None,
+    2:                               external_data: Optional[ExternalData] = None,
+    3:                               transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+               """
+               Query method that returns the results as a stream of numpy arrays.
+               For parameter values, see the create_query_context method.
+               :return: Generator that yield a numpy array per block representing the result set
+               """
+       
+>>>>>>         def _query_np_stream():
+>>>>>>             return self.client.query_np_stream(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                query_formats=query_formats, column_formats=column_formats,
+>>>>>>                                                encoding=encoding, use_none=use_none, max_str_len=max_str_len,
+>>>>>>                                                context=context, external_data=external_data, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_np_stream)
+>>>>>>         return result
+       
+   19:     async def query_df(self,
+    2:                        query: Optional[str] = None,
+    2:                        parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                        settings: Optional[Dict[str, Any]] = None,
+    2:                        query_formats: Optional[Dict[str, str]] = None,
+    2:                        column_formats: Optional[Dict[str, str]] = None,
+    2:                        encoding: Optional[str] = None,
+    2:                        use_none: Optional[bool] = None,
+    2:                        max_str_len: Optional[int] = None,
+    2:                        use_na_values: Optional[bool] = None,
+    2:                        query_tz: Optional[str] = None,
+    2:                        column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                        utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+    2:                        context: QueryContext = None,
+    2:                        external_data: Optional[ExternalData] = None,
+    2:                        use_extended_dtypes: Optional[bool] = None,
+    2:                        transport_settings: Optional[Dict[str, str]] = None,
+    3:                        tz_mode: Optional[TzMode] = None) -> 'pandas.DataFrame':
+               """
+               Query method that results the results as a pandas dataframe.
+               For parameter values, see the create_query_context method.
+               :return: Pandas dataframe representing the result set
+               """
+       
+>>>>>>         def _query_df():
+>>>>>>             return self.client.query_df(query=query, parameters=parameters, settings=settings,
+>>>>>>                                         query_formats=query_formats, column_formats=column_formats, encoding=encoding,
+>>>>>>                                         use_none=use_none, max_str_len=max_str_len, use_na_values=use_na_values,
+>>>>>>                                         query_tz=query_tz, column_tzs=column_tzs, tz_mode=tz_mode,
+>>>>>>                                         utc_tz_aware=utc_tz_aware, context=context,
+>>>>>>                                         external_data=external_data, use_extended_dtypes=use_extended_dtypes,
+>>>>>>                                         transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_df)
+>>>>>>         return result
+       
+    9:     async def query_df_arrow(
+               self,
+    1:         query: str,
+    2:         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:         settings: Optional[Dict[str, Any]] = None,
+    2:         use_strings: Optional[bool] = None,
+    2:         external_data: Optional[ExternalData] = None,
+    2:         transport_settings: Optional[Dict[str, str]] = None,
+    2:         dataframe_library: str = "pandas",
+    1:     ) -> Union["pd.DataFrame", "pl.DataFrame"]:
+               """
+               Query method using the ClickHouse Arrow format to return a DataFrame
+               with PyArrow dtype backend. This provides better performance and memory efficiency
+               compared to the standard query_df method, though fewer output formatting options.
+       
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
+               :param external_data: ClickHouse "external data" to send with query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :param dataframe_library: Library to use for DataFrame creation ("pandas" or "polars")
+               :return: DataFrame (pandas or polars based on dataframe_library parameter)
+               """
+       
+>>>>>>         def _query_df_arrow():
+>>>>>>             return self.client.query_df_arrow(
+>>>>>>                 query=query,
+>>>>>>                 parameters=parameters,
+>>>>>>                 settings=settings,
+>>>>>>                 use_strings=use_strings,
+>>>>>>                 external_data=external_data,
+>>>>>>                 transport_settings=transport_settings,
+>>>>>>                 dataframe_library=dataframe_library
+                   )
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_df_arrow)
+>>>>>>         return result
+       
+   19:     async def query_df_stream(self,
+    2:                               query: Optional[str] = None,
+    2:                               parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                               settings: Optional[Dict[str, Any]] = None,
+    2:                               query_formats: Optional[Dict[str, str]] = None,
+    2:                               column_formats: Optional[Dict[str, str]] = None,
+    2:                               encoding: Optional[str] = None,
+    2:                               use_none: Optional[bool] = None,
+    2:                               max_str_len: Optional[int] = None,
+    2:                               use_na_values: Optional[bool] = None,
+    2:                               query_tz: Optional[str] = None,
+    2:                               column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                               utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None,
+    2:                               context: QueryContext = None,
+    2:                               external_data: Optional[ExternalData] = None,
+    2:                               use_extended_dtypes: Optional[bool] = None,
+    2:                               transport_settings: Optional[Dict[str, str]] = None,
+    3:                               tz_mode: Optional[TzMode] = None) -> StreamContext:
+               """
+               Query method that returns the results as a StreamContext.
+               For parameter values, see the create_query_context method.
+               :return: Generator that yields a Pandas dataframe per block representing the result set
+               """
+       
+>>>>>>         def _query_df_stream():
+>>>>>>             return self.client.query_df_stream(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                query_formats=query_formats, column_formats=column_formats,
+>>>>>>                                                encoding=encoding,
+>>>>>>                                                use_none=use_none, max_str_len=max_str_len, use_na_values=use_na_values,
+>>>>>>                                                query_tz=query_tz, column_tzs=column_tzs,
+>>>>>>                                                tz_mode=tz_mode, utc_tz_aware=utc_tz_aware, context=context,
+>>>>>>                                                external_data=external_data, use_extended_dtypes=use_extended_dtypes,
+>>>>>>                                                transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_df_stream)
+>>>>>>         return result
+       
+    9:     async def query_df_arrow_stream(
+               self,
+    1:         query: str,
+    2:         parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:         settings: Optional[Dict[str, Any]] = None,
+    2:         use_strings: Optional[bool] = None,
+    2:         external_data: Optional[ExternalData] = None,
+    2:         transport_settings: Optional[Dict[str, str]] = None,
+    2:         dataframe_library: str = "pandas"
+    1:     ) -> StreamContext:
+               """
+               Query method that returns the results as a stream of DataFrames with PyArrow dtype backend.
+               Each DataFrame represents a block from the ClickHouse response.
+       
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param use_strings: Convert ClickHouse String type to Arrow string type (instead of binary)
+               :param external_data: ClickHouse "external data" to send with query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :param dataframe_library: Library to use for DataFrame creation ("pandas" or "polars")
+               :return: StreamContext that yields DataFrames (pandas or polars based on dataframe_library parameter)
+               """
+       
+>>>>>>         def _query_df_arrow_stream():
+>>>>>>             return self.client.query_df_arrow_stream(
+>>>>>>                 query=query,
+>>>>>>                 parameters=parameters,
+>>>>>>                 settings=settings,
+>>>>>>                 use_strings=use_strings,
+>>>>>>                 external_data=external_data,
+>>>>>>                 transport_settings=transport_settings,
+>>>>>>                 dataframe_library=dataframe_library
+                   )
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_df_arrow_stream)
+>>>>>>         return result
+       
+   23:     def create_query_context(self,
+    2:                              query: Optional[Union[str, bytes]] = None,
+    2:                              parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                              settings: Optional[Dict[str, Any]] = None,
+    2:                              query_formats: Optional[Dict[str, str]] = None,
+    2:                              column_formats: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    2:                              encoding: Optional[str] = None,
+    2:                              use_none: Optional[bool] = None,
+    2:                              column_oriented: Optional[bool] = None,
+    2:                              use_numpy: Optional[bool] = False,
+    2:                              max_str_len: Optional[int] = 0,
+    2:                              context: Optional[QueryContext] = None,
+    2:                              query_tz: Optional[Union[str, tzinfo]] = None,
+    2:                              column_tzs: Optional[Dict[str, Union[str, tzinfo]]] = None,
+    2:                              tz_mode: Optional[TzMode] = None,
+    2:                              use_na_values: Optional[bool] = None,
+    2:                              streaming: bool = False,
+    2:                              as_pandas: bool = False,
+    2:                              external_data: Optional[ExternalData] = None,
+    2:                              use_extended_dtypes: Optional[bool] = None,
+    2:                              transport_settings: Optional[Dict[str, str]] = None,
+    3:                              utc_tz_aware: Optional[Union[bool, Literal["schema"]]] = None) -> QueryContext:
+               """
+               Creates or updates a reusable QueryContext object
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param query_formats: See QueryContext __init__ docstring
+               :param column_formats: See QueryContext __init__ docstring
+               :param encoding: See QueryContext __init__ docstring
+               :param use_none: Use None for ClickHouse NULL instead of default values.  Note that using None in Numpy
+                 arrays will force the numpy array dtype to 'object', which is often inefficient.  This effect also
+                 will impact the performance of Pandas dataframes.
+               :param column_oriented: Deprecated. Controls orientation of the QueryResult result_set property
+               :param use_numpy: Return QueryResult columns as one-dimensional numpy arrays
+               :param max_str_len: Limit returned ClickHouse String values to this length, which allows a Numpy
+                 structured array even with ClickHouse variable length String columns.  If 0, Numpy arrays for
+                 String columns will always be object arrays
+               :param context: An existing QueryContext to be updated with any provided parameter values
+               :param query_tz  Either a string or a pytz tzinfo object.  (Strings will be converted to tzinfo objects).
+                 Values for any DateTime or DateTime64 column in the query will be converted to Python datetime.datetime
+                 objects with the selected timezone
+               :param column_tzs A dictionary of column names to tzinfo objects (or strings that will be converted to
+                 tzinfo objects).  The timezone will be applied to datetime objects returned in the query
+               :param use_na_values: Deprecated alias for use_advanced_dtypes
+               :param as_pandas Return the result columns as pandas.Series objects
+               :param streaming Marker used to correctly configure streaming queries
+               :param external_data ClickHouse "external data" to send with query
+               :param use_extended_dtypes:  Only relevant to Pandas Dataframe queries.  Use Pandas "missing types", such as
+                 pandas.NA and pandas.NaT for ClickHouse NULL values, as well as extended Pandas dtypes such as IntegerArray
+                 and StringArray.  Defaulted to True for query_df methods
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: Reusable QueryContext
+               """
+       
+>>>>>>         return self.client.create_query_context(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                 query_formats=query_formats, column_formats=column_formats,
+>>>>>>                                                 encoding=encoding, use_none=use_none,
+>>>>>>                                                 column_oriented=column_oriented,
+>>>>>>                                                 use_numpy=use_numpy, max_str_len=max_str_len, context=context,
+>>>>>>                                                 query_tz=query_tz, column_tzs=column_tzs,
+>>>>>>                                                 tz_mode=tz_mode, utc_tz_aware=utc_tz_aware,
+>>>>>>                                                 use_na_values=use_na_values,
+>>>>>>                                                 streaming=streaming, as_pandas=as_pandas,
+>>>>>>                                                 external_data=external_data,
+>>>>>>                                                 use_extended_dtypes=use_extended_dtypes,
+>>>>>>                                                 transport_settings=transport_settings)
+       
+    8:     async def query_arrow(self,
+    1:                           query: str,
+    2:                           parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                           settings: Optional[Dict[str, Any]] = None,
+    2:                           use_strings: Optional[bool] = None,
+    2:                           external_data: Optional[ExternalData] = None,
+    3:                           transport_settings: Optional[Dict[str, str]] = None) -> 'pyarrow.Table':
+               """
+               Query method using the ClickHouse Arrow format to return a PyArrow table
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
+               :param external_data ClickHouse "external data" to send with query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: PyArrow.Table
+               """
+       
+>>>>>>         def _query_arrow():
+>>>>>>             return self.client.query_arrow(query=query, parameters=parameters, settings=settings,
+>>>>>>                                            use_strings=use_strings, external_data=external_data,
+>>>>>>                                            transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_arrow)
+>>>>>>         return result
+       
+    8:     async def query_arrow_stream(self,
+    1:                                  query: str,
+    2:                                  parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                                  settings: Optional[Dict[str, Any]] = None,
+    2:                                  use_strings: Optional[bool] = None,
+    2:                                  external_data: Optional[ExternalData] = None,
+    3:                                  transport_settings: Optional[Dict[str, str]] = None) -> StreamContext:
+               """
+               Query method that returns the results as a stream of Arrow tables
+               :param query: Query statement/format string
+               :param parameters: Optional dictionary used to format the query
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param use_strings:  Convert ClickHouse String type to Arrow string type (instead of binary)
+               :param external_data ClickHouse "external data" to send with query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: Generator that yields a PyArrow.Table for per block representing the result set
+               """
+       
+>>>>>>         def _query_arrow_stream():
+>>>>>>             return self.client.query_arrow_stream(query=query, parameters=parameters, settings=settings,
+>>>>>>                                                   use_strings=use_strings, external_data=external_data,
+>>>>>>                                                   transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _query_arrow_stream)
+>>>>>>         return result
+       
+    9:     async def command(self,
+    1:                       cmd: str,
+    2:                       parameters: Optional[Union[Sequence, Dict[str, Any]]] = None,
+    2:                       data: Union[str, bytes] = None,
+    2:                       settings: Optional[Dict[str, Any]] = None,
+    2:                       use_database: bool = True,
+    2:                       external_data: Optional[ExternalData] = None,
+    3:                       transport_settings: Optional[Dict[str, str]] = None) -> Union[str, int, Sequence[str], QuerySummary]:
+               """
+               Client method that returns a single value instead of a result set
+               :param cmd: ClickHouse query/command as a python format string
+               :param parameters: Optional dictionary of key/values pairs to be formatted
+               :param data: Optional 'data' for the command (for INSERT INTO in particular)
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param use_database: Send the database parameter to ClickHouse so the command will be executed in the client
+                database context.  Otherwise, no database will be specified with the command.  This is useful for determining
+                the default user database
+               :param external_data ClickHouse "external data" to send with command/query
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: Decoded response from ClickHouse as either a string, int, or sequence of strings, or QuerySummary
+               if no data returned
+               """
+       
+>>>>>>         def _command():
+>>>>>>             return self.client.command(cmd=cmd, parameters=parameters, data=data, settings=settings,
+>>>>>>                                        use_database=use_database, external_data=external_data,
+>>>>>>                                        transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _command)
+>>>>>>         return result
+       
+    1:     async def ping(self) -> bool:
+               """
+               Validate the connection, does not throw an Exception (see debug logs)
+               :return: ClickHouse server is up and reachable
+               """
+       
+>>>>>>         def _ping():
+>>>>>>             return self.client.ping()
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _ping)
+>>>>>>         return result
+       
+   12:     async def insert(self,
+    2:                      table: Optional[str] = None,
+    2:                      data: Sequence[Sequence[Any]] = None,
+    2:                      column_names: Union[str, Iterable[str]] = '*',
+    2:                      database: Optional[str] = None,
+    2:                      column_types: Sequence[ClickHouseType] = None,
+    2:                      column_type_names: Sequence[str] = None,
+    2:                      column_oriented: bool = False,
+    2:                      settings: Optional[Dict[str, Any]] = None,
+    2:                      context: InsertContext = None,
+    3:                      transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
+               """
+               Method to insert multiple rows/data matrix of native Python objects.  If context is specified arguments
+               other than data are ignored
+               :param table: Target table
+               :param data: Sequence of sequences of Python data
+               :param column_names: Ordered list of column names or '*' if column types should be retrieved from the
+                   ClickHouse table definition
+               :param database: Target database -- will use client default database if not specified.
+               :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from
+                   the server
+               :param column_type_names: ClickHouse column type names.  If set then column data does not need to be
+                   retrieved from the server
+               :param column_oriented: If true the data is already "pivoted" in column form
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param context: Optional reusable insert context to allow repeated inserts into the same table with
+                   different data batches
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: QuerySummary with summary information, throws exception if insert fails
+               """
+       
+>>>>>>         def _insert():
+>>>>>>             return self.client.insert(table=table, data=data, column_names=column_names, database=database,
+>>>>>>                                       column_types=column_types, column_type_names=column_type_names,
+>>>>>>                                       column_oriented=column_oriented, settings=settings, context=context,
+>>>>>>                                       transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _insert)
+>>>>>>         return result
+       
+   10:     async def insert_df(self, table: str = None,
+    1:                         df=None,
+    2:                         database: Optional[str] = None,
+    2:                         settings: Optional[Dict] = None,
+    2:                         column_names: Optional[Sequence[str]] = None,
+    2:                         column_types: Sequence[ClickHouseType] = None,
+    2:                         column_type_names: Sequence[str] = None,
+    2:                         context: InsertContext = None,
+    3:                         transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
+               """
+               Insert a pandas DataFrame into ClickHouse.  If context is specified arguments other than df are ignored
+               :param table: ClickHouse table
+               :param df: two-dimensional pandas dataframe
+               :param database: Optional ClickHouse database
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param column_names: An optional list of ClickHouse column names.  If not set, the DataFrame column names
+                  will be used
+               :param column_types: ClickHouse column types.  If set then column data does not need to be retrieved from
+                   the server
+               :param column_type_names: ClickHouse column type names.  If set then column data does not need to be
+                   retrieved from the server
+               :param context: Optional reusable insert context to allow repeated inserts into the same table with
+                   different data batches
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: QuerySummary with summary information, throws exception if insert fails
+               """
+       
+>>>>>>         def _insert_df():
+>>>>>>             return self.client.insert_df(table=table, df=df, database=database, settings=settings,
+>>>>>>                                          column_names=column_names,
+>>>>>>                                          column_types=column_types, column_type_names=column_type_names,
+>>>>>>                                          context=context, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _insert_df)
+>>>>>>         return result
+       
+    5:     async def insert_arrow(self, table: str,
+    2:                            arrow_table, database: str = None,
+    2:                            settings: Optional[Dict] = None,
+    3:                            transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
+               """
+               Insert a PyArrow table DataFrame into ClickHouse using raw Arrow format
+               :param table: ClickHouse table
+               :param arrow_table: PyArrow Table object
+               :param database: Optional ClickHouse database
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: QuerySummary with summary information, throws exception if insert fails
+               """
+       
+>>>>>>         def _insert_arrow():
+>>>>>>             return self.client.insert_arrow(table=table, arrow_table=arrow_table, database=database,
+>>>>>>                                             settings=settings, transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _insert_arrow)
+>>>>>>         return result
+       
+    7:     async def insert_df_arrow(
+               self,
+    1:         table: str,
+    1:         df: Union["pd.DataFrame", "pl.DataFrame"],
+    2:         database: Optional[str] = None,
+    2:         settings: Optional[Dict] = None,
+    2:         transport_settings: Optional[Dict[str, str]] = None,
+    1:     ) -> QuerySummary:
+               """
+               Insert a pandas DataFrame with PyArrow backend or a polars DataFrame into ClickHouse using Arrow format.
+               This method is optimized for DataFrames that already use Arrow format, providing
+               better performance than the standard insert_df method.
+       
+               Validation is performed and an exception will be raised if this requirement is not met.
+               Polars DataFrames are natively Arrow-based and don't require additional validation.
+       
+               :param table: ClickHouse table name
+               :param df: Pandas DataFrame with PyArrow dtype backend or Polars DataFrame
+               :param database: Optional ClickHouse database name
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: QuerySummary with summary information, throws exception if insert fails
+               """
+       
+>>>>>>         def _insert_df_arrow():
+>>>>>>             return self.client.insert_df_arrow(
+>>>>>>                 table=table,
+>>>>>>                 df=df,
+>>>>>>                 database=database,
+>>>>>>                 settings=settings,
+>>>>>>                 transport_settings=transport_settings,
+                   )
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _insert_df_arrow)
+>>>>>>         return result
+       
+   11:     async def create_insert_context(self,
+    1:                                     table: str,
+    2:                                     column_names: Optional[Union[str, Sequence[str]]] = None,
+    2:                                     database: Optional[str] = None,
+    2:                                     column_types: Sequence[ClickHouseType] = None,
+    2:                                     column_type_names: Sequence[str] = None,
+    2:                                     column_oriented: bool = False,
+    2:                                     settings: Optional[Dict[str, Any]] = None,
+    2:                                     data: Optional[Sequence[Sequence[Any]]] = None,
+    3:                                     transport_settings: Optional[Dict[str, str]] = None) -> InsertContext:
+               """
+               Builds a reusable insert context to hold state for a duration of an insert
+               :param table: Target table
+               :param database: Target database.  If not set, uses the client default database
+               :param column_names: Optional ordered list of column names.  If not set, all columns ('*') will be assumed
+                 in the order specified by the table definition
+               :param database: Target database -- will use client default database if not specified
+               :param column_types: ClickHouse column types.  Optional  Sequence of ClickHouseType objects.  If neither column
+                  types nor column type names are set, actual column types will be retrieved from the server.
+               :param column_type_names: ClickHouse column type names.  Specified column types by name string
+               :param column_oriented: If true the data is already "pivoted" in column form
+               :param settings: Optional dictionary of ClickHouse settings (key/string values)
+               :param data: Initial dataset for insert
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :return: Reusable insert context
+               """
+       
+>>>>>>         def _create_insert_context():
+>>>>>>             return self.client.create_insert_context(table=table, column_names=column_names, database=database,
+>>>>>>                                                      column_types=column_types, column_type_names=column_type_names,
+>>>>>>                                                      column_oriented=column_oriented, settings=settings, data=data,
+>>>>>>                                                      transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _create_insert_context)
+>>>>>>         return result
+       
+    1:     async def data_insert(self, context: InsertContext) -> QuerySummary:
+               """
+               Subclass implementation of the data insert
+               :context: InsertContext parameter object
+               :return: No return, throws an exception if the insert fails
+               """
+       
+>>>>>>         def _data_insert():
+>>>>>>             return self.client.data_insert(context=context)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _data_insert)
+>>>>>>         return result
+       
+    8:     async def raw_insert(self, table: str,
+    2:                          column_names: Optional[Sequence[str]] = None,
+    2:                          insert_block: Union[str, bytes, Generator[bytes, None, None], BinaryIO] = None,
+    2:                          settings: Optional[Dict] = None,
+    2:                          fmt: Optional[str] = None,
+    2:                          compression: Optional[str] = None,
+    3:                          transport_settings: Optional[Dict[str, str]] = None) -> QuerySummary:
+               """
+               Insert data already formatted in a bytes object
+               :param table: Table name (whether qualified with the database name or not)
+               :param column_names: Sequence of column names
+               :param insert_block: Binary or string data already in a recognized ClickHouse format
+               :param settings:  Optional dictionary of ClickHouse settings (key/string values)
+               :param compression:  Recognized ClickHouse `Accept-Encoding` header compression value
+               :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
+               :param fmt: Valid clickhouse format
+               """
+       
+>>>>>>         def _raw_insert():
+>>>>>>             return self.client.raw_insert(table=table, column_names=column_names, insert_block=insert_block,
+>>>>>>                                           settings=settings, fmt=fmt, compression=compression,
+>>>>>>                                           transport_settings=transport_settings)
+       
+>>>>>>         loop = asyncio.get_running_loop()
+>>>>>>         result = await loop.run_in_executor(self.executor, _raw_insert)
+>>>>>>         return result
+       
+    1:     async def __aenter__(self) -> "AsyncClient":
+>>>>>>         return self
+       
+    1:     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+>>>>>>         await self.close()

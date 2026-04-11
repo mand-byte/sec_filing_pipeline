@@ -1,0 +1,80 @@
+    1: from __future__ import annotations
+       
+    1: from functools import lru_cache
+       
+    1: from src.pipeline.extraction._config import load_extraction_config
+    1: from src.pipeline.extraction.text_contracts import SpanPolicy, TextFieldCatalogEntry, TextFieldSpec
+       
+       
+    2: @lru_cache(maxsize=None)
+    2: def _text_catalog_tuple() -> tuple[TextFieldCatalogEntry, ...]:
+>>>>>>     payload = load_extraction_config("catalog_text_fields.yaml")
+>>>>>>     fields = payload.get("fields", [])
+>>>>>>     entries: list[TextFieldCatalogEntry] = []
+>>>>>>     if not isinstance(fields, list):
+>>>>>>         return ()
+       
+>>>>>>     for raw_entry in fields:
+>>>>>>         if not isinstance(raw_entry, dict):
+>>>>>>             continue
+>>>>>>         entries.append(
+>>>>>>             TextFieldCatalogEntry(
+>>>>>>                 field_name=str(raw_entry["field_name"]),
+>>>>>>                 route=str(raw_entry["route"]),
+>>>>>>                 form_families=tuple(str(form) for form in raw_entry.get("form_families", ())),
+>>>>>>                 implemented=bool(raw_entry.get("implemented", False)),
+                   )
+               )
+>>>>>>     return tuple(entries)
+       
+       
+    1: def load_text_field_catalog() -> list[TextFieldCatalogEntry]:
+>>>>>>     return list(_text_catalog_tuple())
+       
+       
+    2: @lru_cache(maxsize=None)
+    2: def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
+    1:     payload = load_extraction_config("runtime_text_fields.yaml")
+    1:     fields = payload.get("fields", [])
+    1:     specs: list[TextFieldSpec] = []
+    1:     if not isinstance(fields, list):
+>>>>>>         return ()
+       
+   16:     for raw_entry in fields:
+   15:         if not isinstance(raw_entry, dict):
+>>>>>>             continue
+   15:         implemented = bool(raw_entry.get("implemented", True))
+   15:         if not implemented:
+>>>>>>             continue
+   15:         span_policy_raw = raw_entry.get("span_policy")
+   15:         span_policy = None
+   15:         if isinstance(span_policy_raw, dict):
+   30:             span_policy = SpanPolicy(
+   56:                 anchor_headers=tuple(str(value) for value in span_policy_raw.get("anchor_headers", ())),
+   15:                 min_tokens=int(span_policy_raw.get("min_tokens", 0)),
+   15:                 max_tokens=int(span_policy_raw.get("max_tokens", 0)),
+   15:                 preferred_tokens=tuple(span_policy_raw["preferred_tokens"]) if span_policy_raw.get("preferred_tokens") else None,
+   15:                 expand_steps=tuple(span_policy_raw.get("expand_steps", ())),
+   30:                 must_include=tuple(str(value) for value in span_policy_raw.get("must_include", ())),
+   45:                 avoid=tuple(str(value) for value in span_policy_raw.get("avoid", ())),
+                   )
+   30:         specs.append(
+   30:             TextFieldSpec(
+   15:                 field_name=str(raw_entry["field_name"]),
+   15:                 route=str(raw_entry["route"]),
+   65:                 form_families=tuple(str(form) for form in raw_entry.get("form_families", ())),
+   60:                 locators=tuple(str(locator) for locator in raw_entry.get("locators", ())),
+   72:                 anchor_terms=tuple(str(term) for term in raw_entry.get("anchor_terms", ())),
+   48:                 regex_patterns=tuple(str(pattern) for pattern in raw_entry.get("regex_patterns", ())),
+   15:                 output_kind=str(raw_entry.get("output_kind", "text")),
+   15:                 qa_rules=dict(raw_entry.get("qa_rules", {})),
+   15:                 output_schema=raw_entry.get("output_schema"),
+   15:                 span_policy=span_policy,
+   15:                 implemented=implemented,
+                   )
+               )
+    1:     return tuple(specs)
+       
+       
+    1: def all_text_field_specs() -> list[TextFieldSpec]:
+   36:     return list(_text_field_specs_tuple())

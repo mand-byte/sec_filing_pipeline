@@ -1,0 +1,67 @@
+    1: from __future__ import annotations
+       
+    1: import math
+       
+    1: from sqlalchemy import func, select
+    1: from sqlalchemy.orm import Session
+       
+    1: from src.db.models import ExtractedFact, ExtractionEvidence, FilingDocument
+       
+       
+    2: class SqlAlchemyReviewStats:
+    1:     def __init__(self, session: Session):
+>>>>>>         self.session = session
+       
+    1:     def issuer_field_count(self, cik: str, route: str, field_name: str) -> int:
+>>>>>>         count = self.session.scalar(
+>>>>>>             select(func.count())
+>>>>>>             .select_from(ExtractedFact)
+>>>>>>             .join(FilingDocument, FilingDocument.accession_no == ExtractedFact.accession_no)
+>>>>>>             .where(
+>>>>>>                 FilingDocument.cik == cik,
+>>>>>>                 ExtractedFact.route == route,
+>>>>>>                 ExtractedFact.field_name == field_name,
+                   )
+               )
+>>>>>>         return int(count or 0)
+       
+    1:     def template_field_count(self, template_hash: str, route: str, field_name: str) -> int:
+>>>>>>         count = self.session.scalar(
+>>>>>>             select(func.count()).select_from(ExtractionEvidence).where(
+>>>>>>                 ExtractionEvidence.source_xpath == template_hash,
+>>>>>>                 ExtractionEvidence.route == route,
+>>>>>>                 ExtractionEvidence.field_name == field_name,
+                   )
+               )
+>>>>>>         return int(count or 0)
+       
+    1:     def zscore(self, value_numeric: float, route: str, field_name: str) -> float | None:
+>>>>>>         rows = self.session.execute(
+>>>>>>             select(ExtractedFact.value_numeric, ExtractedFact.value_text).where(
+>>>>>>                 ExtractedFact.route == route,
+>>>>>>                 ExtractedFact.field_name == field_name,
+                   )
+>>>>>>         ).all()
+       
+>>>>>>         numeric_values: list[float] = []
+>>>>>>         for row in rows:
+>>>>>>             row_value_numeric = row[0]
+>>>>>>             row_value_text = row[1]
+>>>>>>             if isinstance(row_value_numeric, (int, float)) and not isinstance(row_value_numeric, bool):
+>>>>>>                 numeric_values.append(float(row_value_numeric))
+>>>>>>                 continue
+>>>>>>             if isinstance(row_value_text, str):
+>>>>>>                 text_length = len(row_value_text.strip())
+>>>>>>                 if text_length > 0:
+>>>>>>                     numeric_values.append(float(text_length))
+       
+>>>>>>         if len(numeric_values) < 2:
+>>>>>>             return None
+       
+>>>>>>         mean = sum(numeric_values) / len(numeric_values)
+>>>>>>         variance = sum((value - mean) ** 2 for value in numeric_values) / len(numeric_values)
+>>>>>>         if variance <= 0:
+>>>>>>             return None
+       
+>>>>>>         std_dev = math.sqrt(variance)
+>>>>>>         return abs((value_numeric - mean) / std_dev)
