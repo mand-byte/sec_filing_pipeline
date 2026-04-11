@@ -612,6 +612,72 @@ def test_build_bundles_from_provider_emits_form144_sale_notice_rows(monkeypatch)
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_preserves_form144_text_when_row_bundle_violates_subject_contract(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000104A",
+        cik="0001326380",
+        form_type="144",
+        accepted_at=datetime(2024, 5, 5, tzinfo=timezone.utc),
+        filing=FakeForm144Filing(
+            form="144",
+            securities_information=[],
+            securities_sold_past_3_months=[],
+            sections=["Remarks\nThe planned sale is for diversification."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_form144_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="proposed_sale_shares",
+                        subject_key="document",
+                        value_numeric=17087.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="proposed_sale_shares",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="securities_information.units_to_be_sold[0]",
+                        raw_value="17087",
+                        normalized_value="17087.0",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_form144_bundle", build_invalid_form144_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-5-invalid-contract",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("rule144_sale_plan_quant", "document")] == "diversification"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("proposed_sale_shares", "document") not in numeric_fields
+    assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+
+
 def test_build_bundles_from_provider_keeps_form144_rows_without_sale_notice_table(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000105",
