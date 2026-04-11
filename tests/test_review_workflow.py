@@ -73,6 +73,7 @@ def _seed_review_task(session: Session) -> None:
                 source_block_offsets_json='{"source_start":12,"source_end":17}',
                 adequacy_signals_json='{"window_found":true,"span_policy_applied":false}',
                 retry_history_json="[]",
+                selection_trace_json='{"selected_value":"100"}',
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -147,6 +148,7 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         assert "unit_scaling" in golden_packet.packet_json
         assert '"source_heading_path_json": "[\\"Ownership Table\\"]"' in golden_packet.packet_json
         assert '"adequacy_signals_json": "{\\"window_found\\":true,\\"span_policy_applied\\":false}"' in golden_packet.packet_json
+        assert '"selection_trace_json": "{\\"selected_value\\":\\"100\\"}"' in golden_packet.packet_json
 
 
 def test_review_workflow_service_reject_removes_fact() -> None:
@@ -178,6 +180,7 @@ def test_review_workflow_service_reject_removes_fact() -> None:
         assert golden_subject.subject_key == "txn:1"
         assert "locator_miss" in golden_packet.packet_json
         assert '"source_heading_path_json": "[\\"Ownership Table\\"]"' in golden_packet.packet_json
+        assert '"selection_trace_json": "{\\"selected_value\\":\\"100\\"}"' in golden_packet.packet_json
         assert session.query(GoldenTruth).all() == []
 
 

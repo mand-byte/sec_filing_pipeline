@@ -64,6 +64,7 @@ def _seed_open_review_task(session: Session) -> None:
                 source_block_offsets_json='{"source_start":12,"source_end":17}',
                 adequacy_signals_json='{"window_found":true,"span_policy_applied":false}',
                 retry_history_json="[]",
+                selection_trace_json='{"selected_value":"100"}',
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -112,6 +113,7 @@ def test_release_gate_exports_review_packets_and_passes_when_fix_once_chain_comp
     packet_payload = json.loads(packet_files[0].read_text(encoding="utf-8"))
     assert packet_payload["primary_evidence"]["source_heading_path_json"] == '["Ownership Table"]'
     assert packet_payload["primary_evidence"]["adequacy_signals_json"] == '{"window_found":true,"span_policy_applied":false}'
+    assert packet_payload["primary_evidence"]["selection_trace_json"] == '{"selected_value":"100"}'
     assert (tmp_path / "summary.json").exists()
 
 

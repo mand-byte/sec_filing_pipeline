@@ -477,6 +477,7 @@ class ReviewWorkflowService:
                 "source_block_offsets_json": evidence.source_block_offsets_json if evidence is not None else None,
                 "adequacy_signals_json": evidence.adequacy_signals_json if evidence is not None else None,
                 "retry_history_json": evidence.retry_history_json if evidence is not None else None,
+                "selection_trace_json": evidence.selection_trace_json if evidence is not None else None,
                 "raw_value": evidence.raw_value if evidence is not None else None,
                 "normalized_value": evidence.normalized_value if evidence is not None else None,
             },
