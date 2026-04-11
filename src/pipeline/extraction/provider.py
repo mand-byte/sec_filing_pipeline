@@ -1278,7 +1278,15 @@ def build_bundles_from_provider(
                 for spec in route_numeric_specs
                 if spec.xbrl_enabled_form_families and form_family in spec.xbrl_enabled_form_families
             )
-            filing_text_specs = ()
+            filing_text_specs = (
+                tuple(
+                    spec
+                    for spec in route_text_specs
+                    if form_family in spec.form_families
+                )
+                if _supports_text_extraction_surface(envelope.filing)
+                else ()
+            )
         elif route == "issuer" and form_family == "8-K":
             filing_numeric_specs = tuple(
                 spec
