@@ -16,6 +16,8 @@ class TextExtractionOk(TypedDict):
     locator_kind: TextLocatorKind
     locator_path: str
     source_span: str
+    source_section: str | None
+    source_item_no: str | None
     source_locator_json: str
     source_heading_path_json: str
     source_block_offsets_json: str
@@ -220,10 +222,14 @@ class TextExtractionEngine:
                     "locator_kind": window_hit["locator_kind"],
                     "locator_path": window_hit["locator_path"],
                     "source_span": source_span,
+                    "source_section": window_hit.get("source_section"),
+                    "source_item_no": window_hit.get("source_item_no"),
                     "source_locator_json": json.dumps(
                         {
                             "locator_kind": window_hit["locator_kind"],
                             "locator_path": window_hit["locator_path"],
+                            "source_section": window_hit.get("source_section"),
+                            "source_item_no": window_hit.get("source_item_no"),
                             "source_span": source_span,
                         },
                         ensure_ascii=False,

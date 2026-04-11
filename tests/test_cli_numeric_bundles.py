@@ -812,6 +812,8 @@ def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> Non
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("delay_reason_quant", "document")] == "audit"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("delay_reason_quant", "document")].source_section in {"delay", "Delay reason"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
@@ -847,6 +849,8 @@ def test_build_bundles_from_provider_emits_mdna_outlook_text(monkeypatch) -> Non
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("mdna_outlook_quant", "document")] == "up"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("mdna_outlook_quant", "document")].source_section in {"md&a", "MD&A"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
@@ -882,6 +886,8 @@ def test_build_bundles_from_provider_emits_risk_factor_text(monkeypatch) -> None
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("risk_factor_quant", "document")] == "Cybersecurity"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("risk_factor_quant", "document")].source_section in {"risk factors", "Risk Factors"}
 
 
 def test_build_bundles_from_provider_emits_use_of_proceeds_text(monkeypatch) -> None:
@@ -916,6 +922,8 @@ def test_build_bundles_from_provider_emits_use_of_proceeds_text(monkeypatch) -> 
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("use_of_proceeds_quant", "document")] == "working capital"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("use_of_proceeds_quant", "document")].source_section in {"use of proceeds", "Use of Proceeds"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
@@ -951,6 +959,8 @@ def test_build_bundles_from_provider_emits_proxy_proposal_text(monkeypatch) -> N
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("proxy_proposal_quant", "document")] == "election"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("proxy_proposal_quant", "document")].source_section in {"proposal", "Proposal 1"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
@@ -986,6 +996,8 @@ def test_build_bundles_from_provider_emits_comp_policy_text(monkeypatch) -> None
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("comp_policy_quant", "document")] == "pay for performance"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("comp_policy_quant", "document")].source_section in {"cd&a", "CD&A"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
@@ -1021,4 +1033,6 @@ def test_build_bundles_from_provider_emits_tender_going_private_text(monkeypatch
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("tender_going_private_quant", "document")] == "cash merger"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("tender_going_private_quant", "document")].source_section in {"summary term sheet", "Summary term sheet"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)

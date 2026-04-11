@@ -12,6 +12,8 @@ class TextLocatorHit(TypedDict):
     locator_kind: TextLocatorKind
     locator_path: str
     window_base: int
+    source_section: NotRequired[str]
+    source_item_no: NotRequired[str]
     item_body_offset: NotRequired[int]
     section_body_offset: NotRequired[int]
 
@@ -119,6 +121,8 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
                 "value": candidate,
                 "locator_kind": "item_window",
                 "locator_path": f"items[{key_text}]",
+                "source_section": key_text,
+                "source_item_no": key_text,
                 "window_base": 0,
                 "item_body_offset": len(key_text) + 1,
             }
@@ -131,6 +135,8 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
                 "value": candidate,
                 "locator_kind": "item_window",
                 "locator_path": f"items[{key_text}]",
+                "source_section": key_text,
+                "source_item_no": key_text,
                 "window_base": 0,
                 "item_body_offset": len(key_text) + 1,
             }
@@ -166,6 +172,7 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
                     "value": candidate,
                     "locator_kind": "section_window",
                     "locator_path": f"sections[{section_name_text}]",
+                    "source_section": section_name_text,
                     "window_base": 0,
                     "section_body_offset": len(section_header) + 1,
                 }
@@ -179,6 +186,7 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
                     "value": candidate,
                     "locator_kind": "section_window",
                     "locator_path": f"sections[{section_name_text}]",
+                    "source_section": section_name_text,
                     "window_base": 0,
                     "section_body_offset": len(section_header) + 1,
                 }
@@ -193,6 +201,7 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
                 "value": window,
                 "locator_kind": "section_window",
                 "locator_path": "sections",
+                "source_section": anchor,
                 "window_base": start,
             }
 
@@ -204,10 +213,12 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
                 if hit is None:
                     continue
                 window, start, _ = hit
+                section_header = section_text.splitlines()[0].strip() if section_text.splitlines() else str(index)
                 return {
                     "value": window,
                     "locator_kind": "section_window",
                     "locator_path": f"sections[{index}]",
+                    "source_section": section_header or str(index),
                     "window_base": start,
                 }
 

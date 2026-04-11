@@ -144,3 +144,24 @@ def test_cli_release_gate_reports_and_exits_nonzero_when_blocked(monkeypatch, tm
     payload = json.loads(result.stdout)
     assert payload["passed"] is False
     assert payload["open_review_tasks"] == 1
+
+
+def test_cli_release_gate_reports_success_when_fix_once_chain_complete(monkeypatch, tmp_path: Path) -> None:
+    factory = _session_factory()
+    with factory() as session:
+        _seed_closed_fix_once_task(session)
+
+    monkeypatch.setattr(cli_module, "Settings", lambda: object())
+    monkeypatch.setattr(cli_module, "get_session_factory", lambda settings: factory)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["release-gate", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is True
+    assert payload["open_review_tasks"] == 0
+    assert payload["golden_review_packets"] == 1
+    assert (tmp_path / "review_regressions").exists()

@@ -1,4 +1,22 @@
 cases:
+  - case_id: default-mdna-outlook-001
+    route: issuer
+    form_type: S-1
+    fixture_file: default-mdna-outlook-001.txt
+    expected:
+      mdna_outlook_quant:
+        status: ok
+        value_text: up
+        truth_tier: gold
+  - case_id: default-risk-factor-001
+    route: issuer
+    form_type: 10-K
+    fixture_file: default-risk-factor-001.txt
+    expected:
+      risk_factor_quant:
+        status: ok
+        value_text: cybersecurity
+        truth_tier: gold
   - case_id: default-current-event-001
     route: issuer
     form_type: 8-K
@@ -19,6 +37,42 @@ cases:
         status: ok
         value_text: audit
         truth_tier: gold
+  - case_id: default-use-of-proceeds-001
+    route: issuer
+    form_type: S-1
+    fixture_file: default-use-of-proceeds-001.txt
+    expected:
+      use_of_proceeds_quant:
+        status: ok
+        value_text: working capital
+        truth_tier: gold
+  - case_id: default-proxy-proposal-001
+    route: issuer
+    form_type: DEF 14A
+    fixture_file: default-proxy-proposal-001.txt
+    expected:
+      proxy_proposal_quant:
+        status: ok
+        value_text: election
+        truth_tier: gold
+  - case_id: default-comp-policy-001
+    route: issuer
+    form_type: DEF 14A
+    fixture_file: default-comp-policy-001.txt
+    expected:
+      comp_policy_quant:
+        status: ok
+        value_text: pay for performance
+        truth_tier: gold
+  - case_id: default-tender-gp-001
+    route: issuer
+    form_type: SC TO-I
+    fixture_file: default-tender-gp-001.txt
+    expected:
+      tender_going_private_quant:
+        status: ok
+        value_text: cash merger
+        truth_tier: gold
   - case_id: default-beneficial-ownership-001
     route: owner
     form_type: 13D
@@ -28,6 +82,24 @@ cases:
         status: ok
         value_text: passive
         truth_tier: gold
+  - case_id: default-insider-transaction-001
+    route: owner
+    form_type: 4
+    fixture_file: default-insider-transaction-001.txt
+    expected:
+      insider_transaction_quant:
+        status: ok
+        value_text: buy
+        truth_tier: gold
+  - case_id: default-insider-role-001
+    route: owner
+    form_type: 4
+    fixture_file: default-insider-role-001.txt
+    expected:
+      insider_role_ownership_structure_quant:
+        status: ok
+        value_text: director
+        truth_tier: gold
   - case_id: default-source-of-funds-001
     route: owner
     form_type: 13D
@@ -36,6 +108,15 @@ cases:
       source_of_funds_quant:
         status: ok
         value_text: cash
+        truth_tier: gold
+  - case_id: default-rule144-sale-plan-001
+    route: owner
+    form_type: 144
+    fixture_file: default-rule144-sale-plan-001.txt
+    expected:
+      rule144_sale_plan_quant:
+        status: ok
+        value_text: diversification
         truth_tier: gold
   - case_id: default-manager-structure-001
     route: holding

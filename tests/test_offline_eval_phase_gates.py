@@ -18,9 +18,9 @@ def test_default_tier2_assets_cover_current_vertical_slice(tmp_path: Path) -> No
     )
 
     assert result.summary["coverage"] == {
-        "total_cases": 6,
-        "total_candidates": 6,
-        "gold_applicable_rows": 6,
+        "total_cases": 15,
+        "total_candidates": 15,
+        "gold_applicable_rows": 15,
         "silver_applicable_rows": 0,
         "invariant_rows": 0,
     }
@@ -28,18 +28,42 @@ def test_default_tier2_assets_cover_current_vertical_slice(tmp_path: Path) -> No
     assert result.summary["metrics"]["gold_strict_accuracy"] == 1.0
 
     by_field = json.loads((tmp_path / "phase-gate-default" / "by_field.json").read_text(encoding="utf-8"))
+    assert by_field["mdna_outlook_quant"]["matched"] == 1
+    assert by_field["risk_factor_quant"]["matched"] == 1
     assert by_field["current_event_quant"]["matched"] == 1
     assert by_field["delay_reason_quant"]["matched"] == 1
+    assert by_field["use_of_proceeds_quant"]["matched"] == 1
+    assert by_field["proxy_proposal_quant"]["matched"] == 1
+    assert by_field["comp_policy_quant"]["matched"] == 1
+    assert by_field["tender_going_private_quant"]["matched"] == 1
     assert by_field["beneficial_ownership_intent_quant"]["matched"] == 1
+    assert by_field["insider_transaction_quant"]["matched"] == 1
+    assert by_field["insider_role_ownership_structure_quant"]["matched"] == 1
     assert by_field["source_of_funds_quant"]["matched"] == 1
+    assert by_field["rule144_sale_plan_quant"]["matched"] == 1
     assert by_field["manager_structure_quant"]["matched"] == 1
     assert by_field["amendment_scope_quant"]["matched"] == 1
 
 
 def test_default_tier2_assets_support_route_filtered_phase_gates(tmp_path: Path) -> None:
     expectations = {
-        "issuer": {"current_event_quant", "delay_reason_quant"},
-        "owner": {"beneficial_ownership_intent_quant", "source_of_funds_quant"},
+        "issuer": {
+            "mdna_outlook_quant",
+            "risk_factor_quant",
+            "current_event_quant",
+            "delay_reason_quant",
+            "use_of_proceeds_quant",
+            "proxy_proposal_quant",
+            "comp_policy_quant",
+            "tender_going_private_quant",
+        },
+        "owner": {
+            "beneficial_ownership_intent_quant",
+            "insider_transaction_quant",
+            "insider_role_ownership_structure_quant",
+            "source_of_funds_quant",
+            "rule144_sale_plan_quant",
+        },
         "holding": {"manager_structure_quant", "amendment_scope_quant"},
     }
 
@@ -55,8 +79,8 @@ def test_default_tier2_assets_support_route_filtered_phase_gates(tmp_path: Path)
         )
 
         assert result.summary["selectors"]["route"] == route
-        assert result.summary["coverage"]["total_cases"] == 2
-        assert result.summary["coverage"]["total_candidates"] == 2
+        assert result.summary["coverage"]["total_cases"] == len(field_names)
+        assert result.summary["coverage"]["total_candidates"] == len(field_names)
         assert result.summary["metrics"]["pass_rate"] == 1.0
 
         by_field = json.loads((tmp_path / f"phase-gate-{route}" / "by_field.json").read_text(encoding="utf-8"))
