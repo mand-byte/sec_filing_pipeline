@@ -220,6 +220,77 @@ def test_build_bundles_from_provider_falls_back_to_infotable_totals_when_summary
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_falls_back_to_infotable_totals_when_summary_totals_missing(monkeypatch) -> None:
+    report = Fake13F(
+        form="13F-HR",
+        rows=[
+            {
+                "Issuer": "MICROSOFT CORP",
+                "Class": "COM",
+                "Cusip": "594918104",
+                "Value": 1250,
+                "SharesPrnAmount": 10000,
+                "SoleVoting": 9000,
+                "SharedVoting": 500,
+                "NonVoting": 500,
+            },
+            {
+                "Issuer": "APPLE INC",
+                "Class": "COM",
+                "Cusip": "037833100",
+                "Value": 750,
+                "SharesPrnAmount": 4000,
+                "SoleVoting": 3000,
+                "SharedVoting": 500,
+                "NonVoting": 500,
+            },
+        ],
+        other_included_managers_count=2,
+        sections=["Cover page\nThis is a holdings report filed by the manager."],
+    )
+    report.total_holdings = None
+    report.total_value = None
+
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000200E",
+        cik="0001067983",
+        form_type="13F-HR",
+        accepted_at=datetime(2024, 5, 15, tzinfo=timezone.utc),
+        filing=Fake13FFiling(report),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="holding",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-holding-fallback-totals",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert facts[("info_table_entry_total", "document")] == 2.0
+    assert facts[("info_table_value_total_usd", "document")] == 2000000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("manager_structure_quant", "document")] == "holdings"
+
+    evidence = {(item.field_name, item.subject_key): item for item in bundle.evidences}
+    assert evidence[("info_table_entry_total", "document")].source_span == "infotable.row_count"
+    assert evidence[("info_table_entry_total", "document")].raw_value == "2"
+    assert evidence[("info_table_value_total_usd", "document")].source_span == "infotable.Value"
+    assert evidence[("info_table_value_total_usd", "document")].raw_value == "2000.0"
+    assert repo.logs == []
+
+
 def test_build_bundles_from_provider_keeps_13f_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000200D",
