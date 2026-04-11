@@ -507,6 +507,108 @@ def test_build_bundles_from_provider_emits_6k_financial_numeric_xbrl_evidence(mo
     assert facts_by_field["cash_and_equivalents"].value_numeric == 615.0
 
 
+def test_build_bundles_from_provider_emits_6k_financial_mdna_text_alongside_xbrl_numeric(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    filing = FakeXbrlTextFiling(
+        form="6-K-financial",
+        records=[
+            {
+                "fact_key": "cash-6k-financial",
+                "concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 615.0,
+            }
+        ],
+        sections=["Operating and Financial Review\nManagement expects revenue up in the next quarter."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000018A",
+        cik="0000789019",
+        form_type="6-K-financial",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-6kfin-text",
+    )
+
+    assert len(bundles) == 1
+    facts_by_field = {(fact.field_name, fact.subject_key): fact for fact in bundles[0].facts}
+    assert facts_by_field[("cash_and_equivalents", "document")].value_numeric == 615.0
+    assert facts_by_field[("mdna_outlook_quant", "document")].value_text == "up"
+
+
+def test_build_bundles_from_provider_keeps_6k_financial_numeric_when_mdna_text_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    filing = FakeXbrlTextFiling(
+        form="6-K-financial",
+        records=[
+            {
+                "fact_key": "cash-6k-financial",
+                "concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 615.0,
+            }
+        ],
+        sections=["Operating and Financial Review\nManagement expects revenue up in the next quarter."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000018B",
+        cik="0000789019",
+        form_type="6-K-financial",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "mdna_outlook_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-6kfin-mdna-failure",
+    )
+
+    assert len(bundles) == 1
+    facts_by_field = {(fact.field_name, fact.subject_key): fact for fact in bundles[0].facts}
+    assert facts_by_field[("cash_and_equivalents", "document")].value_numeric == 615.0
+    assert ("mdna_outlook_quant", "document") not in facts_by_field
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_supports_10q_amendments(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 2, tzinfo=timezone.utc)
     filing = FakeFiling(
