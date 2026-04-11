@@ -66,6 +66,7 @@ def _seed_review_task(session: Session) -> None:
                 source_block_offsets_json='{"source_start":12,"source_end":17}',
                 adequacy_signals_json='{"window_found":true,"span_policy_applied":false}',
                 retry_history_json="[]",
+                selection_trace_json='{"selected_value":"100"}',
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -84,6 +85,7 @@ def test_build_review_server_html_contains_interactive_surface() -> None:
     assert "Locator JSON" in html
     assert "Heading Path" in html
     assert "Adequacy Signals" in html
+    assert "Selection Trace" in html
 
 
 def test_review_server_http_flow_lists_and_resolves_tasks(tmp_path: Path) -> None:
@@ -117,6 +119,7 @@ def test_review_server_http_flow_lists_and_resolves_tasks(tmp_path: Path) -> Non
         assert detail["primary_evidence"]["source_locator_json"] is not None
         assert detail["primary_evidence"]["source_heading_path_json"] == '["Ownership Table"]'
         assert detail["primary_evidence"]["adequacy_signals_json"] == '{"window_found":true,"span_policy_applied":false}'
+        assert detail["primary_evidence"]["selection_trace_json"] == '{"selected_value":"100"}'
 
         bad_request = Request(
             f"{base_url}/api/tasks/{task_id}/resolve",

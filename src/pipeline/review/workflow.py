@@ -215,6 +215,7 @@ class ReviewWorkflowService:
                 "source_block_offsets_json": evidence.source_block_offsets_json,
                 "adequacy_signals_json": evidence.adequacy_signals_json,
                 "retry_history_json": evidence.retry_history_json,
+                "selection_trace_json": evidence.selection_trace_json,
                 "raw_value": evidence.raw_value,
                 "normalized_value": evidence.normalized_value,
             }

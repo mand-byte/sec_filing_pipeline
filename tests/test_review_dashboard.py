@@ -63,6 +63,7 @@ def _seed_review_task(session: Session) -> None:
                 source_block_offsets_json='{"source_start":12,"source_end":17}',
                 adequacy_signals_json='{"window_found":true,"span_policy_applied":false}',
                 retry_history_json="[]",
+                selection_trace_json='{"selected_value":"100"}',
                 raw_value="100",
                 normalized_value="100.0",
             )
@@ -93,7 +94,9 @@ def test_write_review_dashboard_creates_html_and_packets(tmp_path: Path) -> None
     assert "shares_acquired_or_disposed" in html
     assert "Heading Path" in html
     assert "Adequacy Signals" in html
+    assert "Selection Trace" in html
     assert packet_payload[0]["primary_evidence"]["source_heading_path_json"] == '["Ownership Table"]'
+    assert packet_payload[0]["primary_evidence"]["selection_trace_json"] == '{"selected_value":"100"}'
     assert packet_payload[0]["task"]["subject_key"] == "txn:1"
 
 

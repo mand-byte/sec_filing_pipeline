@@ -964,7 +964,6 @@ def test_build_bundles_from_provider_emits_proxy_proposal_text(monkeypatch) -> N
     assert text_facts[("proxy_proposal_quant", "document")] == "election"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("proxy_proposal_quant", "document")].source_section in {"proposal", "Proposal 1"}
-    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
 def test_build_bundles_from_provider_emits_comp_policy_text(monkeypatch) -> None:
@@ -1001,7 +1000,6 @@ def test_build_bundles_from_provider_emits_comp_policy_text(monkeypatch) -> None
     assert text_facts[("comp_policy_quant", "document")] == "pay for performance"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("comp_policy_quant", "document")].source_section in {"cd&a", "CD&A"}
-    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
 def test_build_bundles_from_provider_emits_tender_going_private_text(monkeypatch) -> None:
@@ -1120,6 +1118,48 @@ def test_build_bundles_from_provider_emits_sc_toi_deal_numeric_fields(monkeypatc
     assert numeric_facts[("tender_shares_sought", "document")] == 500000.0
     assert numeric_facts[("financing_commitment_amount", "document")] == 8000000.0
     assert numeric_facts[("termination_fee", "document")] == 600000.0
+
+
+def test_build_bundles_from_provider_emits_def14a_exec_and_holder_rows(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 17, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000023",
+        cik="0000789019",
+        form_type="DEF 14A",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="DEF 14A",
+            sections=[
+                "Summary Compensation Table\nJane Doe Total 1,250,000",
+                "Beneficial Ownership Table\nAlpha Fund 500,000 shares 12.5%",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-def14a-rows",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("exec_total_comp", "exec:1")] == 1250000.0
+    assert numeric_facts[("holder_beneficial_ownership_shares", "holder:1")] == 500000.0
+    assert numeric_facts[("holder_beneficial_ownership_pct", "holder:1")] == 12.5
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("exec_total_comp", "exec:1")].locator_kind == "parse_text"
+    assert evidence[("holder_beneficial_ownership_pct", "holder:1")].locator_kind == "parse_text"
 
 
 def test_build_bundles_from_provider_emits_sc_13e3_deal_numeric_fields(monkeypatch) -> None:

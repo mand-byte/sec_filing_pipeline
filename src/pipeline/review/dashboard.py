@@ -91,6 +91,10 @@ def _render_task_card(packet: dict[str, Any]) -> str:
         <pre>{escape(_json_pretty(evidence.get('retry_history_json')))}</pre>
       </div>
       <div class="code-block">
+        <div class="code-title">Selection Trace</div>
+        <pre>{escape(_json_pretty(evidence.get('selection_trace_json')))}</pre>
+      </div>
+      <div class="code-block">
         <div class="code-title">Raw Value</div>
         <pre>{escape(_json_pretty(evidence.get('raw_value')))}</pre>
       </div>

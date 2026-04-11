@@ -338,6 +338,10 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
             <pre id="evidence-retry-history"></pre>
           </div>
           <div class="code-block">
+            <div class="code-title">Selection Trace</div>
+            <pre id="evidence-selection-trace"></pre>
+          </div>
+          <div class="code-block">
             <div class="code-title">Raw Value</div>
             <pre id="evidence-raw"></pre>
           </div>
@@ -408,6 +412,7 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
       evidenceBlockOffsets: document.getElementById("evidence-block-offsets"),
       evidenceAdequacySignals: document.getElementById("evidence-adequacy-signals"),
       evidenceRetryHistory: document.getElementById("evidence-retry-history"),
+      evidenceSelectionTrace: document.getElementById("evidence-selection-trace"),
       evidenceRaw: document.getElementById("evidence-raw"),
       evidenceNormalized: document.getElementById("evidence-normalized"),
       factPayload: document.getElementById("fact-payload"),
@@ -523,6 +528,7 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
         elements.evidenceBlockOffsets.textContent = "";
         elements.evidenceAdequacySignals.textContent = "";
         elements.evidenceRetryHistory.textContent = "";
+        elements.evidenceSelectionTrace.textContent = "";
         elements.evidenceRaw.textContent = "";
         elements.evidenceNormalized.textContent = "";
         elements.factPayload.textContent = "";
@@ -551,6 +557,7 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
       elements.evidenceBlockOffsets.textContent = pretty(evidence.source_block_offsets_json);
       elements.evidenceAdequacySignals.textContent = pretty(evidence.adequacy_signals_json);
       elements.evidenceRetryHistory.textContent = pretty(evidence.retry_history_json);
+      elements.evidenceSelectionTrace.textContent = pretty(evidence.selection_trace_json);
       elements.evidenceRaw.textContent = pretty(evidence.raw_value);
       elements.evidenceNormalized.textContent = pretty(evidence.normalized_value);
       elements.factPayload.textContent = pretty(detail.fact || {{}});

@@ -264,6 +264,96 @@ def _build_issuer_deal_text_facts(*, filing: FilingRecord, source_texts: list[st
     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
+def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, source_texts: list[str]) -> FilingBundle | None:
+    facts: list[FactInput] = []
+    evidences: list[EvidenceInput] = []
+    executive_index = 0
+    holder_index = 0
+
+    exec_pattern = re.compile(r"(?i)^(?P<label>.+?)\s+total\s+\$?(?P<amount>[\d,]+(?:\.\d+)?)$")
+    holder_pattern = re.compile(r"(?i)^(?P<label>.+?)\s+(?P<shares>[\d,]+)\s+shares?\s+(?P<pct>[\d.]+)%$")
+
+    for source in source_texts:
+        for raw_line in source.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            exec_match = exec_pattern.match(line)
+            if exec_match is not None:
+                amount = coerce_numeric_value(exec_match.group("amount"))
+                if amount is not None:
+                    executive_index += 1
+                    subject_key = f"exec:{executive_index}"
+                    facts.append(
+                        FactInput(
+                            field_name="exec_total_comp",
+                            subject_key=subject_key,
+                            value_numeric=float(amount),
+                            confidence=0.99,
+                        )
+                    )
+                    evidences.append(
+                        EvidenceInput(
+                            field_name="exec_total_comp",
+                            subject_key=subject_key,
+                            locator_kind="parse_text",
+                            source_span=line,
+                            raw_value=exec_match.group("amount"),
+                            normalized_value=str(float(amount)),
+                        )
+                    )
+                continue
+
+            holder_match = holder_pattern.match(line)
+            if holder_match is not None:
+                shares = coerce_numeric_value(holder_match.group("shares"))
+                pct = coerce_numeric_value(holder_match.group("pct"))
+                if shares is not None and pct is not None:
+                    holder_index += 1
+                    subject_key = f"holder:{holder_index}"
+                    facts.append(
+                        FactInput(
+                            field_name="holder_beneficial_ownership_shares",
+                            subject_key=subject_key,
+                            value_numeric=float(shares),
+                            confidence=0.99,
+                        )
+                    )
+                    facts.append(
+                        FactInput(
+                            field_name="holder_beneficial_ownership_pct",
+                            subject_key=subject_key,
+                            value_numeric=float(pct),
+                            confidence=0.99,
+                        )
+                    )
+                    evidences.append(
+                        EvidenceInput(
+                            field_name="holder_beneficial_ownership_shares",
+                            subject_key=subject_key,
+                            locator_kind="parse_text",
+                            source_span=line,
+                            raw_value=holder_match.group("shares"),
+                            normalized_value=str(float(shares)),
+                        )
+                    )
+                    evidences.append(
+                        EvidenceInput(
+                            field_name="holder_beneficial_ownership_pct",
+                            subject_key=subject_key,
+                            locator_kind="parse_text",
+                            source_span=line,
+                            raw_value=holder_match.group("pct"),
+                            normalized_value=str(float(pct)),
+                        )
+                    )
+
+    if not facts:
+        return None
+    return FilingBundle(filing=filing, facts=facts, evidences=evidences)
+
+
 def build_bundles_from_provider(
     *,
     security: Any,
@@ -800,6 +890,22 @@ def build_bundles_from_provider(
             if offering_bundle is not None:
                 facts.extend(offering_bundle.facts)
                 evidences.extend(offering_bundle.evidences)
+            row_numeric_bundle = _build_issuer_row_numeric_text_facts(
+                filing=filing,
+                source_texts=source_texts,
+            )
+            if row_numeric_bundle is not None:
+                facts.extend(row_numeric_bundle.facts)
+                evidences.extend(row_numeric_bundle.evidences)
+        elif route == "issuer" and form_family == "DEF 14A":
+            source_texts = _extract_text_sources(envelope.filing)
+            row_numeric_bundle = _build_issuer_row_numeric_text_facts(
+                filing=filing,
+                source_texts=source_texts,
+            )
+            if row_numeric_bundle is not None:
+                facts.extend(row_numeric_bundle.facts)
+                evidences.extend(row_numeric_bundle.evidences)
         elif route == "issuer" and form_family in {"SC TO-I", "SC 13E3"}:
             source_texts = _extract_text_sources(envelope.filing)
             deal_bundle = _build_issuer_deal_text_facts(
@@ -830,6 +936,18 @@ def build_bundles_from_provider(
                         normalized_value=str(delay_days),
                     )
                 )
+
+        if route == "issuer" and form_family in {"DEF 14A", "S-1", "424B4"}:
+            filing_numeric_specs = tuple(
+                spec
+                for spec in filing_numeric_specs
+                if spec.field_name
+                not in {
+                    "exec_total_comp",
+                    "holder_beneficial_ownership_shares",
+                    "holder_beneficial_ownership_pct",
+                }
+            )
 
         for spec in filing_numeric_specs:
             if form_family not in spec.form_families:
