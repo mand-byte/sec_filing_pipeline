@@ -1638,6 +1638,59 @@ def test_build_bundles_from_provider_emits_use_of_proceeds_text(monkeypatch) -> 
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
 
 
+def test_build_bundles_from_provider_keeps_s1_offering_numeric_when_use_of_proceeds_text_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 10, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000010A",
+        cik="0000789019",
+        form_type="S-1",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="S-1",
+            sections=[
+                "Use of Proceeds\nGross proceeds of $5,000,000 are expected. Net proceeds of $4,500,000 after underwriting discounts and commissions of $500,000. The offering price per share was $10.00 with an offering of 500,000 shares of common stock. Financing commitment of $2,000,000 has been arranged. We intend to use the proceeds for working capital."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "use_of_proceeds_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-10-text-failure",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("gross_proceeds", "document")] == 5000000.0
+    assert numeric_facts[("net_proceeds", "document")] == 4500000.0
+    assert numeric_facts[("underwriter_discount_total", "document")] == 500000.0
+    assert numeric_facts[("offering_price_per_share", "security:1")] == 10.0
+    assert numeric_facts[("securities_offered_qty", "security:1")] == 500000.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 2000000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert ("use_of_proceeds_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_proxy_proposal_text(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 11, tzinfo=timezone.utc)
     envelope = FilingEnvelope(
