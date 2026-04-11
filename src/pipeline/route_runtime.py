@@ -48,6 +48,24 @@ def _format_exception_detail(exc: BaseException) -> str:
     return "".join(traceback.TracebackException.from_exception(exc).format()).strip()
 
 
+def _route_summary_message(
+    *,
+    eligible_count: int,
+    persisted_count: int,
+    failed_count: int,
+    skipped_before_watermark: int,
+    skipped_ineligible: int,
+) -> str:
+    return (
+        "route processed: "
+        f"eligible={eligible_count} "
+        f"persisted={persisted_count} "
+        f"failed={failed_count} "
+        f"skipped_before_watermark={skipped_before_watermark} "
+        f"skipped_ineligible={skipped_ineligible}"
+    )
+
+
 def _load_route_filing_bundles(
     *,
     security: Any,
@@ -165,10 +183,27 @@ class RouteProcessor:
     def run(self, *, security: Any, route: RouteName, run_id: str) -> None:
         cik = getattr(security, "cik", None)
         if cik is None:
+            _safe_write_log(
+                self.repo,
+                run_id=run_id,
+                route=route,
+                stage="route",
+                level="INFO",
+                message="route skipped: missing cik",
+            )
             return
 
         active_attr = getattr(security, "active", None)
         if not isinstance(active_attr, bool):
+            _safe_write_log(
+                self.repo,
+                run_id=run_id,
+                route=route,
+                cik=cik,
+                stage="route",
+                level="INFO",
+                message="route skipped: invalid active flag",
+            )
             return
         active = active_attr
         composite_figi = getattr(security, "composite_figi", None)
@@ -209,6 +244,15 @@ class RouteProcessor:
             snapshot=getattr(completion, "delisted_utc_snapshot", None),
             current_delisted_utc=delisted_utc,
         ):
+            _safe_write_log(
+                self.repo,
+                run_id=run_id,
+                route=route,
+                cik=cik,
+                stage="route",
+                level="INFO",
+                message="route skipped: delisted route already completed",
+            )
             return
 
         watermark = self.repo.get_route_watermark(cik, route)
@@ -230,17 +274,22 @@ class RouteProcessor:
 
         eligible_bundles: list[FilingBundle] = []
         normalized_start = _normalize_to_utc(start_accepted_at)
+        skipped_before_watermark = 0
+        skipped_ineligible = 0
         for bundle in bundles:
             accepted_at = _normalize_to_utc(bundle.filing.accepted_at)
             if accepted_at <= normalized_start:
+                skipped_before_watermark += 1
                 continue
             if not is_filing_eligible(active=active, delisted_utc=delisted_utc, accepted_at=accepted_at):
+                skipped_ineligible += 1
                 continue
             eligible_bundles.append(bundle)
 
         eligible_bundles.sort(key=_bundle_sort_key)
 
         last_seen_accepted_at = watermark
+        failed_bundles = 0
         if eligible_bundles:
             review_stats = SqlAlchemyReviewStats(self.repo.session)
             processed_bundles: list[FilingBundle] = []
@@ -281,6 +330,7 @@ class RouteProcessor:
                         message="filing persisted",
                     )
                 except Exception as exc:
+                    failed_bundles += 1
                     try:
                         self.repo.session.rollback()
                     except Exception:
@@ -331,6 +381,22 @@ class RouteProcessor:
                         error_type=exc.__class__.__name__,
                         error_detail=_format_exception_detail(exc),
                     )
+
+        _safe_write_log(
+            self.repo,
+            run_id=run_id,
+            route=route,
+            cik=cik,
+            stage="route",
+            level="INFO",
+            message=_route_summary_message(
+                eligible_count=len(eligible_bundles),
+                persisted_count=(len(processed_bundles) if eligible_bundles else 0),
+                failed_count=failed_bundles,
+                skipped_before_watermark=skipped_before_watermark,
+                skipped_ineligible=skipped_ineligible,
+            ),
+        )
 
         if (not active) and composite_figi is not None:
             try:

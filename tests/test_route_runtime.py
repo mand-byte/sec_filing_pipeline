@@ -120,7 +120,11 @@ def test_route_processor_continues_after_bundle_failure_and_advances_watermark_b
     assert persistence_service.persisted_accessions == ["0000000000-24-000001"]
     assert repo.session.rollback_calls == 1
     assert repo.upserted_watermarks == [("0000789019", "owner", first_accepted_at)]
-    assert [log["level"] for log in repo.logs] == ["INFO", "ERROR"]
+    assert [log["message"] for log in repo.logs] == [
+        "filing persisted",
+        "filing persistence failed",
+        "route processed: eligible=2 persisted=1 failed=1 skipped_before_watermark=0 skipped_ineligible=0",
+    ]
     assert repo.logs[1]["error_type"] == "RuntimeError"
     assert repo.filing_attempts[:3] == [
         {
@@ -221,3 +225,65 @@ def test_route_processor_invalidates_stale_delisted_completion_when_security_rea
     )
 
     assert repo.invalidations == [("FIGI1", "0000789019", "holding")]
+    assert repo.logs == [
+        {
+            "run_id": "run-003",
+            "route": "holding",
+            "stage": "route",
+            "level": "INFO",
+            "message": "route processed: eligible=0 persisted=0 failed=0 skipped_before_watermark=0 skipped_ineligible=0",
+            "cik": "0000789019",
+            "accession_no": None,
+            "error_type": None,
+            "error_detail": None,
+        }
+    ]
+
+
+def test_route_processor_logs_skip_reason_for_completed_delisted_route() -> None:
+    completion = SimpleNamespace(
+        is_completed=True,
+        delisted_utc_snapshot=datetime(2024, 5, 4, tzinfo=timezone.utc),
+    )
+    repo = FakeRepo(completion=completion)
+    persistence_service = FakePersistenceService()
+    processor = RouteProcessor(
+        repo=repo,
+        persistence_service=persistence_service,
+        start_date=date(2024, 1, 1),
+        provider_bundle_builder=lambda **kwargs: [
+            FilingBundle(
+                filing=_filing(
+                    "0000000000-24-000004",
+                    datetime(2024, 5, 5, tzinfo=timezone.utc),
+                )
+            )
+        ],
+    )
+
+    processor.run(
+        security=SimpleNamespace(
+            cik="0000789019",
+            active=False,
+            composite_figi="FIGI1",
+            delisted_utc=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        ),
+        route="issuer",
+        run_id="run-004",
+    )
+
+    assert persistence_service.persisted_accessions == []
+    assert repo.upserted_watermarks == []
+    assert repo.logs == [
+        {
+            "run_id": "run-004",
+            "route": "issuer",
+            "stage": "route",
+            "level": "INFO",
+            "message": "route skipped: delisted route already completed",
+            "cik": "0000789019",
+            "accession_no": None,
+            "error_type": None,
+            "error_detail": None,
+        }
+    ]
