@@ -492,6 +492,75 @@ def test_build_bundles_from_provider_rejects_schedule_bundle_with_invalid_subjec
     assert "beneficially_owned_shares:document" in str(repo.logs[-1]["error_detail"])
 
 
+def test_build_bundles_from_provider_preserves_13d_text_when_schedule_bundle_violates_subject_contract(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000103D",
+        cik="0001326380",
+        form_type="SCHEDULE 13D/A",
+        accepted_at=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SCHEDULE 13D/A",
+            xml_text="<submission />",
+            sections=[
+                "Purpose of Transaction\nThis filer is activist.",
+                "Item 3 Source and Amount of Funds\nCash on hand was used for the purchases.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def invalid_schedule_bundle(*, envelope, filing, form_family):
+        del envelope, form_family
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="beneficially_owned_shares",
+                        subject_key="document",
+                        value_numeric=400000.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="beneficially_owned_shares",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="xml.reportingPerson[0].aggregateAmountOwned",
+                        raw_value="400000",
+                        normalized_value="400000.0",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_schedule_13dg_bundle", invalid_schedule_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-invalid-13d-contract",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
+    assert text_facts[("source_of_funds_quant", "document")] == "Cash"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("beneficially_owned_shares", "document") not in numeric_fields
+    assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+
+
 def test_build_bundles_from_provider_preserves_schedule_text_when_xml_bundle_unavailable(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000102B",

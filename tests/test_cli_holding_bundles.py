@@ -217,6 +217,73 @@ def test_build_bundles_from_provider_rejects_invalid_holding_bundle_subject_cont
     assert "position_value_usd:document" in str(repo.logs[-1]["error_detail"])
 
 
+def test_build_bundles_from_provider_preserves_holding_amendment_text_when_bundle_violates_subject_contract(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000201C",
+        cik="0001067983",
+        form_type="13F-HR/A",
+        accepted_at=datetime(2024, 5, 16, tzinfo=timezone.utc),
+        filing=Fake13FFiling(
+            Fake13F(
+                form="13F-HR/A",
+                rows=[],
+                sections=["Header\nThis filing is a correction of the prior filing."],
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def invalid_holding_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="position_value_usd",
+                        subject_key="document",
+                        value_numeric=1250000.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="position_value_usd",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="infotable[0].Value",
+                        raw_value="1250",
+                        normalized_value="1250000.0",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_holding_13f_bundle", invalid_holding_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="holding",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-holding-amendment-invalid-contract",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("amendment_scope_quant", "document")] == "correction"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("position_value_usd", "document") not in numeric_fields
+    assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+
+
 def test_build_bundles_from_provider_preserves_holding_text_when_bundle_has_no_rows(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000200C",
