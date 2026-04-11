@@ -535,6 +535,55 @@ def test_build_bundles_from_provider_preserves_schedule_text_when_xml_bundle_una
     assert repo.logs[-1]["error_type"] == "OWNER_XML_UNAVAILABLE"
 
 
+def test_build_bundles_from_provider_preserves_13g_text_when_schedule_bundle_has_no_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000102C",
+        cik="0001067983",
+        form_type="SC 13G",
+        accepted_at=datetime(2024, 5, 3, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SC 13G",
+            xml_text="<submission />",
+            sections=["Purpose of Transaction\nThis filing is passive."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def empty_schedule_bundle(*, envelope, filing, form_family):
+        del envelope, form_family
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[],
+                evidences=[],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_schedule_13dg_bundle", empty_schedule_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-empty-13g",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("beneficial_ownership_intent_quant", "document")] == "passive"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "NO_OWNER_ROWS_EXTRACTED"
+
+
 def test_build_bundles_from_provider_preserves_13d_text_when_xml_bundle_unavailable(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000103B",
