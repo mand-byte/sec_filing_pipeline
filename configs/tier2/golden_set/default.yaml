@@ -10,4 +10,22 @@ cases:
         status: ok
         value_text: event
         truth_tier: gold
+  - case_id: default-beneficial-ownership-001
+    route: owner
+    form_type: 13D
+    fixture_file: default-beneficial-ownership-001.txt
+    expected:
+      beneficial_ownership_intent_quant:
+        status: ok
+        value_text: passive
+        truth_tier: gold
+  - case_id: default-amendment-scope-001
+    route: holding
+    form_type: 13F-HR/A
+    fixture_file: default-amendment-scope-001.txt
+    expected:
+      amendment_scope_quant:
+        status: ok
+        value_text: restatement
+        truth_tier: gold
 invariants: []
