@@ -227,6 +227,49 @@ def test_build_bundles_from_provider_rejects_owner_bundle_with_invalid_subject_c
     assert "shares_acquired_or_disposed:document" in str(repo.logs[-1]["error_detail"])
 
 
+def test_build_bundles_from_provider_preserves_form4_text_when_obj_bundle_unavailable(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000100B",
+        cik="0000789019",
+        form_type="4",
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        filing=FakeForm4Filing(
+            [],
+            sections=["Remarks\nThe reporting person is a director and this was a buy transaction."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def fail_owner_bundle(*, envelope, filing):
+        del envelope, filing
+        return BundleBuildOutcome(bundle=None, error_detail="mock form4 obj failure")
+
+    monkeypatch.setattr(provider_module, "build_owner_ownership_bundle", fail_owner_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-invalid-unavailable",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("insider_transaction_quant", "document")] == "buy"
+    assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "OWNERSHIP_OBJ_UNAVAILABLE"
+
+
 def test_build_bundles_from_provider_emits_owner_holding_rows(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000101",
