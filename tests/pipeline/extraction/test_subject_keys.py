@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.pipeline.extraction.subject_keys import (
     load_subject_key_rules,
     subject_key_has_type,
+    subject_key_matches_granularity,
     subject_type_for_key,
 )
 
@@ -32,3 +33,11 @@ def test_subject_key_has_type_matches_same_config() -> None:
     assert subject_key_has_type(route="issuer", subject_key="proposal:1", subject_type="proposal")
     assert subject_key_has_type(route="owner", subject_key="sale_notice:1", subject_type="form144_notice")
     assert not subject_key_has_type(route="holding", subject_key="document", subject_type="holding_position")
+
+
+def test_subject_key_matches_granularity_uses_configured_prefixes() -> None:
+    assert subject_key_matches_granularity(route="issuer", granularity="security_line", subject_key="security:1")
+    assert not subject_key_matches_granularity(route="issuer", granularity="security_line", subject_key="document")
+    assert subject_key_matches_granularity(route="owner", granularity="filer_line", subject_key="filer:1")
+    assert not subject_key_matches_granularity(route="owner", granularity="filer_line", subject_key="document")
+    assert subject_key_matches_granularity(route="holding", granularity="document", subject_key="document")

@@ -115,3 +115,20 @@ def subject_type_for_key(*, route: str, subject_key: str) -> str:
 
 def subject_key_has_type(*, route: str, subject_key: str, subject_type: str) -> bool:
     return subject_type_for_key(route=route, subject_key=subject_key) == subject_type.strip()
+
+
+def subject_key_matches_granularity(*, route: str, granularity: str, subject_key: str) -> bool:
+    normalized_route = route.strip()
+    normalized_granularity = granularity.strip()
+    normalized_subject_key = subject_key.strip()
+    if not normalized_subject_key:
+        return False
+
+    for rule in load_subject_key_rules():
+        if rule.route != normalized_route or rule.granularity != normalized_granularity:
+            continue
+        return rule.matches(normalized_subject_key)
+
+    if normalized_granularity == "document":
+        return normalized_subject_key == "document"
+    return False

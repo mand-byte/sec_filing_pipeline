@@ -16,7 +16,7 @@ from src.pipeline.extraction.bundles import (
 )
 from src.pipeline.extraction.engine import NumericExtractionEngine
 from src.pipeline.extraction.registry import all_numeric_field_specs
-from src.pipeline.extraction.subject_keys import subject_key_has_type
+from src.pipeline.extraction.subject_keys import subject_key_has_type, subject_key_matches_granularity
 from src.pipeline.extraction.text_engine import TextExtractionEngine
 from src.pipeline.extraction.text_registry import all_text_field_specs
 from src.pipeline.route_runtime import FilingBundle, _normalize_to_utc, _safe_write_log
@@ -47,6 +47,15 @@ def _specialized_numeric_bundle_contract_error(
             spec = numeric_specs_by_field.get(field_name)
             if spec is None:
                 violations.add(f"{record_type}:{field_name}:unregistered")
+                continue
+            if not subject_key_matches_granularity(
+                route=route,
+                granularity=spec.granularity,
+                subject_key=subject_key,
+            ):
+                violations.add(
+                    f"{record_type}:{field_name}:{subject_key or '<blank>'}:expected_granularity={spec.granularity}"
+                )
                 continue
             if not subject_key_has_type(
                 route=route,
