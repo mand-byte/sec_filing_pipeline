@@ -30,6 +30,74 @@ _ISSUER_VOTE_FIELDS = {
     "proposal_votes_abstain",
     "proposal_broker_non_votes",
 }
+_SPECIALIZED_NUMERIC_CONTRACT_ERROR = "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+
+
+def _specialized_numeric_bundle_contract_error(
+    *,
+    route: RouteName,
+    bundle: FilingBundle,
+    numeric_specs_by_field: dict[str, Any],
+) -> str | None:
+    violations: set[str] = set()
+    for record_type, entries in (("fact", bundle.facts), ("evidence", bundle.evidences)):
+        for entry in entries:
+            field_name = getattr(entry, "field_name", "").strip()
+            subject_key = getattr(entry, "subject_key", "").strip()
+            spec = numeric_specs_by_field.get(field_name)
+            if spec is None:
+                violations.add(f"{record_type}:{field_name}:unregistered")
+                continue
+            if not subject_key_has_type(
+                route=route,
+                subject_key=subject_key,
+                subject_type=spec.subject_type,
+            ):
+                violations.add(
+                    f"{record_type}:{field_name}:{subject_key or '<blank>'}:expected={spec.subject_type}"
+                )
+
+    if not violations:
+        return None
+    return "; ".join(sorted(violations))
+
+
+def _extend_specialized_numeric_bundle_if_valid(
+    *,
+    route: RouteName,
+    bundle: FilingBundle,
+    facts: list[FactInput],
+    evidences: list[EvidenceInput],
+    numeric_specs_by_field: dict[str, Any],
+    repo: PipelineRepository,
+    run_id: str,
+    cik: str | None,
+    accession_no: str | None,
+    violation_message: str,
+) -> bool:
+    contract_error_detail = _specialized_numeric_bundle_contract_error(
+        route=route,
+        bundle=bundle,
+        numeric_specs_by_field=numeric_specs_by_field,
+    )
+    if contract_error_detail is not None:
+        _safe_write_log(
+            repo,
+            run_id=run_id,
+            route=route,
+            stage="extract",
+            level="ERROR",
+            message=violation_message,
+            cik=cik,
+            accession_no=accession_no,
+            error_type=_SPECIALIZED_NUMERIC_CONTRACT_ERROR,
+            error_detail=contract_error_detail,
+        )
+        return False
+
+    facts.extend(bundle.facts)
+    evidences.extend(bundle.evidences)
+    return True
 
 
 def _supports_text_extraction_surface(filing: object) -> bool:
@@ -458,6 +526,10 @@ def build_bundles_from_provider(
             key=lambda spec: spec.field_name,
         )
     )
+    route_numeric_specs_by_field = {
+        spec.field_name: spec
+        for spec in route_numeric_specs
+    }
     route_text_specs = tuple(
         sorted(
             (spec for spec in all_text_field_specs() if spec.route == route),
@@ -565,10 +637,25 @@ def build_bundles_from_provider(
                     error_type="NO_OWNER_ROWS_EXTRACTED",
                 )
                 continue
+            owner_facts: list[FactInput] = []
+            owner_evidences: list[EvidenceInput] = []
+            if not _extend_specialized_numeric_bundle_if_valid(
+                route=route,
+                bundle=owner_bundle,
+                facts=owner_facts,
+                evidences=owner_evidences,
+                numeric_specs_by_field=route_numeric_specs_by_field,
+                repo=repo,
+                run_id=run_id,
+                cik=envelope.cik,
+                accession_no=envelope.accession_no,
+                violation_message="owner ownership bundle violated numeric subject contract",
+            ):
+                continue
             merged_bundle = FilingBundle(
                 filing=owner_bundle.filing,
-                facts=[*owner_bundle.facts, *facts],
-                evidences=[*owner_bundle.evidences, *evidences],
+                facts=[*owner_facts, *facts],
+                evidences=[*owner_evidences, *evidences],
             )
             bundles.append(merged_bundle)
             continue
@@ -602,6 +689,19 @@ def build_bundles_from_provider(
                 )
                 for fact in schedule_bundle.facts
             )
+            if not _extend_specialized_numeric_bundle_if_valid(
+                route=route,
+                bundle=schedule_bundle,
+                facts=facts,
+                evidences=evidences,
+                numeric_specs_by_field=route_numeric_specs_by_field,
+                repo=repo,
+                run_id=run_id,
+                cik=envelope.cik,
+                accession_no=envelope.accession_no,
+                violation_message="owner schedule bundle violated numeric subject contract",
+            ):
+                continue
             if not has_owner_rows:
                 _safe_write_log(
                     repo,
@@ -615,9 +715,6 @@ def build_bundles_from_provider(
                     error_type="NO_OWNER_ROWS_EXTRACTED",
                 )
                 continue
-            facts.extend(schedule_bundle.facts)
-            evidences.extend(schedule_bundle.evidences)
-
         if route == "owner" and form_family == "144":
             if _supports_text_extraction_surface(envelope.filing):
                 form144_text_specs = tuple(
@@ -693,6 +790,21 @@ def build_bundles_from_provider(
                 )
                 for fact in form144_bundle.facts
             )
+            form144_facts: list[FactInput] = []
+            form144_evidences: list[EvidenceInput] = []
+            if not _extend_specialized_numeric_bundle_if_valid(
+                route=route,
+                bundle=form144_bundle,
+                facts=form144_facts,
+                evidences=form144_evidences,
+                numeric_specs_by_field=route_numeric_specs_by_field,
+                repo=repo,
+                run_id=run_id,
+                cik=envelope.cik,
+                accession_no=envelope.accession_no,
+                violation_message="owner form144 bundle violated numeric subject contract",
+            ):
+                continue
             if not has_sale_rows:
                 _safe_write_log(
                     repo,
@@ -708,8 +820,8 @@ def build_bundles_from_provider(
                 continue
             merged_bundle = FilingBundle(
                 filing=form144_bundle.filing,
-                facts=[*form144_bundle.facts, *facts],
-                evidences=[*form144_bundle.evidences, *evidences],
+                facts=[*form144_facts, *facts],
+                evidences=[*form144_evidences, *evidences],
             )
             bundles.append(merged_bundle)
             continue
@@ -722,6 +834,21 @@ def build_bundles_from_provider(
             vote_bundle = vote_outcome.bundle
             vote_item_present = vote_outcome.item_present
             if vote_bundle is not None:
+                vote_facts: list[FactInput] = []
+                vote_evidences: list[EvidenceInput] = []
+                if not _extend_specialized_numeric_bundle_if_valid(
+                    route=route,
+                    bundle=vote_bundle,
+                    facts=vote_facts,
+                    evidences=vote_evidences,
+                    numeric_specs_by_field=route_numeric_specs_by_field,
+                    repo=repo,
+                    run_id=run_id,
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    violation_message="issuer 8-K vote bundle violated numeric subject contract",
+                ):
+                    continue
                 has_vote_rows = any(
                     subject_key_has_type(
                         route=route,
@@ -729,7 +856,7 @@ def build_bundles_from_provider(
                         subject_type="proposal",
                     )
                     for fact in vote_bundle.facts
-                )
+                    )
                 if vote_item_present and not has_vote_rows:
                     _safe_write_log(
                         repo,
@@ -744,8 +871,8 @@ def build_bundles_from_provider(
                         error_detail=vote_outcome.error_detail,
                     )
                 if has_vote_rows:
-                    facts.extend(vote_bundle.facts)
-                    evidences.extend(vote_bundle.evidences)
+                    facts.extend(vote_facts)
+                    evidences.extend(vote_evidences)
 
         if route == "holding" and form_family == "13F-HR/A":
             holding_text_specs = tuple(
@@ -821,6 +948,21 @@ def build_bundles_from_provider(
                 )
                 for fact in holding_bundle.facts
             )
+            holding_facts: list[FactInput] = []
+            holding_evidences: list[EvidenceInput] = []
+            if not _extend_specialized_numeric_bundle_if_valid(
+                route=route,
+                bundle=holding_bundle,
+                facts=holding_facts,
+                evidences=holding_evidences,
+                numeric_specs_by_field=route_numeric_specs_by_field,
+                repo=repo,
+                run_id=run_id,
+                cik=envelope.cik,
+                accession_no=envelope.accession_no,
+                violation_message="holding 13F amendment bundle violated numeric subject contract",
+            ):
+                continue
             if not has_position_rows:
                 _safe_write_log(
                     repo,
@@ -836,8 +978,8 @@ def build_bundles_from_provider(
                 continue
             merged_bundle = FilingBundle(
                 filing=holding_bundle.filing,
-                facts=[*holding_bundle.facts, *facts],
-                evidences=[*holding_bundle.evidences, *evidences],
+                facts=[*holding_facts, *facts],
+                evidences=[*holding_evidences, *evidences],
             )
             bundles.append(merged_bundle)
             continue
@@ -916,6 +1058,21 @@ def build_bundles_from_provider(
                 )
                 for fact in holding_bundle.facts
             )
+            holding_facts: list[FactInput] = []
+            holding_evidences: list[EvidenceInput] = []
+            if not _extend_specialized_numeric_bundle_if_valid(
+                route=route,
+                bundle=holding_bundle,
+                facts=holding_facts,
+                evidences=holding_evidences,
+                numeric_specs_by_field=route_numeric_specs_by_field,
+                repo=repo,
+                run_id=run_id,
+                cik=envelope.cik,
+                accession_no=envelope.accession_no,
+                violation_message="holding 13F bundle violated numeric subject contract",
+            ):
+                continue
             if not has_position_rows:
                 _safe_write_log(
                     repo,
@@ -931,8 +1088,8 @@ def build_bundles_from_provider(
                 continue
             merged_bundle = FilingBundle(
                 filing=holding_bundle.filing,
-                facts=[*holding_bundle.facts, *facts],
-                evidences=[*holding_bundle.evidences, *evidences],
+                facts=[*holding_facts, *facts],
+                evidences=[*holding_evidences, *evidences],
             )
             bundles.append(merged_bundle)
             continue
@@ -958,8 +1115,18 @@ def build_bundles_from_provider(
                 text_sections=text_sections,
             )
             if deal_bundle is not None:
-                facts.extend(deal_bundle.facts)
-                evidences.extend(deal_bundle.evidences)
+                _extend_specialized_numeric_bundle_if_valid(
+                    route=route,
+                    bundle=deal_bundle,
+                    facts=facts,
+                    evidences=evidences,
+                    numeric_specs_by_field=route_numeric_specs_by_field,
+                    repo=repo,
+                    run_id=run_id,
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    violation_message="issuer deal bundle violated numeric subject contract",
+                )
         elif route == "issuer" and form_family in {"S-1", "424B4"}:
             text_sections = _extract_text_sections(envelope.filing)
             offering_bundle = _build_issuer_offering_text_facts(
@@ -967,15 +1134,35 @@ def build_bundles_from_provider(
                 text_sections=text_sections,
             )
             if offering_bundle is not None:
-                facts.extend(offering_bundle.facts)
-                evidences.extend(offering_bundle.evidences)
+                _extend_specialized_numeric_bundle_if_valid(
+                    route=route,
+                    bundle=offering_bundle,
+                    facts=facts,
+                    evidences=evidences,
+                    numeric_specs_by_field=route_numeric_specs_by_field,
+                    repo=repo,
+                    run_id=run_id,
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    violation_message="issuer offering bundle violated numeric subject contract",
+                )
             row_numeric_bundle = _build_issuer_row_numeric_text_facts(
                 filing=filing,
                 text_sections=text_sections,
             )
             if row_numeric_bundle is not None:
-                facts.extend(row_numeric_bundle.facts)
-                evidences.extend(row_numeric_bundle.evidences)
+                _extend_specialized_numeric_bundle_if_valid(
+                    route=route,
+                    bundle=row_numeric_bundle,
+                    facts=facts,
+                    evidences=evidences,
+                    numeric_specs_by_field=route_numeric_specs_by_field,
+                    repo=repo,
+                    run_id=run_id,
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    violation_message="issuer row-numeric bundle violated numeric subject contract",
+                )
         elif route == "issuer" and form_family == "DEF 14A":
             text_sections = _extract_text_sections(envelope.filing)
             row_numeric_bundle = _build_issuer_row_numeric_text_facts(
@@ -983,8 +1170,18 @@ def build_bundles_from_provider(
                 text_sections=text_sections,
             )
             if row_numeric_bundle is not None:
-                facts.extend(row_numeric_bundle.facts)
-                evidences.extend(row_numeric_bundle.evidences)
+                _extend_specialized_numeric_bundle_if_valid(
+                    route=route,
+                    bundle=row_numeric_bundle,
+                    facts=facts,
+                    evidences=evidences,
+                    numeric_specs_by_field=route_numeric_specs_by_field,
+                    repo=repo,
+                    run_id=run_id,
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    violation_message="issuer row-numeric bundle violated numeric subject contract",
+                )
         elif route == "issuer" and form_family in {"SC TO-I", "SC 13E3"}:
             text_sections = _extract_text_sections(envelope.filing)
             deal_bundle = _build_issuer_deal_text_facts(
@@ -992,8 +1189,18 @@ def build_bundles_from_provider(
                 text_sections=text_sections,
             )
             if deal_bundle is not None:
-                facts.extend(deal_bundle.facts)
-                evidences.extend(deal_bundle.evidences)
+                _extend_specialized_numeric_bundle_if_valid(
+                    route=route,
+                    bundle=deal_bundle,
+                    facts=facts,
+                    evidences=evidences,
+                    numeric_specs_by_field=route_numeric_specs_by_field,
+                    repo=repo,
+                    run_id=run_id,
+                    cik=envelope.cik,
+                    accession_no=envelope.accession_no,
+                    violation_message="issuer deal bundle violated numeric subject contract",
+                )
         elif route == "issuer" and form_family in {"NT 10-Q", "NT 10-K"}:
             delay_days = _extract_delay_days_from_text(envelope.filing)
             if delay_days is not None:

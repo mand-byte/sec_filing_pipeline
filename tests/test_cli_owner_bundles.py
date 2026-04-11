@@ -5,7 +5,10 @@ from types import SimpleNamespace
 
 import pandas as pd
 import src.cli as cli_module
+import src.pipeline.extraction.provider as provider_module
 from src.pipeline.edgar_provider import FilingEnvelope, classify_form_family
+from src.pipeline.route_runtime import BundleBuildOutcome, FilingBundle
+from src.pipeline.services import EvidenceInput, FactInput
 
 
 class FakeTransaction:
@@ -158,6 +161,64 @@ def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_rejects_owner_bundle_with_invalid_subject_contract(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000100A",
+        cik="0000789019",
+        form_type="4",
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        filing=FakeForm4Filing([], sections=[]),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_owner_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="shares_acquired_or_disposed",
+                        subject_key="document",
+                        value_numeric=100.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="shares_acquired_or_disposed",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="transactions[0].shares",
+                        raw_value="100",
+                        normalized_value="100.0",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_ownership_bundle", build_invalid_owner_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-invalid-ownership",
+    )
+
+    assert bundles == []
+    assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+    assert "shares_acquired_or_disposed:document" in str(repo.logs[-1]["error_detail"])
+
+
 def test_build_bundles_from_provider_emits_owner_holding_rows(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000101",
@@ -263,6 +324,68 @@ def test_build_bundles_from_provider_emits_13g_owner_rows(monkeypatch) -> None:
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("beneficial_ownership_intent_quant", "document")] == "passive"
     assert repo.logs == []
+
+
+def test_build_bundles_from_provider_rejects_schedule_bundle_with_invalid_subject_contract(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000102A",
+        cik="0001067983",
+        form_type="SC 13G",
+        accepted_at=datetime(2024, 5, 3, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SC 13G",
+            xml_text="<submission />",
+            sections=[],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_schedule_bundle(*, envelope, filing, form_family):
+        del envelope, form_family
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="beneficially_owned_shares",
+                        subject_key="document",
+                        value_numeric=1234567.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="beneficially_owned_shares",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="xml.reportingPerson[0].aggregateAmountOwned",
+                        raw_value="1234567",
+                        normalized_value="1234567.0",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_owner_schedule_13dg_bundle", build_invalid_schedule_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-invalid-13g",
+    )
+
+    assert bundles == []
+    assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+    assert "beneficially_owned_shares:document" in str(repo.logs[-1]["error_detail"])
 
 
 def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch) -> None:
