@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pandas as pd
 import src.cli as cli_module
+import src.pipeline.extraction.provider as provider_module
 from src.pipeline.edgar_provider import FilingEnvelope
+from src.pipeline.route_runtime import BundleBuildOutcome, FilingBundle
+from src.pipeline.services import EvidenceInput, FactInput
 
 
 class FakeSummaryPage:
@@ -144,6 +147,70 @@ def test_build_bundles_from_provider_emits_13f_position_rows(monkeypatch) -> Non
     assert evidence[("info_table_entry_total", "document")].source_span == "summary_page.tableEntryTotal"
     assert evidence[("info_table_value_total_usd", "document")].normalized_value == "2000000.0"
     assert repo.logs == []
+
+
+def test_build_bundles_from_provider_rejects_invalid_holding_bundle_subject_contract(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000200A",
+        cik="0001067983",
+        form_type="13F-HR",
+        accepted_at=datetime(2024, 5, 15, tzinfo=timezone.utc),
+        filing=Fake13FFiling(
+            Fake13F(
+                form="13F-HR",
+                rows=[],
+                sections=[],
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_holding_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="position_value_usd",
+                        subject_key="document",
+                        value_numeric=1250000.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="position_value_usd",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="infotable[0].Value",
+                        raw_value="1250",
+                        normalized_value="1250000.0",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_holding_13f_bundle", build_invalid_holding_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="holding",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-holding-invalid-contract",
+    )
+
+    assert bundles == []
+    assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
+    assert "position_value_usd:document" in str(repo.logs[-1]["error_detail"])
 
 
 def test_build_bundles_from_provider_merges_13f_amendment_text(monkeypatch) -> None:

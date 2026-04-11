@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import src.cli as cli_module
+import src.pipeline.extraction.provider as provider_module
 from src.pipeline.edgar_provider import FilingEnvelope
+from src.pipeline.route_runtime import BundleBuildOutcome, FilingBundle
+from src.pipeline.services import EvidenceInput, FactInput
 
 
 class FakeXBRL:
@@ -686,6 +689,81 @@ def test_build_bundles_from_provider_logs_missing_8k_vote_rows(monkeypatch) -> N
     vote_facts = [fact for fact in bundles[0].facts if fact.field_name.startswith("proposal_votes_") or fact.field_name == "proposal_broker_non_votes"]
     assert vote_facts == []
     assert any(log["error_type"] == "NO_VOTE_ROWS_EXTRACTED" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_logs_invalid_8k_vote_subject_contract_without_blocking_deal_fields(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 5, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": "Vote results appear in malformed bundle output.",
+            },
+        ),
+        sections=[
+            "Current report\nTransaction value of $7,250,000. Cash consideration per share was $14.50. Financing commitment of $3,000,000. Termination fee of $250,000."
+        ],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000005A",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_vote_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[
+                    FactInput(
+                        field_name="proposal_votes_for",
+                        subject_key="document",
+                        value_numeric=1000000.0,
+                        confidence=0.99,
+                    )
+                ],
+                evidences=[
+                    EvidenceInput(
+                        field_name="proposal_votes_for",
+                        subject_key="document",
+                        locator_kind="obj",
+                        source_span="items[Item 5.07].line[1]",
+                        raw_value="1000000",
+                        normalized_value="1000000.0",
+                    )
+                ],
+            ),
+            item_present=True,
+        )
+
+    monkeypatch.setattr(provider_module, "build_issuer_8k_vote_bundle", build_invalid_vote_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-5-invalid-vote-contract",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("deal_value", "document")] == 7250000.0
+    assert numeric_facts[("offer_price_per_share", "security:1")] == 14.5
+    assert ("proposal_votes_for", "document") not in numeric_facts
+    assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
 
 
 

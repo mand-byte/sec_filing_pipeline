@@ -836,7 +836,7 @@ def build_bundles_from_provider(
             if vote_bundle is not None:
                 vote_facts: list[FactInput] = []
                 vote_evidences: list[EvidenceInput] = []
-                if not _extend_specialized_numeric_bundle_if_valid(
+                vote_bundle_valid = _extend_specialized_numeric_bundle_if_valid(
                     route=route,
                     bundle=vote_bundle,
                     facts=vote_facts,
@@ -847,32 +847,32 @@ def build_bundles_from_provider(
                     cik=envelope.cik,
                     accession_no=envelope.accession_no,
                     violation_message="issuer 8-K vote bundle violated numeric subject contract",
-                ):
-                    continue
-                has_vote_rows = any(
-                    subject_key_has_type(
-                        route=route,
-                        subject_key=fact.subject_key,
-                        subject_type="proposal",
+                )
+                if vote_bundle_valid:
+                    has_vote_rows = any(
+                        subject_key_has_type(
+                            route=route,
+                            subject_key=fact.subject_key,
+                            subject_type="proposal",
+                        )
+                        for fact in vote_bundle.facts
                     )
-                    for fact in vote_bundle.facts
-                    )
-                if vote_item_present and not has_vote_rows:
-                    _safe_write_log(
-                        repo,
-                        run_id=run_id,
-                        route=route,
-                        stage="extract",
-                        level="ERROR",
-                        message="issuer 8-K vote extraction failed",
-                        cik=envelope.cik,
-                        accession_no=envelope.accession_no,
-                        error_type="NO_VOTE_ROWS_EXTRACTED",
-                        error_detail=vote_outcome.error_detail,
-                    )
-                if has_vote_rows:
-                    facts.extend(vote_facts)
-                    evidences.extend(vote_evidences)
+                    if vote_item_present and not has_vote_rows:
+                        _safe_write_log(
+                            repo,
+                            run_id=run_id,
+                            route=route,
+                            stage="extract",
+                            level="ERROR",
+                            message="issuer 8-K vote extraction failed",
+                            cik=envelope.cik,
+                            accession_no=envelope.accession_no,
+                            error_type="NO_VOTE_ROWS_EXTRACTED",
+                            error_detail=vote_outcome.error_detail,
+                        )
+                    if has_vote_rows:
+                        facts.extend(vote_facts)
+                        evidences.extend(vote_evidences)
 
         if route == "holding" and form_family == "13F-HR/A":
             holding_text_specs = tuple(
