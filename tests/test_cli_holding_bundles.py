@@ -307,6 +307,57 @@ def test_build_bundles_from_provider_preserves_holding_amendment_text_when_obj_b
     assert repo.logs[-1]["error_type"] == "HOLDING_OBJ_UNAVAILABLE"
 
 
+def test_build_bundles_from_provider_preserves_holding_amendment_text_when_bundle_has_no_rows(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000201B",
+        cik="0001067983",
+        form_type="13F-HR/A",
+        accepted_at=datetime(2024, 5, 16, tzinfo=timezone.utc),
+        filing=Fake13FFiling(
+            Fake13F(
+                form="13F-HR/A",
+                rows=[],
+                sections=["Header\nThis filing is a correction of the prior filing."],
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def empty_holding_bundle(*, envelope, filing):
+        del envelope
+        return BundleBuildOutcome(
+            bundle=FilingBundle(
+                filing=filing,
+                facts=[],
+                evidences=[],
+            )
+        )
+
+    monkeypatch.setattr(provider_module, "build_holding_13f_bundle", empty_holding_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001067983", ticker="BRK")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="holding",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-holding-amendment-empty",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("amendment_scope_quant", "document")] == "correction"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "NO_HOLDING_ROWS_EXTRACTED"
+
+
 def test_build_bundles_from_provider_merges_13f_amendment_text(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000201",
