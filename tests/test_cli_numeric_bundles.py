@@ -1075,9 +1075,12 @@ def test_build_bundles_from_provider_emits_s1_offering_numeric_fields(monkeypatc
     assert numeric_facts[("gross_proceeds", "document")] == 5000000.0
     assert numeric_facts[("net_proceeds", "document")] == 4500000.0
     assert numeric_facts[("underwriter_discount_total", "document")] == 500000.0
-    assert numeric_facts[("offering_price_per_share", "document")] == 10.0
-    assert numeric_facts[("securities_offered_qty", "document")] == 500000.0
+    assert numeric_facts[("offering_price_per_share", "security:1")] == 10.0
+    assert numeric_facts[("securities_offered_qty", "security:1")] == 500000.0
     assert numeric_facts[("financing_commitment_amount", "document")] == 2000000.0
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("gross_proceeds", "document")].source_section == "Use of Proceeds"
+    assert evidence[("offering_price_per_share", "security:1")].source_section == "Use of Proceeds"
 
 
 def test_build_bundles_from_provider_emits_sc_toi_deal_numeric_fields(monkeypatch) -> None:
@@ -1114,10 +1117,13 @@ def test_build_bundles_from_provider_emits_sc_toi_deal_numeric_fields(monkeypatc
     assert len(bundles) == 1
     numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_facts[("deal_value", "document")] == 12000000.0
-    assert numeric_facts[("offer_price_per_share", "document")] == 24.0
-    assert numeric_facts[("tender_shares_sought", "document")] == 500000.0
+    assert numeric_facts[("offer_price_per_share", "security:1")] == 24.0
+    assert numeric_facts[("tender_shares_sought", "security:1")] == 500000.0
     assert numeric_facts[("financing_commitment_amount", "document")] == 8000000.0
     assert numeric_facts[("termination_fee", "document")] == 600000.0
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("deal_value", "document")].source_section == "Summary term sheet"
+    assert evidence[("offer_price_per_share", "security:1")].source_section == "Summary term sheet"
 
 
 def test_build_bundles_from_provider_emits_def14a_exec_and_holder_rows(monkeypatch) -> None:
@@ -1160,6 +1166,8 @@ def test_build_bundles_from_provider_emits_def14a_exec_and_holder_rows(monkeypat
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("exec_total_comp", "exec:1")].locator_kind == "parse_text"
     assert evidence[("holder_beneficial_ownership_pct", "holder:1")].locator_kind == "parse_text"
+    assert evidence[("exec_total_comp", "exec:1")].source_section == "Summary Compensation Table"
+    assert evidence[("holder_beneficial_ownership_pct", "holder:1")].source_section == "Beneficial Ownership Table"
 
 
 def test_build_bundles_from_provider_emits_sc_13e3_deal_numeric_fields(monkeypatch) -> None:
@@ -1196,9 +1204,11 @@ def test_build_bundles_from_provider_emits_sc_13e3_deal_numeric_fields(monkeypat
     assert len(bundles) == 1
     numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_facts[("deal_value", "document")] == 9500000.0
-    assert numeric_facts[("offer_price_per_share", "document")] == 19.0
+    assert numeric_facts[("offer_price_per_share", "security:1")] == 19.0
     assert numeric_facts[("financing_commitment_amount", "document")] == 4000000.0
     assert numeric_facts[("termination_fee", "document")] == 350000.0
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("deal_value", "document")].source_section == "Special factors"
 
 
 def test_build_bundles_from_provider_emits_8k_deal_numeric_fields(monkeypatch) -> None:
@@ -1240,6 +1250,8 @@ def test_build_bundles_from_provider_emits_8k_deal_numeric_fields(monkeypatch) -
     assert len(bundles) == 1
     numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_facts[("deal_value", "document")] == 7250000.0
-    assert numeric_facts[("offer_price_per_share", "document")] == 14.5
+    assert numeric_facts[("offer_price_per_share", "security:1")] == 14.5
     assert numeric_facts[("financing_commitment_amount", "document")] == 3000000.0
     assert numeric_facts[("termination_fee", "document")] == 250000.0
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("deal_value", "document")].source_section == "Current report"

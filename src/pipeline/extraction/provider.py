@@ -96,6 +96,46 @@ def _extract_text_sources(filing: object) -> list[str]:
     return text_sources
 
 
+def _extract_text_sections(filing: object) -> list[tuple[str | None, str]]:
+    sections: list[tuple[str | None, str]] = []
+
+    raw_sections = getattr(filing, "sections", None)
+    if callable(raw_sections):
+        try:
+            raw_sections = raw_sections()
+        except Exception:
+            raw_sections = None
+
+    if isinstance(raw_sections, dict):
+        for section_name, section_text in raw_sections.items():
+            text = str(section_text).strip()
+            if text:
+                sections.append((str(section_name), text))
+    elif isinstance(raw_sections, list):
+        for section in raw_sections:
+            text = str(section).strip()
+            if not text:
+                continue
+            heading = text.splitlines()[0].strip() if text.splitlines() else None
+            sections.append((heading, text))
+
+    if sections:
+        return sections
+
+    for attr_name in ("parse", "text"):
+        attr = getattr(filing, attr_name, None)
+        if callable(attr):
+            try:
+                value = attr()
+            except Exception:
+                continue
+        else:
+            value = attr
+        if isinstance(value, str) and value.strip():
+            sections.append((None, value))
+    return sections
+
+
 def _extract_first_currency(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
     for source in text_sources:
         normalized = " ".join(source.split())
@@ -107,6 +147,21 @@ def _extract_first_currency(patterns: tuple[str, ...], text_sources: list[str]) 
             if candidate is not None:
                 return float(candidate)
     return None
+
+
+def _extract_first_currency_with_section(
+    patterns: tuple[str, ...], text_sections: list[tuple[str | None, str]]
+) -> tuple[float | None, str | None]:
+    for section_name, source in text_sections:
+        normalized = " ".join(source.split())
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match is None:
+                continue
+            candidate = coerce_numeric_value(match.group(1))
+            if candidate is not None:
+                return float(candidate), section_name
+    return None, None
 
 
 def _extract_first_count(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
@@ -122,60 +177,77 @@ def _extract_first_count(patterns: tuple[str, ...], text_sources: list[str]) -> 
     return None
 
 
-def _build_issuer_offering_text_facts(*, filing: FilingRecord, source_texts: list[str]) -> FilingBundle | None:
+def _extract_first_count_with_section(
+    patterns: tuple[str, ...], text_sections: list[tuple[str | None, str]]
+) -> tuple[float | None, str | None]:
+    for section_name, source in text_sections:
+        normalized = " ".join(source.split())
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match is None:
+                continue
+            candidate = coerce_numeric_value(match.group(1))
+            if candidate is not None:
+                return float(candidate), section_name
+    return None, None
+
+
+def _build_issuer_offering_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
     field_extractors = {
-        "gross_proceeds": _extract_first_currency(
+        "gross_proceeds": _extract_first_currency_with_section(
             (
                 r"(?i)gross proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)aggregate offering price(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "net_proceeds": _extract_first_currency(
+        "net_proceeds": _extract_first_currency_with_section(
             (
                 r"(?i)net proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)estimated net proceeds(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "offering_price_per_share": _extract_first_currency(
+        "offering_price_per_share": _extract_first_currency_with_section(
             (
                 r"(?i)offering price per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)\$([\d,]+(?:\.\d+)?)\s+per share",
             ),
-            source_texts,
+            text_sections,
         ),
-        "underwriter_discount_total": _extract_first_currency(
+        "underwriter_discount_total": _extract_first_currency_with_section(
             (
                 r"(?i)underwriting discounts and commissions(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "financing_commitment_amount": _extract_first_currency(
+        "financing_commitment_amount": _extract_first_currency_with_section(
             (
                 r"(?i)financing commitment(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)backstop amount(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "securities_offered_qty": _extract_first_count(
+        "securities_offered_qty": _extract_first_count_with_section(
             (
                 r"(?i)([\d,]+)\s+shares?\s+of common stock",
                 r"(?i)offering of\s+([\d,]+)\s+shares?",
             ),
-            source_texts,
+            text_sections,
         ),
     }
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
-    for field_name, value in field_extractors.items():
+    for field_name, extraction in field_extractors.items():
+        value, source_section = extraction
         if value is None:
             continue
+        subject_key = "security:1" if field_name in {"offering_price_per_share", "securities_offered_qty"} else "document"
         facts.append(
             FactInput(
                 field_name=field_name,
-                subject_key="document",
+                subject_key=subject_key,
                 value_numeric=value,
                 confidence=0.99,
             )
@@ -183,9 +255,10 @@ def _build_issuer_offering_text_facts(*, filing: FilingRecord, source_texts: lis
         evidences.append(
             EvidenceInput(
                 field_name=field_name,
-                subject_key="document",
+                subject_key=subject_key,
                 locator_kind="parse_text",
                 source_span="offering_text",
+                source_section=source_section,
                 raw_value=str(value),
                 normalized_value=str(value),
             )
@@ -196,54 +269,56 @@ def _build_issuer_offering_text_facts(*, filing: FilingRecord, source_texts: lis
     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
-def _build_issuer_deal_text_facts(*, filing: FilingRecord, source_texts: list[str]) -> FilingBundle | None:
+def _build_issuer_deal_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
     field_extractors = {
-        "deal_value": _extract_first_currency(
+        "deal_value": _extract_first_currency_with_section(
             (
                 r"(?i)deal value(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)transaction value(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "offer_price_per_share": _extract_first_currency(
+        "offer_price_per_share": _extract_first_currency_with_section(
             (
                 r"(?i)offer price per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)cash consideration per share(?: was| is)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "tender_shares_sought": _extract_first_count(
+        "tender_shares_sought": _extract_first_count_with_section(
             (
                 r"(?i)([\d,]+)\s+shares?\s+sought",
                 r"(?i)maximum number of shares(?: is| are)?\s+([\d,]+)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "financing_commitment_amount": _extract_first_currency(
+        "financing_commitment_amount": _extract_first_currency_with_section(
             (
                 r"(?i)financing commitment(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)backstop amount(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
-        "termination_fee": _extract_first_currency(
+        "termination_fee": _extract_first_currency_with_section(
             (
                 r"(?i)termination fee(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
                 r"(?i)break-up fee(?: of)?\s+\$([\d,]+(?:\.\d+)?)",
             ),
-            source_texts,
+            text_sections,
         ),
     }
 
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
-    for field_name, value in field_extractors.items():
+    for field_name, extraction in field_extractors.items():
+        value, source_section = extraction
         if value is None:
             continue
+        subject_key = "security:1" if field_name in {"offer_price_per_share", "tender_shares_sought"} else "document"
         facts.append(
             FactInput(
                 field_name=field_name,
-                subject_key="document",
+                subject_key=subject_key,
                 value_numeric=value,
                 confidence=0.99,
             )
@@ -251,9 +326,10 @@ def _build_issuer_deal_text_facts(*, filing: FilingRecord, source_texts: list[st
         evidences.append(
             EvidenceInput(
                 field_name=field_name,
-                subject_key="document",
+                subject_key=subject_key,
                 locator_kind="parse_text",
                 source_span="deal_text",
+                source_section=source_section,
                 raw_value=str(value),
                 normalized_value=str(value),
             )
@@ -264,7 +340,7 @@ def _build_issuer_deal_text_facts(*, filing: FilingRecord, source_texts: list[st
     return FilingBundle(filing=filing, facts=facts, evidences=evidences)
 
 
-def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, source_texts: list[str]) -> FilingBundle | None:
+def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
     executive_index = 0
@@ -273,7 +349,7 @@ def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, source_texts: 
     exec_pattern = re.compile(r"(?i)^(?P<label>.+?)\s+total\s+\$?(?P<amount>[\d,]+(?:\.\d+)?)$")
     holder_pattern = re.compile(r"(?i)^(?P<label>.+?)\s+(?P<shares>[\d,]+)\s+shares?\s+(?P<pct>[\d.]+)%$")
 
-    for source in source_texts:
+    for source_section, source in text_sections:
         for raw_line in source.splitlines():
             line = raw_line.strip()
             if not line:
@@ -299,6 +375,7 @@ def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, source_texts: 
                             subject_key=subject_key,
                             locator_kind="parse_text",
                             source_span=line,
+                            source_section=source_section,
                             raw_value=exec_match.group("amount"),
                             normalized_value=str(float(amount)),
                         )
@@ -334,6 +411,7 @@ def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, source_texts: 
                             subject_key=subject_key,
                             locator_kind="parse_text",
                             source_span=line,
+                            source_section=source_section,
                             raw_value=holder_match.group("shares"),
                             normalized_value=str(float(shares)),
                         )
@@ -344,6 +422,7 @@ def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, source_texts: 
                             subject_key=subject_key,
                             locator_kind="parse_text",
                             source_span=line,
+                            source_section=source_section,
                             raw_value=holder_match.group("pct"),
                             normalized_value=str(float(pct)),
                         )
@@ -873,44 +952,44 @@ def build_bundles_from_provider(
                 for spec in route_numeric_specs
                 if spec.field_name not in _ISSUER_VOTE_FIELDS
             )
-            source_texts = _extract_text_sources(envelope.filing)
+            text_sections = _extract_text_sections(envelope.filing)
             deal_bundle = _build_issuer_deal_text_facts(
                 filing=filing,
-                source_texts=source_texts,
+                text_sections=text_sections,
             )
             if deal_bundle is not None:
                 facts.extend(deal_bundle.facts)
                 evidences.extend(deal_bundle.evidences)
         elif route == "issuer" and form_family in {"S-1", "424B4"}:
-            source_texts = _extract_text_sources(envelope.filing)
+            text_sections = _extract_text_sections(envelope.filing)
             offering_bundle = _build_issuer_offering_text_facts(
                 filing=filing,
-                source_texts=source_texts,
+                text_sections=text_sections,
             )
             if offering_bundle is not None:
                 facts.extend(offering_bundle.facts)
                 evidences.extend(offering_bundle.evidences)
             row_numeric_bundle = _build_issuer_row_numeric_text_facts(
                 filing=filing,
-                source_texts=source_texts,
+                text_sections=text_sections,
             )
             if row_numeric_bundle is not None:
                 facts.extend(row_numeric_bundle.facts)
                 evidences.extend(row_numeric_bundle.evidences)
         elif route == "issuer" and form_family == "DEF 14A":
-            source_texts = _extract_text_sources(envelope.filing)
+            text_sections = _extract_text_sections(envelope.filing)
             row_numeric_bundle = _build_issuer_row_numeric_text_facts(
                 filing=filing,
-                source_texts=source_texts,
+                text_sections=text_sections,
             )
             if row_numeric_bundle is not None:
                 facts.extend(row_numeric_bundle.facts)
                 evidences.extend(row_numeric_bundle.evidences)
         elif route == "issuer" and form_family in {"SC TO-I", "SC 13E3"}:
-            source_texts = _extract_text_sources(envelope.filing)
+            text_sections = _extract_text_sections(envelope.filing)
             deal_bundle = _build_issuer_deal_text_facts(
                 filing=filing,
-                source_texts=source_texts,
+                text_sections=text_sections,
             )
             if deal_bundle is not None:
                 facts.extend(deal_bundle.facts)
