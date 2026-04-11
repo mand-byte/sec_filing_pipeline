@@ -486,6 +486,53 @@ def test_build_bundles_from_provider_preserves_schedule_text_when_xml_bundle_una
     assert repo.logs[-1]["error_type"] == "OWNER_XML_UNAVAILABLE"
 
 
+def test_build_bundles_from_provider_preserves_13d_text_when_xml_bundle_unavailable(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000103B",
+        cik="0001326380",
+        form_type="SCHEDULE 13D/A",
+        accepted_at=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SCHEDULE 13D/A",
+            xml_text="<submission />",
+            sections=[
+                "Purpose of Transaction\nThis filer is activist.",
+                "Item 3 Source and Amount of Funds\nCash on hand was used for the purchases.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def fail_schedule_bundle(*, envelope, filing, form_family):
+        del envelope, filing, form_family
+        return BundleBuildOutcome(bundle=None, error_detail="mock 13D xml failure")
+
+    monkeypatch.setattr(provider_module, "build_owner_schedule_13dg_bundle", fail_schedule_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-invalid-13d-xml",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
+    assert text_facts[("source_of_funds_quant", "document")] == "Cash"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_fields == set()
+    assert repo.logs[-1]["error_type"] == "OWNER_XML_UNAVAILABLE"
+
+
 def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000103",
