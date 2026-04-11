@@ -73,6 +73,92 @@ fields:
     avoid:
     - table of contents
   implemented: true
+- field_name: delay_reason_quant
+  route: issuer
+  form_families:
+  - NT 10-Q
+  - NT 10-K
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - delay
+  - unable to timely file
+  - could not file
+  regex_patterns:
+  - (?i)\b(audit|transaction|valuation|system)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - delay
+    min_tokens: 1
+    max_tokens: 120
+    preferred_tokens:
+    - 1
+    - 120
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: source_of_funds_quant
+  route: owner
+  form_families:
+  - 13D
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - item 3
+  - source and amount of funds
+  - funds
+  regex_patterns:
+  - (?i)\b(cash|margin loan|debt|seller financing)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - item 3
+    - source and amount of funds
+    min_tokens: 1
+    max_tokens: 160
+    preferred_tokens:
+    - 1
+    - 160
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
+- field_name: manager_structure_quant
+  route: holding
+  form_families:
+  - 13F-HR
+  locators:
+  - section_window
+  - parse_text_window
+  anchor_terms:
+  - cover page
+  - report type
+  - manager
+  regex_patterns:
+  - (?i)\b(holdings|notice|combination)\b
+  output_kind: text
+  qa_rules: {}
+  span_policy:
+    anchor_headers:
+    - cover page
+    min_tokens: 1
+    max_tokens: 120
+    preferred_tokens:
+    - 1
+    - 120
+    expand_steps:
+    - 0
+    avoid:
+    - table of contents
+  implemented: true
 - field_name: amendment_scope_quant
   route: holding
   form_families:

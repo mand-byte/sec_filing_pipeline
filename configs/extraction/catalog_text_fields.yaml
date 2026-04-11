@@ -31,7 +31,7 @@ fields:
   form_families:
   - NT 10-Q
   - NT 10-K
-  implemented: false
+  implemented: true
 - field_name: use_of_proceeds_quant
   route: issuer
   form_families:
@@ -78,7 +78,7 @@ fields:
   route: owner
   form_families:
   - 13D
-  implemented: false
+  implemented: true
 - field_name: rule144_sale_plan_quant
   route: owner
   form_families:
@@ -88,7 +88,7 @@ fields:
   route: holding
   form_families:
   - 13F-HR
-  implemented: false
+  implemented: true
 - field_name: amendment_scope_quant
   route: holding
   form_families:

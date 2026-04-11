@@ -327,6 +327,52 @@ def build_bundles_from_provider(
             continue
 
         if route == "holding" and form_family == "13F-HR":
+            holding_text_specs = tuple(
+                spec
+                for spec in route_text_specs
+                if form_family in spec.form_families
+            )
+            for spec in holding_text_specs:
+                outcome = text_engine.extract_field(filing=envelope.filing, field_spec=spec)
+                if outcome["status"] != "ok":
+                    _safe_write_log(
+                        repo,
+                        run_id=run_id,
+                        route=route,
+                        stage="extract",
+                        level="ERROR",
+                        message="text field extraction failed",
+                        cik=envelope.cik,
+                        accession_no=envelope.accession_no,
+                        error_type=outcome["error_code"],
+                    )
+                    continue
+                facts.append(
+                    FactInput(
+                        field_name=spec.field_name,
+                        subject_key="document",
+                        value_text=outcome["value_text"],
+                        value_json=outcome["value_json"],
+                        confidence=0.99,
+                    )
+                )
+                evidences.append(
+                    EvidenceInput(
+                        field_name=spec.field_name,
+                        subject_key="document",
+                        locator_kind=outcome["locator_kind"],
+                        source_span=outcome["source_span"],
+                        source_xpath=outcome["locator_path"],
+                        source_locator_json=outcome["source_locator_json"],
+                        source_heading_path_json=outcome["source_heading_path_json"],
+                        source_block_offsets_json=outcome["source_block_offsets_json"],
+                        adequacy_signals_json=outcome["adequacy_signals_json"],
+                        retry_history_json=outcome["retry_history_json"],
+                        raw_value=outcome["value_text"],
+                        normalized_value=outcome["value_text"],
+                    )
+                )
+
             holding_outcome = build_holding_13f_bundle(envelope=envelope, filing=filing)
             holding_bundle = holding_outcome.bundle
             if holding_bundle is None:
@@ -364,7 +410,12 @@ def build_bundles_from_provider(
                     error_type="NO_HOLDING_ROWS_EXTRACTED",
                 )
                 continue
-            bundles.append(holding_bundle)
+            merged_bundle = FilingBundle(
+                filing=holding_bundle.filing,
+                facts=[*holding_bundle.facts, *facts],
+                evidences=[*holding_bundle.evidences, *evidences],
+            )
+            bundles.append(merged_bundle)
             continue
 
         filing_numeric_specs = route_numeric_specs

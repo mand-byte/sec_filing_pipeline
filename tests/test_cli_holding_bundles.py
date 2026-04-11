@@ -103,6 +103,7 @@ def test_build_bundles_from_provider_emits_13f_position_rows(monkeypatch) -> Non
                 other_included_managers_count=2,
                 total_holdings=2,
                 total_value=Decimal("2000"),
+                sections=["Cover page\nThis is a holdings report filed by the manager."],
             )
         ),
     )
@@ -135,6 +136,8 @@ def test_build_bundles_from_provider_emits_13f_position_rows(monkeypatch) -> Non
     assert facts[("other_included_managers_count", "document")] == 2.0
     assert facts[("info_table_entry_total", "document")] == 2.0
     assert facts[("info_table_value_total_usd", "document")] == 2000000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert text_facts[("manager_structure_quant", "document")] == "holdings"
 
     evidence = {(item.field_name, item.subject_key): item for item in bundle.evidences}
     assert evidence[("position_value_usd", "position:1")].source_span == "infotable[0].Value"

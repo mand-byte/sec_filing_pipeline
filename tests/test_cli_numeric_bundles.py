@@ -48,6 +48,18 @@ class FakeEightKFiling:
         return self._sections
 
 
+class FakeTextFiling:
+    def __init__(self, *, form: str, sections: list[str]):
+        self.form = form
+        self._sections = sections
+
+    def sections(self) -> list[str]:
+        return self._sections
+
+    def parse(self) -> str:
+        return "\n".join(self._sections)
+
+
 class FakeRepo:
     def __init__(self) -> None:
         self.logs: list[dict[str, object]] = []
@@ -605,3 +617,38 @@ def test_build_bundles_from_provider_emits_8k_four_column_vote_rows_with_year_la
     assert facts[("proposal_votes_abstain", "proposal:1")] == 25.0
     assert facts[("proposal_broker_non_votes", "proposal:1")] == 10.0
     assert repo.logs == []
+
+
+def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 9, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000009",
+        cik="0000789019",
+        form_type="NT 10-Q",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="NT 10-Q",
+            sections=["Delay reason\nThe filing was delayed because of the audit review."],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-9",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("delay_reason_quant", "document")] == "audit"
+    assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)

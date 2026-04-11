@@ -284,7 +284,10 @@ def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch)
   </reportingPerson>
 </submission>
 """,
-            sections=["Purpose of Transaction\nThis filer is activist."],
+            sections=[
+                "Purpose of Transaction\nThis filer is activist.",
+                "Item 3 Source and Amount of Funds\nCash on hand was used for the purchases.",
+            ],
         ),
     )
 
@@ -314,6 +317,7 @@ def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch)
     assert numeric_facts[("aggregate_purchase_price", "document")] == 2500000.0
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
+    assert text_facts[("source_of_funds_quant", "document")] == "Cash"
     assert repo.logs == []
 
 

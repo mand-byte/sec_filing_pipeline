@@ -50,9 +50,15 @@ def test_text_catalog_tracks_documented_and_implemented_fields() -> None:
     }
     assert implemented == set(specs) == {
         ("issuer", "current_event_quant"),
+        ("issuer", "delay_reason_quant"),
         ("owner", "beneficial_ownership_intent_quant"),
+        ("owner", "source_of_funds_quant"),
+        ("holding", "manager_structure_quant"),
         ("holding", "amendment_scope_quant"),
     }
     assert specs[("issuer", "current_event_quant")].span_policy is not None
+    assert specs[("issuer", "delay_reason_quant")].span_policy is not None
     assert specs[("owner", "beneficial_ownership_intent_quant")].span_policy is not None
+    assert specs[("owner", "source_of_funds_quant")].span_policy is not None
+    assert specs[("holding", "manager_structure_quant")].span_policy is not None
     assert specs[("holding", "amendment_scope_quant")].span_policy is not None
