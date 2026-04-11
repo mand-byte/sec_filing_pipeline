@@ -1,7 +1,0 @@
-    1: """
-       Public API for function executor engines to be used with ``map`` and ``apply``.
-       """
-       
-    1: from pandas.core.apply import BaseExecutionEngine
-       
-    1: __all__ = ["BaseExecutionEngine"]
