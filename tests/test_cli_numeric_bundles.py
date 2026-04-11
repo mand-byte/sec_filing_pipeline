@@ -1955,6 +1955,123 @@ def test_build_bundles_from_provider_logs_invalid_s1_row_contract_without_blocki
     assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
 
 
+def test_build_bundles_from_provider_emits_424b4_offering_numeric_and_use_of_proceeds_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 13, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000019C",
+        cik="0000789019",
+        form_type="424B4",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="424B4",
+            sections=[
+                "Use of Proceeds\nGross proceeds of $6,000,000 are expected. Net proceeds of $5,400,000 after underwriting discounts and commissions of $600,000. The offering price per share was $12.00 with an offering of 500,000 shares of common stock. Financing commitment of $2,500,000 has been arranged.",
+                "Risk Factors\nCybersecurity incidents may materially affect our distribution and settlement process.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-424b4-offering",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("gross_proceeds", "document")] == 6000000.0
+    assert numeric_facts[("net_proceeds", "document")] == 5400000.0
+    assert numeric_facts[("underwriter_discount_total", "document")] == 600000.0
+    assert numeric_facts[("offering_price_per_share", "security:1")] == 12.0
+    assert numeric_facts[("securities_offered_qty", "security:1")] == 500000.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 2500000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("risk_factor_quant", "document")] == "Cybersecurity"
+
+
+def test_build_bundles_from_provider_logs_invalid_424b4_row_contract_without_blocking_offering_and_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 13, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000019D",
+        cik="0000789019",
+        form_type="424B4",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="424B4",
+            sections=[
+                "Use of Proceeds\nGross proceeds of $6,000,000 are expected. Net proceeds of $5,400,000 after underwriting discounts and commissions of $600,000. The offering price per share was $12.00 with an offering of 500,000 shares of common stock. Financing commitment of $2,500,000 has been arranged.",
+                "Risk Factors\nCybersecurity incidents may materially affect our distribution and settlement process.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_row_bundle(*, filing, text_sections):
+        del text_sections
+        return FilingBundle(
+            filing=filing,
+            facts=[
+                FactInput(
+                    field_name="exec_total_comp",
+                    subject_key="document",
+                    value_numeric=1250000.0,
+                    confidence=0.99,
+                )
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name="exec_total_comp",
+                    subject_key="document",
+                    locator_kind="parse_text",
+                    source_span="Jane Doe Total 1,250,000",
+                    source_section="Summary Compensation Table",
+                    raw_value="1250000",
+                    normalized_value="1250000.0",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(provider_module, "_build_issuer_row_numeric_text_facts", build_invalid_row_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-424b4-row-invalid-contract",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("gross_proceeds", "document")] == 6000000.0
+    assert numeric_facts[("net_proceeds", "document")] == 5400000.0
+    assert numeric_facts[("underwriter_discount_total", "document")] == 600000.0
+    assert numeric_facts[("offering_price_per_share", "security:1")] == 12.0
+    assert numeric_facts[("securities_offered_qty", "security:1")] == 500000.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 2500000.0
+    assert ("exec_total_comp", "document") not in numeric_facts
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("risk_factor_quant", "document")] == "Cybersecurity"
+    assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_sc_toi_deal_numeric_fields(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 14, tzinfo=timezone.utc)
     envelope = FilingEnvelope(
