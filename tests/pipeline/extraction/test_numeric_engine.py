@@ -243,6 +243,55 @@ def test_xbrl_logic_supports_10k_for_existing_issuer_numeric_slice() -> None:
     assert outcome["source_xpath"] == "rev-annual"
 
 
+def test_xbrl_logic_supports_20f_for_existing_issuer_numeric_slice() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="20-F",
+        records=[
+            {
+                "fact_key": "rev-20f",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-12-31",
+                "value": 777.0,
+            }
+        ],
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_revenue"))
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_normalized"] == 777.0
+    assert outcome["xbrl_concept"] == "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert outcome["source_xpath"] == "rev-20f"
+
+
+def test_xbrl_logic_supports_6k_financial_for_existing_issuer_numeric_slice() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="6-K-financial",
+        records=[
+            {
+                "fact_key": "cash-6k-fin",
+                "concept": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                "statement_type": "BalanceSheet",
+                "dimensioned": False,
+                "instant": "2024-12-31",
+                "value": 555.0,
+            }
+        ],
+    )
+
+    outcome = engine.extract_field(filing=filing, field_spec=_issuer_spec("cash_and_equivalents"))
+
+    assert outcome["status"] == "ok"
+    assert outcome["value_normalized"] == 555.0
+    assert outcome["xbrl_concept"] == "us-gaap:CashAndCashEquivalentsAtCarryingValue"
+    assert outcome["source_xpath"] == "cash-6k-fin"
+
+
 class FakeObjFirstFiling(FakeFiling):
     def obj(self) -> float:
         return 777.0

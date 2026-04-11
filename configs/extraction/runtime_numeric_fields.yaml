@@ -4,6 +4,8 @@ fields:
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -20,11 +22,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: operating_income
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -39,11 +45,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: net_income
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -59,11 +69,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: diluted_eps
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -79,11 +93,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: cash_and_equivalents
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -98,11 +116,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: total_debt
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -119,11 +141,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: operating_cash_flow
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -143,11 +169,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: capex
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -168,11 +198,15 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: shares_outstanding
   route: issuer
   form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
   value_type: float
   locators:
   - xbrl_xml
@@ -186,6 +220,8 @@ fields:
   xbrl_enabled_form_families:
   - 10-K
   - 10-Q
+  - 20-F
+  - 6-K-financial
 - field_name: filing_delay_days
   route: issuer
   form_families:
