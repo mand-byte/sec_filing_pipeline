@@ -1273,6 +1273,72 @@ def test_build_bundles_from_provider_emits_sc_toi_deal_numeric_fields(monkeypatc
     assert evidence[("offer_price_per_share", "security:1")].source_section == "Summary term sheet"
 
 
+def test_build_bundles_from_provider_logs_invalid_sc_toi_deal_contract_without_blocking_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 14, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000020A",
+        cik="0000789019",
+        form_type="SC TO-I",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="SC TO-I",
+            sections=[
+                "Summary term sheet\nThis transaction is a cash merger that the committee determined was fair. Transaction value of $12,000,000. Offer price per share was $24.00. 500,000 shares sought. Financing commitment of $8,000,000. Termination fee of $600,000."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_deal_bundle(*, filing, text_sections):
+        del text_sections
+        return FilingBundle(
+            filing=filing,
+            facts=[
+                FactInput(
+                    field_name="offer_price_per_share",
+                    subject_key="document",
+                    value_numeric=24.0,
+                    confidence=0.99,
+                )
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name="offer_price_per_share",
+                    subject_key="document",
+                    locator_kind="parse_text",
+                    source_span="deal_text",
+                    source_section="Summary term sheet",
+                    raw_value="24.0",
+                    normalized_value="24.0",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(provider_module, "_build_issuer_deal_text_facts", build_invalid_deal_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-sc-toi-invalid-deal-contract",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("tender_going_private_quant", "document")] == "cash merger"
+    numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert ("offer_price_per_share", "document") not in numeric_fields
+    assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_def14a_exec_and_holder_rows(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 17, tzinfo=timezone.utc)
     envelope = FilingEnvelope(
@@ -1402,3 +1468,76 @@ def test_build_bundles_from_provider_emits_8k_deal_numeric_fields(monkeypatch) -
     assert numeric_facts[("termination_fee", "document")] == 250000.0
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("deal_value", "document")].source_section == "Current report"
+
+
+def test_build_bundles_from_provider_logs_invalid_8k_deal_contract_without_blocking_vote_rows(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 16, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={"Item 5.07": "Proposal 2024 Plan Approval 1,500,000 250,000 25 10"},
+        ),
+        sections=[
+            "Current report\nTransaction value of $7,250,000. Cash consideration per share was $14.50. Financing commitment of $3,000,000. Termination fee of $250,000."
+        ],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000022A",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    def build_invalid_deal_bundle(*, filing, text_sections):
+        del text_sections
+        return FilingBundle(
+            filing=filing,
+            facts=[
+                FactInput(
+                    field_name="offer_price_per_share",
+                    subject_key="document",
+                    value_numeric=14.5,
+                    confidence=0.99,
+                )
+            ],
+            evidences=[
+                EvidenceInput(
+                    field_name="offer_price_per_share",
+                    subject_key="document",
+                    locator_kind="parse_text",
+                    source_span="deal_text",
+                    source_section="Current report",
+                    raw_value="14.5",
+                    normalized_value="14.5",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(provider_module, "_build_issuer_deal_text_facts", build_invalid_deal_bundle)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-8k-invalid-deal-contract",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("proposal_votes_for", "proposal:1")] == 1500000.0
+    assert numeric_facts[("proposal_votes_against", "proposal:1")] == 250000.0
+    assert numeric_facts[("proposal_votes_abstain", "proposal:1")] == 25.0
+    assert numeric_facts[("proposal_broker_non_votes", "proposal:1")] == 10.0
+    assert ("offer_price_per_share", "document") not in numeric_facts
+    assert any(log["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION" for log in repo.logs)
