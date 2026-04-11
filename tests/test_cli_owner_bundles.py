@@ -823,6 +823,72 @@ def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch)
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_keeps_13d_schedule_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000103E",
+        cik="0001326380",
+        form_type="SCHEDULE 13D/A",
+        accepted_at=datetime(2024, 5, 4, tzinfo=timezone.utc),
+        filing=FakeXmlFiling(
+            form="SCHEDULE 13D/A",
+            xml_text="""
+<submission>
+  <fundsSource>Item 3. Source and Amount of Funds. Total funds used was $2,500,000 in cash.</fundsSource>
+  <reportingPerson>
+    <aggregateAmountOwned>400000</aggregateAmountOwned>
+    <percentOfClass>9.9</percentOfClass>
+    <soleVotingPower>390000</soleVotingPower>
+    <sharedVotingPower>10000</sharedVotingPower>
+    <soleDispositivePower>380000</soleDispositivePower>
+    <sharedDispositivePower>20000</sharedDispositivePower>
+    <fundsSource>Item 3. Reporting person used $1,250,000 of working capital.</fundsSource>
+  </reportingPerson>
+</submission>
+""",
+            sections=[
+                "Purpose of Transaction\nThis filer is activist.",
+                "Item 3 Source and Amount of Funds\nCash on hand was used for the purchases.",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "beneficial_ownership_intent_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0001326380", ticker="XYZ")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="owner",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-owner-13d-text-failure",
+    )
+
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundle.facts}
+    assert numeric_facts[("beneficially_owned_shares", "filer:1")] == 400000.0
+    assert numeric_facts[("source_of_funds_amount", "filer:1")] == 1250000.0
+    assert numeric_facts[("aggregate_purchase_price", "filer:1")] == 1250000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
+    assert ("beneficial_ownership_intent_quant", "document") not in text_facts
+    assert text_facts[("source_of_funds_quant", "document")] == "Cash"
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_uses_single_filer_top_level_funds_fallback(monkeypatch) -> None:
     envelope = FilingEnvelope(
         accession_no="0000000000-24-000103A",
