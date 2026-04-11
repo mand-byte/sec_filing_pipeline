@@ -648,6 +648,47 @@ Proposal 2 Advisory Vote on Executive Compensation 900,000 250,000 20,000 110,00
     assert repo.logs == []
 
 
+def test_build_bundles_from_provider_emits_8k_current_event_text(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 1.01"],
+            item_map={"Item 1.01": "Entry into a material definitive agreement."},
+        ),
+        sections=["Current report\nMaterial definitive agreement entered into on signing date."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000004A",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-4-current-event",
+    )
+
+    assert len(bundles) == 1
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert text_facts[("current_event_quant", "document")] == "agreement"
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert evidence[("current_event_quant", "document")].source_section in {"Current report", "current report"}
+    assert repo.logs == []
+
 
 def test_build_bundles_from_provider_logs_missing_8k_vote_rows(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 5, tzinfo=timezone.utc)
@@ -689,6 +730,62 @@ def test_build_bundles_from_provider_logs_missing_8k_vote_rows(monkeypatch) -> N
     vote_facts = [fact for fact in bundles[0].facts if fact.field_name.startswith("proposal_votes_") or fact.field_name == "proposal_broker_non_votes"]
     assert vote_facts == []
     assert any(log["error_type"] == "NO_VOTE_ROWS_EXTRACTED" for log in repo.logs)
+
+
+def test_build_bundles_from_provider_keeps_8k_vote_rows_when_current_event_text_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": "Proposal 1 Election of Directors 1,000,000 200,000 30,000 50,000",
+            },
+        ),
+        sections=["Current report\nMaterial definitive agreement entered into on signing date."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000004B",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "current_event_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-4-current-event-failure",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("proposal_votes_for", "proposal:1")] == 1000000.0
+    assert numeric_facts[("proposal_votes_against", "proposal:1")] == 200000.0
+    assert numeric_facts[("proposal_votes_abstain", "proposal:1")] == 30000.0
+    assert numeric_facts[("proposal_broker_non_votes", "proposal:1")] == 50000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert ("current_event_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
 
 
 def test_build_bundles_from_provider_logs_missing_8k_vote_rows_without_blocking_deal_fields(monkeypatch) -> None:
