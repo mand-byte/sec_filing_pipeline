@@ -691,6 +691,55 @@ def test_build_bundles_from_provider_logs_missing_8k_vote_rows(monkeypatch) -> N
     assert any(log["error_type"] == "NO_VOTE_ROWS_EXTRACTED" for log in repo.logs)
 
 
+def test_build_bundles_from_provider_logs_missing_8k_vote_rows_without_blocking_deal_fields(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 5, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 5.07"],
+            item_map={
+                "Item 5.07": "No tabulated vote counts were included in this item.",
+            },
+        ),
+        sections=[
+            "Current report\nTransaction value of $7,250,000. Cash consideration per share was $14.50. Financing commitment of $3,000,000. Termination fee of $250,000."
+        ],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000005B",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-5-missing-vote-with-deal",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("deal_value", "document")] == 7250000.0
+    assert numeric_facts[("offer_price_per_share", "security:1")] == 14.5
+    assert numeric_facts[("financing_commitment_amount", "document")] == 3000000.0
+    assert numeric_facts[("termination_fee", "document")] == 250000.0
+    vote_fields = {key for key in numeric_facts if key[0].startswith("proposal_votes_") or key[0] == "proposal_broker_non_votes"}
+    assert vote_fields == set()
+    assert any(log["error_type"] == "NO_VOTE_ROWS_EXTRACTED" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_logs_invalid_8k_vote_subject_contract_without_blocking_deal_fields(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 5, tzinfo=timezone.utc)
     filing = FakeEightKFiling(
