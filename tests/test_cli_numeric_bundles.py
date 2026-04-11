@@ -1218,6 +1218,57 @@ def test_build_bundles_from_provider_keeps_sc_toi_deal_numeric_when_text_field_e
     assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
 
 
+def test_build_bundles_from_provider_keeps_sc_13e3_deal_numeric_when_text_field_extraction_fails(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 15, tzinfo=timezone.utc)
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000021B",
+        cik="0000789019",
+        form_type="SC 13E3",
+        accepted_at=accepted_at,
+        filing=FakeTextFiling(
+            form="SC 13E3",
+            sections=[
+                "Special factors\nThis transaction is a cash merger that the committee determined was fair. Deal value of $9,500,000. Cash consideration per share was $19.00. Financing commitment of $4,000,000. Break-up fee of $350,000."
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+
+    original_extract_field = provider_module.TextExtractionEngine.extract_field
+
+    def failing_extract_field(self, *, filing, field_spec):
+        if field_spec.field_name == "tender_going_private_quant":
+            return {"status": "error", "error_code": "FORCED_TEXT_FAILURE"}
+        return original_extract_field(self, filing=filing, field_spec=field_spec)
+
+    monkeypatch.setattr(provider_module.TextExtractionEngine, "extract_field", failing_extract_field)
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-sc-13e3-text-failure",
+    )
+
+    assert len(bundles) == 1
+    numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
+    assert numeric_facts[("deal_value", "document")] == 9500000.0
+    assert numeric_facts[("offer_price_per_share", "security:1")] == 19.0
+    assert numeric_facts[("financing_commitment_amount", "document")] == 4000000.0
+    assert numeric_facts[("termination_fee", "document")] == 350000.0
+    text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
+    assert ("tender_going_private_quant", "document") not in text_facts
+    assert any(log["error_type"] == "FORCED_TEXT_FAILURE" for log in repo.logs)
+
+
 def test_build_bundles_from_provider_emits_s1_offering_numeric_fields(monkeypatch) -> None:
     accepted_at = datetime(2024, 5, 13, tzinfo=timezone.utc)
     envelope = FilingEnvelope(
