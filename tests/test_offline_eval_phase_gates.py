@@ -23,9 +23,12 @@ def test_default_tier2_assets_cover_current_vertical_slice(tmp_path: Path) -> No
         "gold_applicable_rows": 15,
         "silver_applicable_rows": 0,
         "invariant_rows": 0,
+        "distinct_ciks": 0,
+        "distinct_filing_years": 0,
     }
     assert result.summary["metrics"]["pass_rate"] == 1.0
     assert result.summary["metrics"]["gold_strict_accuracy"] == 1.0
+    assert result.summary["phase_gates"] == {"total": 1, "passed": 1, "failed": 0, "skipped": 0}
 
     by_field = json.loads((tmp_path / "phase-gate-default" / "by_field.json").read_text(encoding="utf-8"))
     assert by_field["mdna_outlook_quant"]["matched"] == 1
@@ -43,6 +46,8 @@ def test_default_tier2_assets_cover_current_vertical_slice(tmp_path: Path) -> No
     assert by_field["rule144_sale_plan_quant"]["matched"] == 1
     assert by_field["manager_structure_quant"]["matched"] == 1
     assert by_field["amendment_scope_quant"]["matched"] == 1
+    phase_gates = json.loads((tmp_path / "phase-gate-default" / "phase_gates.json").read_text(encoding="utf-8"))
+    assert phase_gates == [{"name": "default_vertical_slice", "status": "passed", "violations": []}]
 
 
 def test_default_tier2_assets_support_route_filtered_phase_gates(tmp_path: Path) -> None:
@@ -82,6 +87,7 @@ def test_default_tier2_assets_support_route_filtered_phase_gates(tmp_path: Path)
         assert result.summary["coverage"]["total_cases"] == len(field_names)
         assert result.summary["coverage"]["total_candidates"] == len(field_names)
         assert result.summary["metrics"]["pass_rate"] == 1.0
+        assert result.summary["phase_gates"] == {"total": 1, "passed": 0, "failed": 0, "skipped": 1}
 
         by_field = json.loads((tmp_path / f"phase-gate-{route}" / "by_field.json").read_text(encoding="utf-8"))
         assert set(by_field.keys()) == field_names

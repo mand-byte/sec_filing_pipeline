@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from src.pipeline.strict_v2_gates import evaluate_phase_gates
+
 _FIELD_CONCEPTS: dict[str, tuple[str, ...]] = {
     "total_revenue": (
         "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -79,10 +81,19 @@ class NumericBatchEvalResult:
     summary: dict[str, Any]
     by_field: dict[str, Any]
     failures: list[dict[str, Any]]
+    phase_gates: list[dict[str, Any]]
+    review_packets: list[dict[str, Any]]
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"numeric batch yaml root must be a mapping: {path}")
+    return dict(payload)
 
 
 def load_10q_numeric_batch_cases(golden_path: Path) -> list[NumericBatchCase]:
-    payload = yaml.safe_load(golden_path.read_text(encoding="utf-8")) or {}
+    payload = _load_yaml_mapping(golden_path)
     cases_raw = payload.get("cases", [])
     cases: list[NumericBatchCase] = []
     for case in cases_raw:
@@ -287,6 +298,7 @@ def _finalize_by_field(by_field: dict[str, dict[str, int]]) -> dict[str, dict[st
 
 
 def evaluate_10q_numeric_batch(*, golden_path: Path, snapshot_dir: Path) -> NumericBatchEvalResult:
+    golden_payload = _load_yaml_mapping(golden_path)
     cases = load_10q_numeric_batch_cases(golden_path)
     total_batches = len(cases)
     total_field_checks = 0
@@ -295,17 +307,26 @@ def evaluate_10q_numeric_batch(*, golden_path: Path, snapshot_dir: Path) -> Nume
     batch_all_match_hits = 0
     failures: list[dict[str, Any]] = []
     by_field: dict[str, dict[str, int]] = {}
+    review_packets: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+    seen_form_types: set[str] = set()
+    seen_tickers: set[str] = set()
+    seen_filing_years: set[str] = set()
 
     for case in cases:
+        seen_tickers.add(case.ticker)
+        seen_form_types.add(case.form_type)
+        seen_filing_years.add(str(case.filing_year))
         snapshot_path = snapshot_dir / f"{case.case_id}.json"
-        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         snapshot_fields = {
             str(field["field_name"]): list(field.get("candidate_pool", []))
-            for field in payload.get("fields", [])
+            for field in snapshot_payload.get("fields", [])
         }
 
         batch_all_match = True
         for field in case.fields:
+            seen_fields.add(field.field_name)
             total_field_checks += 1
             candidates = snapshot_fields.get(field.field_name, [])
             selected_key = field.adjudication.get("selected_candidate_key")
@@ -337,12 +358,25 @@ def evaluate_10q_numeric_batch(*, golden_path: Path, snapshot_dir: Path) -> Nume
                 top1_hits += 1
             else:
                 batch_all_match = False
-                failures.append(
+                failure = {
+                    "case_id": case.case_id,
+                    "field_name": field.field_name,
+                    "expected": selected_key,
+                    "actual": top_key,
+                }
+                failures.append(failure)
+                review_packets.append(
                     {
                         "case_id": case.case_id,
+                        "subject_key": "document",
                         "field_name": field.field_name,
-                        "expected": selected_key,
-                        "actual": top_key,
+                        "expected": {
+                            "selected_candidate_key": selected_key,
+                        },
+                        "actual": {
+                            "selected_candidate_key": top_key,
+                            "candidate_keys": sorted(available_keys),
+                        },
                     }
                 )
 
@@ -356,17 +390,55 @@ def evaluate_10q_numeric_batch(*, golden_path: Path, snapshot_dir: Path) -> Nume
         if batch_all_match:
             batch_all_match_hits += 1
 
+    coverage = {
+        "total_cases": total_batches,
+        "total_candidates": total_field_checks,
+        "gold_applicable_rows": total_field_checks,
+        "silver_applicable_rows": 0,
+        "invariant_rows": 0,
+        "distinct_tickers": len(seen_tickers),
+        "distinct_filing_years": len(seen_filing_years),
+    }
+    metrics = {
+        "total_batches": total_batches,
+        "total_field_checks": total_field_checks,
+        "passed": top1_hits,
+        "failed": total_field_checks - top1_hits,
+        "candidate_recall": candidate_recall_hits / total_field_checks if total_field_checks else 0.0,
+        "top1_accuracy": top1_hits / total_field_checks if total_field_checks else 0.0,
+        "batch_all_match_rate": batch_all_match_hits / total_batches if total_batches else 0.0,
+        "gold_strict_accuracy": top1_hits / total_field_checks if total_field_checks else 0.0,
+        "gold_coverage": candidate_recall_hits / total_field_checks if total_field_checks else 0.0,
+        "row_selection_accuracy": top1_hits / total_field_checks if total_field_checks else 0.0,
+        "not_applicable_precision": 1.0,
+        "silver_alignment": 0.0,
+        "invariant_pass_rate": 0.0,
+    }
+    phase_gates = evaluate_phase_gates(
+        gates_raw=golden_payload.get("phase_gates", []),
+        coverage=coverage,
+        metrics=metrics,
+        set_values={
+            "required_fields": seen_fields,
+            "required_form_types": seen_form_types,
+            "required_tickers": seen_tickers,
+            "required_filing_years": seen_filing_years,
+        },
+    )
     summary = {
-        "metrics": {
-            "total_batches": total_batches,
-            "total_field_checks": total_field_checks,
-            "candidate_recall": candidate_recall_hits / total_field_checks if total_field_checks else 0.0,
-            "top1_accuracy": top1_hits / total_field_checks if total_field_checks else 0.0,
-            "batch_all_match_rate": batch_all_match_hits / total_batches if total_batches else 0.0,
-        }
+        "coverage": coverage,
+        "metrics": metrics,
+        "phase_gates": {
+            "total": len(phase_gates),
+            "passed": len([gate for gate in phase_gates if gate.get("status") == "passed"]),
+            "failed": len([gate for gate in phase_gates if gate.get("status") == "failed"]),
+            "skipped": 0,
+        },
     }
     return NumericBatchEvalResult(
         summary=summary,
         by_field=_finalize_by_field(by_field),
         failures=failures,
+        phase_gates=phase_gates,
+        review_packets=review_packets,
     )

@@ -18,6 +18,7 @@ from src.pipeline.extraction.engine import NumericExtractionEngine
 from src.pipeline.extraction.registry import all_numeric_field_specs
 from src.pipeline.extraction.subject_keys import subject_key_has_type, subject_key_matches_granularity
 from src.pipeline.extraction.text_engine import TextExtractionEngine
+from src.pipeline.extraction.text_normalization import SpanNormalizer
 from src.pipeline.extraction.text_registry import all_text_field_specs
 from src.pipeline.route_runtime import FilingBundle, _normalize_to_utc, _safe_write_log
 from src.pipeline.services import EvidenceInput, FactInput
@@ -538,6 +539,7 @@ def build_bundles_from_provider(
     repo: PipelineRepository,
     run_id: str,
     fetch_filings=fetch_filings_for_security,
+    text_normalizer: SpanNormalizer | None = None,
 ) -> list[FilingBundle]:
     envelopes = fetch_filings(
         security=security,
@@ -548,7 +550,7 @@ def build_bundles_from_provider(
         return []
 
     numeric_engine = NumericExtractionEngine()
-    text_engine = TextExtractionEngine()
+    text_engine = TextExtractionEngine(normalizer=text_normalizer)
     route_numeric_specs = tuple(
         sorted(
             (spec for spec in all_numeric_field_specs() if spec.route == route),
@@ -832,8 +834,8 @@ def build_bundles_from_provider(
                 continue
             merged_bundle = FilingBundle(
                 filing=schedule_bundle.filing,
-                facts=[*schedule_bundle.facts, *facts],
-                evidences=[*schedule_bundle.evidences, *evidences],
+                facts=list(facts),
+                evidences=list(evidences),
             )
             bundles.append(merged_bundle)
             continue

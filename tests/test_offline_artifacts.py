@@ -19,6 +19,7 @@ def test_write_run_artifacts_emits_strict_v2_file_set(tmp_path: Path) -> None:
         coverage={"total_cases": 1, "total_candidates": 1},
         silver_alignment=[{"case_id": "case-002", "field_name": "current_event_quant", "matched": True}],
         invariants=[{"case_id": "case-003", "name": "cash_nonnegative", "status": "pass"}],
+        phase_gates=[{"name": "phase-1", "status": "passed", "violations": []}],
         review_packets=[
             {
                 "case_id": "case-001",
@@ -34,6 +35,7 @@ def test_write_run_artifacts_emits_strict_v2_file_set(tmp_path: Path) -> None:
     assert (run_dir / "summary.json").exists()
     assert (run_dir / "by_field.json").exists()
     assert (run_dir / "coverage.json").exists()
+    assert (run_dir / "phase_gates.json").exists()
     assert (run_dir / "mismatches.ndjson").exists()
     assert (run_dir / "silver_alignment.ndjson").exists()
     assert (run_dir / "invariants.ndjson").exists()
@@ -44,6 +46,8 @@ def test_write_run_artifacts_emits_strict_v2_file_set(tmp_path: Path) -> None:
 
     coverage = json.loads((run_dir / "coverage.json").read_text(encoding="utf-8"))
     assert coverage["total_candidates"] == 1
+    phase_gates = json.loads((run_dir / "phase_gates.json").read_text(encoding="utf-8"))
+    assert phase_gates == [{"name": "phase-1", "status": "passed", "violations": []}]
 
     mismatches = (run_dir / "mismatches.ndjson").read_text(encoding="utf-8").strip().splitlines()
     assert len(mismatches) == 1

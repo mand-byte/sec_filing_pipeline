@@ -14,8 +14,17 @@ fields:
   regex_patterns:
   - (?i)\b(event|announcement|transaction|agreement)\b
   - (?i)\b(material\s+definitive\s+agreement|results\s+of\s+operations|financial\s+condition)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/current_event_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      event_type:
+        agreement: (?i)\bagreement\b
+        results: (?i)\bresults?\b
+        financing: (?i)\bfinancing\b
+        governance: (?i)\bgovernance\b
+        other: (?i)\bevent|announcement|transaction\b
   qa_rules:
     materiality_score_min: 0
     materiality_score_max: 5
@@ -55,8 +64,18 @@ fields:
   - prospects
   regex_patterns:
   - (?i)\b(up|down|flat)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/mdna_outlook_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      direction:
+        up: (?i)\bup\b
+        down: (?i)\bdown\b
+        flat: (?i)\bflat\b
+        mixed: (?i)\bmixed\b
+        unclear: (?i)\bunclear\b
+      confidence_score: (?i)\bconfidence\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -91,8 +110,16 @@ fields:
   - risk considerations
   regex_patterns:
   - (?i)\b(cybersecurity|litigation|regulatory|competition)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/risk_factor_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      categories:
+        cybersecurity: (?i)\bcybersecurity\b
+        litigation: (?i)\blitigation\b
+        regulatory: (?i)\bregulatory\b
+        competition: (?i)\bcompetition\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -123,8 +150,24 @@ fields:
   regex_patterns:
   - (?i)\b(passive|engaged|activist|control)\b
   - (?i)\b(board\s+seat|proxy\s+fight|group\s+formed|strategic\s+alternatives|merger)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/beneficial_ownership_intent_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      stance:
+        passive: (?i)\bpassive\b
+        engaged: (?i)\bengaged\b
+        activist: (?i)\bactivist\b
+        control: (?i)\bcontrol\b
+      group_formed:
+        true: (?i)\bgroup\s+formed\b
+        false: (?i)\bno\s+group\b
+      horizon:
+        short: (?i)\bshort\b
+        medium: (?i)\bmedium\b
+        long: (?i)\blong\b
+        unclear: (?i)\bunclear\b
   qa_rules:
     require_stance_enum: true
     require_group_flag: true
@@ -160,8 +203,18 @@ fields:
   - could not file
   regex_patterns:
   - (?i)\b(audit|transaction|valuation|system)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/delay_reason_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      reason_type:
+        audit: (?i)\baudit\b
+        transaction: (?i)\btransaction\b
+        valuation: (?i)\bvaluation\b
+        system: (?i)\bsystem\b
+        other: (?i)\bother\b
+      expected_days: (?i)\b(\d+)\s+calendar\s+days\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -189,8 +242,17 @@ fields:
   - proceeds
   regex_patterns:
   - (?i)\b(working capital|debt repayment|acquisition|general corporate)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/use_of_proceeds_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      working_capital_pct:
+        100: (?i)\bworking capital\b
+      debt_repayment_pct:
+        100: (?i)\bdebt repayment\b
+      acquisition_pct:
+        100: (?i)\bacquisition\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -217,8 +279,18 @@ fields:
   - board recommends
   regex_patterns:
   - (?i)\b(election|say on pay|equity plan|auditor)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/proxy_proposal_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      proposal_type:
+        election: (?i)\belection\b
+        say_on_pay: (?i)\bsay on pay\b
+        equity_plan: (?i)\bequity plan\b
+        auditor: (?i)\bauditor\b
+        other: (?i)\bother\b
+      support_pct: (?i)\b([0-9]+(?:\.[0-9]+)?)%
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -247,8 +319,17 @@ fields:
   - executive compensation
   regex_patterns:
   - (?i)\b(pay for performance|fixed pay|variable pay|equity pay)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/comp_policy_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      fixed_pay_pct: (?i)\bfixed pay\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)%\b
+      variable_pay_pct: (?i)\bvariable pay\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)%\b
+      equity_pay_pct: (?i)\bequity pay\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)%\b
+      pay_for_performance:
+        true: (?i)\bpay for performance\b
+        false: (?i)\bnot\s+pay\s+for\s+performance\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -278,8 +359,17 @@ fields:
   - fairness
   regex_patterns:
   - (?i)\b(cash merger|self tender|exchange offer|reverse split)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/tender_going_private_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      transaction_type:
+        merger: (?i)\bmerger\b
+        tender_offer: (?i)\btender offer\b
+        going_private: (?i)\bgoing private\b
+        other: (?i)\bother\b
+      premium_pct: (?i)\b([0-9]+(?:\.[0-9]+)?)%
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -308,8 +398,17 @@ fields:
   - funds
   regex_patterns:
   - (?i)\b(cash|margin loan|debt|seller financing)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/source_of_funds_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      cash_pct:
+        100: (?i)\bcash\b
+      debt_pct:
+        100: (?i)\bdebt|margin loan\b
+      other_pct:
+        100: (?i)\bseller financing|other\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -339,8 +438,25 @@ fields:
   - footnote
   regex_patterns:
   - (?i)\b(buy|sell|exercise|award|withholding|gift|conversion)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/insider_transaction_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      transaction_type:
+        purchase: (?i)\bbuy\b
+        sale: (?i)\bsell\b
+        award: (?i)\baward\b
+        exercise: (?i)\bexercise\b
+        other: (?i)\bwithholding|gift|conversion\b
+      ownership_form:
+        direct: (?i)\bdirectly\b
+        indirect: (?i)\bindirectly\b
+        mixed: (?i)\bmixed\b
+        unclear: (?i)\bunclear\b
+      is_derivative:
+        true: (?i)\bderivative\b
+        false: (?i)\bnon-derivative|directly|indirectly\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -370,8 +486,21 @@ fields:
   - officer
   regex_patterns:
   - (?i)\b(director|officer|ten percent holder)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/insider_role_ownership_structure_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      is_director:
+        true: (?i)\bdirector\b
+        false: (?i)\bnot\s+a\s+director\b
+      is_officer:
+        true: (?i)\bofficer\b
+        false: (?i)\bnot\s+an?\s+officer\b
+      is_ten_percent_owner:
+        true: (?i)\bten\s+percent\s+holder\b
+        false: (?i)\bnot\s+a\s+ten\s+percent\s+holder\b
+      vehicles: {}
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -399,8 +528,21 @@ fields:
   - sale reason
   regex_patterns:
   - (?i)\b(liquidity|diversification|tax|estate|pledge release)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/rule144_sale_plan_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      sale_reason:
+        liquidity: (?i)\bliquidity\b
+        tax: (?i)\btax\b
+        diversification: (?i)\bdiversification\b
+        estate: (?i)\bestate\b
+        other: (?i)\bpledge\s+release|other\b
+      plan_ratio: (?i)\b([0-9]+(?:\.[0-9]+)?)%
+      uses_10b5_1:
+        true: (?i)\b10b5-1\b
+        false: (?i)\bnot\s+10b5-1\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -428,8 +570,19 @@ fields:
   - manager
   regex_patterns:
   - (?i)\b(holdings|notice|combination)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/manager_structure_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      report_type:
+        single_manager: (?i)\bsingle\s+manager\b
+        multiple_manager: (?i)\bmultiple\s+managers?\b
+        other: (?i)\bholdings|notice|combination\b
+      manager_count: (?i)\b(\d+)\s+managers?\b
+      discretion_shared:
+        true: (?i)\bshared\s+discretion\b
+        false: (?i)\bsole\s+discretion\b
   qa_rules: {}
   span_policy:
     anchor_headers:
@@ -458,8 +611,22 @@ fields:
   regex_patterns:
   - (?i)\b(amendment|restatement|correction|addition|deletion)\b
   - (?i)\b(position\s+count\s+delta|value\s+delta|restatement\s+flag)\b
-  output_kind: text
+  output_kind: json
   output_schema: v1/amendment_scope_quant
+  normalizer_overrides:
+    mode: regex_json
+    field_patterns:
+      scope:
+        full: (?i)\bfull\s+amendment|full\s+restatement\b
+        partial: (?i)\bpartial\b
+        restatement: (?i)\brestatement\b
+        other: (?i)\bcorrection|addition|deletion|amendment\b
+      only_new_holdings:
+        true: (?i)\bonly\s+new\s+holdings\b
+        false: (?i)\bnot\s+only\s+new\s+holdings\b
+      only_restated_values:
+        true: (?i)\bonly\s+restated\s+values\b
+        false: (?i)\bnot\s+only\s+restated\s+values\b
   qa_rules:
     position_count_delta_nullable: true
     value_delta_usd_nullable: true

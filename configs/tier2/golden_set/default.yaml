@@ -6,7 +6,10 @@ cases:
     expected:
       mdna_outlook_quant:
         status: ok
-        value_text: up
+        value_json:
+          direction: up
+          confidence_score: null
+          summary: null
         truth_tier: gold
   - case_id: default-risk-factor-001
     route: issuer
@@ -15,7 +18,11 @@ cases:
     expected:
       risk_factor_quant:
         status: ok
-        value_text: cybersecurity
+        value_json:
+          categories:
+            - cybersecurity
+          severity: null
+          horizon: null
         truth_tier: gold
   - case_id: default-current-event-001
     route: issuer
@@ -26,7 +33,11 @@ cases:
     expected:
       current_event_quant:
         status: ok
-        value_text: event
+        value_json:
+          event_type: other
+          materiality_score: null
+          cash_impact_usd: null
+          dilution_pct: null
         truth_tier: gold
   - case_id: default-delay-reason-001
     route: issuer
@@ -35,7 +46,11 @@ cases:
     expected:
       delay_reason_quant:
         status: ok
-        value_text: audit
+        value_json:
+          reason_type: audit
+          severity: null
+          expected_days: null
+          needs_extension: null
         truth_tier: gold
   - case_id: default-use-of-proceeds-001
     route: issuer
@@ -44,7 +59,10 @@ cases:
     expected:
       use_of_proceeds_quant:
         status: ok
-        value_text: working capital
+        value_json:
+          working_capital_pct: 100
+          debt_repayment_pct: null
+          acquisition_pct: null
         truth_tier: gold
   - case_id: default-proxy-proposal-001
     route: issuer
@@ -53,7 +71,10 @@ cases:
     expected:
       proxy_proposal_quant:
         status: ok
-        value_text: election
+        value_json:
+          proposal_type: election
+          board_recommendation: null
+          support_pct: null
         truth_tier: gold
   - case_id: default-comp-policy-001
     route: issuer
@@ -62,7 +83,11 @@ cases:
     expected:
       comp_policy_quant:
         status: ok
-        value_text: pay for performance
+        value_json:
+          fixed_pay_pct: null
+          variable_pay_pct: null
+          equity_pay_pct: null
+          pay_for_performance: true
         truth_tier: gold
   - case_id: default-tender-gp-001
     route: issuer
@@ -71,7 +96,10 @@ cases:
     expected:
       tender_going_private_quant:
         status: ok
-        value_text: cash merger
+        value_json:
+          transaction_type: merger
+          fairness_opinion: null
+          premium_pct: null
         truth_tier: gold
   - case_id: default-beneficial-ownership-001
     route: owner
@@ -80,7 +108,10 @@ cases:
     expected:
       beneficial_ownership_intent_quant:
         status: ok
-        value_text: passive
+        value_json:
+          stance: passive
+          group_formed: null
+          horizon: null
         truth_tier: gold
   - case_id: default-insider-transaction-001
     route: owner
@@ -89,7 +120,10 @@ cases:
     expected:
       insider_transaction_quant:
         status: ok
-        value_text: buy
+        value_json:
+          transaction_type: purchase
+          ownership_form: null
+          is_derivative: null
         truth_tier: gold
   - case_id: default-insider-role-001
     route: owner
@@ -98,7 +132,11 @@ cases:
     expected:
       insider_role_ownership_structure_quant:
         status: ok
-        value_text: director
+        value_json:
+          is_director: true
+          is_officer: null
+          is_ten_percent_owner: null
+          vehicles: []
         truth_tier: gold
   - case_id: default-source-of-funds-001
     route: owner
@@ -107,7 +145,10 @@ cases:
     expected:
       source_of_funds_quant:
         status: ok
-        value_text: cash
+        value_json:
+          cash_pct: 100
+          debt_pct: null
+          other_pct: null
         truth_tier: gold
   - case_id: default-rule144-sale-plan-001
     route: owner
@@ -116,7 +157,10 @@ cases:
     expected:
       rule144_sale_plan_quant:
         status: ok
-        value_text: diversification
+        value_json:
+          sale_reason: diversification
+          plan_ratio: null
+          uses_10b5_1: null
         truth_tier: gold
   - case_id: default-manager-structure-001
     route: holding
@@ -125,7 +169,10 @@ cases:
     expected:
       manager_structure_quant:
         status: ok
-        value_text: holdings
+        value_json:
+          report_type: other
+          manager_count: null
+          discretion_shared: null
         truth_tier: gold
   - case_id: default-amendment-scope-001
     route: holding
@@ -134,6 +181,35 @@ cases:
     expected:
       amendment_scope_quant:
         status: ok
-        value_text: restatement
+        value_json:
+          scope: restatement
+          only_new_holdings: null
+          only_restated_values: null
         truth_tier: gold
 invariants: []
+phase_gates:
+  - name: default_vertical_slice
+    coverage:
+      total_cases: 15
+      total_candidates: 15
+      required_routes: [issuer, owner, holding]
+      required_fields:
+        - mdna_outlook_quant
+        - risk_factor_quant
+        - current_event_quant
+        - delay_reason_quant
+        - use_of_proceeds_quant
+        - proxy_proposal_quant
+        - comp_policy_quant
+        - tender_going_private_quant
+        - beneficial_ownership_intent_quant
+        - insider_transaction_quant
+        - insider_role_ownership_structure_quant
+        - source_of_funds_quant
+        - rule144_sale_plan_quant
+        - manager_structure_quant
+        - amendment_scope_quant
+    metrics:
+      pass_rate: 1.0
+      gold_strict_accuracy: 1.0
+      row_selection_accuracy: 1.0

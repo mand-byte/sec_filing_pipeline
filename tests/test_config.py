@@ -57,3 +57,47 @@ def test_settings_rejects_invalid_start_date_shape(monkeypatch) -> None:
         Settings()
 
     assert "START_DATE" in str(exc_info.value)
+
+
+def test_settings_builds_text_normalizer_from_legacy_llm_envs(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.delenv("TEXT_NORMALIZER_MODE", raising=False)
+    monkeypatch.delenv("TEXT_NORMALIZER_BASE_URL", raising=False)
+    monkeypatch.delenv("TEXT_NORMALIZER_MODEL", raising=False)
+    monkeypatch.delenv("TEXT_NORMALIZER_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("LLM_MODEL_NAME", "gpt-5.4")
+    monkeypatch.setenv("LLM_AUTH_KEY", "secret")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "12")
+
+    settings = Settings()
+
+    assert settings.text_normalizer_mode == "http_json"
+    assert settings.text_normalizer_base_url == "https://example.test/v1"
+    assert settings.text_normalizer_model == "gpt-5.4"
+    assert settings.text_normalizer_api_key == "secret"
+    assert settings.text_normalizer_timeout_seconds == 12.0
+
+
+def test_explicit_text_normalizer_env_overrides_legacy_llm_envs(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("TEXT_NORMALIZER_MODE", "unavailable")
+    monkeypatch.setenv("TEXT_NORMALIZER_BASE_URL", "https://normalizer.example/v1")
+    monkeypatch.setenv("TEXT_NORMALIZER_MODEL", "strict-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://legacy.example/v1")
+    monkeypatch.setenv("LLM_MODEL_NAME", "legacy-model")
+
+    settings = Settings()
+
+    assert settings.text_normalizer_mode == "unavailable"
+    assert settings.text_normalizer_base_url == "https://normalizer.example/v1"
+    assert settings.text_normalizer_model == "strict-model"
+
+
+def test_settings_loads_edgar_identity(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("EDGAR_IDENTITY", "Example Ops ops@example.test")
+
+    settings = Settings()
+
+    assert settings.edgar_identity == "Example Ops ops@example.test"

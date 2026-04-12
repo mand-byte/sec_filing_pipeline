@@ -1,0 +1,26 @@
+cohorts:
+  - name: phase1_deterministic
+    description: Phase 1 deterministic seed cohort from the approved DEMANDS/full-demand plan.
+    routes:
+      - issuer
+      - owner
+      - holding
+    tickers:
+      - MSFT
+      - AAPL
+      - AMZN
+      - NVDA
+      - TSLA
+  - name: phase2_financial
+    description: Phase 2 financial and ADR/foreign expansion cohort from the approved DEMANDS/full-demand plan.
+    routes:
+      - issuer
+    tickers:
+      - JPM
+      - BAC
+      - WFC
+      - GS
+      - MS
+      - C
+      - JEF
+      - LAZ

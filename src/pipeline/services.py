@@ -47,6 +47,13 @@ class PersistenceService:
         self.session = session
 
     @staticmethod
+    def _bounded_text(value: str | None, *, limit: int) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        return text[:limit]
+
+    @staticmethod
     def _effective_source_locator_json(evidence: EvidenceInput) -> str:
         if evidence.source_locator_json is not None:
             return evidence.source_locator_json
@@ -137,6 +144,7 @@ class PersistenceService:
                     created_at=now,
                 )
             )
+            self.session.flush()
 
         evidence_rows_by_key: dict[tuple[str, str], ExtractionEvidence] = {}
         for evidence in evidences:
@@ -171,10 +179,10 @@ class PersistenceService:
                     field_name=evidence.field_name,
                     subject_key=evidence.subject_key,
                     locator_kind=evidence.locator_kind,
-                    source_section=evidence.source_section,
-                    source_item_no=evidence.source_item_no,
+                    source_section=self._bounded_text(evidence.source_section, limit=128),
+                    source_item_no=self._bounded_text(evidence.source_item_no, limit=32),
                     source_xpath=evidence.source_xpath,
-                    xbrl_concept=evidence.xbrl_concept,
+                    xbrl_concept=self._bounded_text(evidence.xbrl_concept, limit=128),
                     source_span=evidence.source_span,
                     source_locator_json=source_locator_json,
                     source_heading_path_json=evidence.source_heading_path_json,

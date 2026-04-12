@@ -9,11 +9,15 @@ from typing import Literal, TypedDict
 from src.pipeline.extraction.text_contracts import SpanPolicy, TextFieldSpec, TextLocatorKind
 from src.pipeline.extraction.text_locators import run_text_locator
 from src.pipeline.extraction.text_normalization import (
+    HttpJsonSpanNormalizer,
     NormalizationFailure,
+    NormalizationOutcome,
+    RegexJsonSpanNormalizer,
     SelectedSpan,
     SpanNormalizer,
     UnavailableSpanNormalizer,
     merge_selection_trace,
+    normalizer_from_settings,
 )
 from src.pipeline.extraction.text_schemas import validate_text_schema_value
 
@@ -46,6 +50,23 @@ TextExtractionOutcome = TextExtractionOk | TextExtractionFailure
 class TextExtractionEngine:
     def __init__(self, *, normalizer: SpanNormalizer | None = None):
         self._normalizer = normalizer
+
+    def _effective_normalizer(self, *, field_spec: TextFieldSpec) -> SpanNormalizer:
+        if self._normalizer is not None:
+            return self._normalizer
+        mode = str(field_spec.normalizer_overrides.get("mode", "")).strip().lower() if field_spec.normalizer_overrides else ""
+        if mode == "regex_json":
+            return RegexJsonSpanNormalizer()
+        if mode == "http_json":
+            configured = normalizer_from_settings()
+            if isinstance(configured, HttpJsonSpanNormalizer):
+                return configured
+            return UnavailableSpanNormalizer()
+        if field_spec.output_kind == "json":
+            configured = normalizer_from_settings()
+            if isinstance(configured, HttpJsonSpanNormalizer):
+                return configured
+        return UnavailableSpanNormalizer()
 
     def _heading_path_json(self, *, window_hit: Mapping[str, object]) -> str:
         locator_path = str(window_hit["locator_path"])
@@ -162,6 +183,129 @@ class TextExtractionEngine:
             "retry_history_json": selected_span.retry_history_json,
             "selection_trace_json": selected_span.selection_trace_json,
         }
+
+    def _normalizer_input_candidates(self, *, selected_span: SelectedSpan, span_policy: SpanPolicy | None) -> list[tuple[int, str]]:
+        window_text = (
+            selected_span.normalizer_window_text
+            or selected_span.normalizer_input_text
+            or selected_span.value_text
+        )
+        blocks = [line.strip() for line in window_text.splitlines() if line.strip()]
+        if not blocks:
+            return [(0, window_text)]
+
+        selected_value = selected_span.value_text.casefold()
+        anchor_index = 0
+        if selected_value:
+            for index, block in enumerate(blocks):
+                if selected_value in block.casefold():
+                    anchor_index = index
+                    break
+
+        configured_steps = span_policy.expand_steps if span_policy is not None else ()
+        steps = sorted({0, *(step for step in configured_steps if step >= 0)})
+        candidates: list[tuple[int, str]] = []
+        seen: set[str] = set()
+        for step in steps:
+            start_index = max(0, anchor_index - step)
+            end_index = min(len(blocks), anchor_index + step + 1)
+            candidate_text = "\n".join(blocks[start_index:end_index]).strip()
+            if candidate_text and candidate_text not in seen:
+                seen.add(candidate_text)
+                candidates.append((step, candidate_text))
+
+        return candidates or [(0, window_text)]
+
+    def _retry_directive(
+        self,
+        *,
+        adequacy_signals_json: str | None,
+        current_index: int,
+        candidate_count: int,
+    ) -> tuple[str, int, str] | None:
+        if candidate_count <= 1 or not adequacy_signals_json:
+            return None
+        try:
+            payload = json.loads(adequacy_signals_json)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        if payload.get("multiple_candidate_targets") is True and current_index > 0:
+            return ("contract", current_index - 1, "multiple_candidate_targets")
+
+        confidence = payload.get("confidence")
+        low_confidence = isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and confidence < 0.5
+        if (payload.get("sufficient_context") is False or low_confidence) and current_index + 1 < candidate_count:
+            reason = "low_confidence" if low_confidence else "sufficient_context_false"
+            return ("expand", current_index + 1, reason)
+
+        return None
+
+    def _normalize_with_optional_retry(
+        self,
+        *,
+        normalizer: SpanNormalizer,
+        field_spec: TextFieldSpec,
+        selected_span: SelectedSpan,
+    ) -> NormalizationOutcome:
+        if not field_spec.output_schema:
+            return NormalizationFailure(error_code="NORMALIZATION_FAILED")
+
+        candidates = self._normalizer_input_candidates(
+            selected_span=selected_span,
+            span_policy=field_spec.span_policy,
+        )
+        current_index = 0
+        step, input_text = candidates[current_index]
+        normalization = normalizer.normalize(
+            field_spec=field_spec,
+            schema_ref=field_spec.output_schema,
+            selected_span=replace(selected_span, normalizer_input_text=input_text),
+        )
+        if isinstance(normalization, NormalizationFailure):
+            return normalization
+
+        attempt_history = [
+            {
+                "attempt": 1,
+                "action": "initial",
+                "span_step": step,
+                "input_length": len(input_text),
+            }
+        ]
+        directive = self._retry_directive(
+            adequacy_signals_json=normalization.adequacy_signals_json,
+            current_index=current_index,
+            candidate_count=len(candidates),
+        )
+        if directive is None:
+            return normalization
+
+        action, retry_index, reason = directive
+        retry_step, retry_input_text = candidates[retry_index]
+        retry_normalization = normalizer.normalize(
+            field_spec=field_spec,
+            schema_ref=field_spec.output_schema,
+            selected_span=replace(selected_span, normalizer_input_text=retry_input_text),
+        )
+        if isinstance(retry_normalization, NormalizationFailure):
+            return retry_normalization
+
+        attempt_history.append(
+            {
+                "attempt": 2,
+                "action": action,
+                "span_step": retry_step,
+                "reason": reason,
+                "input_length": len(retry_input_text),
+            }
+        )
+        return replace(
+            retry_normalization,
+            retry_history_json=json.dumps(attempt_history, ensure_ascii=False, sort_keys=True),
+        )
 
     def _select_candidate(self, *, filing: object, field_spec: TextFieldSpec) -> SelectedSpan | TextExtractionFailure:
         best_failure: str = "PATTERN_NOT_MATCHED"
@@ -288,6 +432,7 @@ class TextExtractionEngine:
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
+                    normalizer_window_text=window_text,
                 )
 
         if not saw_window:
@@ -305,10 +450,10 @@ class TextExtractionEngine:
         if field_spec.output_kind != "json" or not field_spec.output_schema:
             return {"status": "error", "error_code": "NORMALIZATION_FAILED"}
 
-        normalizer = self._normalizer or UnavailableSpanNormalizer()
-        normalization = normalizer.normalize(
+        normalizer = self._effective_normalizer(field_spec=field_spec)
+        normalization = self._normalize_with_optional_retry(
+            normalizer=normalizer,
             field_spec=field_spec,
-            schema_ref=field_spec.output_schema,
             selected_span=selection,
         )
         if isinstance(normalization, NormalizationFailure):
@@ -324,6 +469,13 @@ class TextExtractionEngine:
         adequacy_payload = json.loads(selection.adequacy_signals_json)
         if not isinstance(adequacy_payload, dict):
             adequacy_payload = {}
+        if normalization.adequacy_signals_json is not None:
+            try:
+                provider_adequacy_payload = json.loads(normalization.adequacy_signals_json)
+            except json.JSONDecodeError:
+                provider_adequacy_payload = None
+            if isinstance(provider_adequacy_payload, dict):
+                adequacy_payload.update(provider_adequacy_payload)
         adequacy_payload["schema_validation_passed"] = True
         adequacy_payload["output_schema"] = field_spec.output_schema
 

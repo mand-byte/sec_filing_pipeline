@@ -27,6 +27,19 @@ class SecurityUniverseRow:
     delisted_utc: datetime | None
 
 
+def _dedupe_security_rows(rows: list[SecurityUniverseRow]) -> list[SecurityUniverseRow]:
+    deduped: dict[tuple[str, str], SecurityUniverseRow] = {}
+    for row in rows:
+        key = (row.cik, row.composite_figi)
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = row
+            continue
+        if row.active and not existing.active:
+            deduped[key] = row
+    return sorted(deduped.values(), key=lambda row: (row.cik, row.composite_figi))
+
+
 def _normalize_to_utc(value: object) -> datetime | None:
     if value is None:
         return None
@@ -59,13 +72,19 @@ def _coerce_bool(value: object) -> bool:
     return False
 
 
+def _coerce_text(value: object) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore").rstrip("\x00")
+    return str(value)
+
+
 def _load_from_security_master(session: Session) -> list[SecurityUniverseRow]:
     rows = (
         session.query(SecurityMaster)
         .order_by(SecurityMaster.cik.asc(), SecurityMaster.composite_figi.asc())
         .all()
     )
-    return [
+    return _dedupe_security_rows([
         SecurityUniverseRow(
             ticker=row.ticker,
             composite_figi=row.composite_figi,
@@ -74,7 +93,7 @@ def _load_from_security_master(session: Session) -> list[SecurityUniverseRow]:
             delisted_utc=_normalize_to_utc(row.delisted_utc),
         )
         for row in rows
-    ]
+    ])
 
 
 def _rows_from_clickhouse_result(result: Any) -> list[dict[str, Any]]:
@@ -82,12 +101,19 @@ def _rows_from_clickhouse_result(result: Any) -> list[dict[str, Any]]:
         return []
 
     named_results = getattr(result, "named_results", None)
+    if callable(named_results):
+        try:
+            named_results = named_results()
+        except Exception:
+            named_results = None
     if isinstance(named_results, list):
-        return [dict(row) for row in named_results if isinstance(row, dict)]
+        normalized_named = [dict(row) for row in named_results if isinstance(row, dict)]
+        if normalized_named:
+            return normalized_named
 
     result_rows = getattr(result, "result_rows", None)
     column_names = getattr(result, "column_names", None)
-    if isinstance(result_rows, list) and isinstance(column_names, list):
+    if isinstance(result_rows, list) and isinstance(column_names, (list, tuple)):
         normalized_rows: list[dict[str, Any]] = []
         for row in result_rows:
             if isinstance(row, (list, tuple)) and len(row) == len(column_names):
@@ -123,15 +149,15 @@ def _load_from_clickhouse(settings: Settings) -> list[SecurityUniverseRow] | Non
 
     normalized_rows = [
         SecurityUniverseRow(
-            ticker=str(row["ticker"]),
-            composite_figi=str(row["composite_figi"]),
-            cik=str(row["cik"]),
+            ticker=_coerce_text(row["ticker"]),
+            composite_figi=_coerce_text(row["composite_figi"]),
+            cik=_coerce_text(row["cik"]),
             active=_coerce_bool(row["active"]),
             delisted_utc=_normalize_to_utc(row.get("delisted_utc")),
         )
         for row in rows
     ]
-    return sorted(normalized_rows, key=lambda row: (row.cik, row.composite_figi))
+    return _dedupe_security_rows(normalized_rows)
 
 
 def load_security_universe(*, session: Session, settings: Settings) -> list[SecurityUniverseRow]:
@@ -154,15 +180,19 @@ def load_security_universe(*, session: Session, settings: Settings) -> list[Secu
     try:
         rows = session.execute(query).mappings().all()
     except SQLAlchemyError:
+        try:
+            session.rollback()
+        except Exception:
+            pass
         return _load_from_security_master(session)
 
-    return [
+    return _dedupe_security_rows([
         SecurityUniverseRow(
-            ticker=str(row["ticker"]),
-            composite_figi=str(row["composite_figi"]),
-            cik=str(row["cik"]),
+            ticker=_coerce_text(row["ticker"]),
+            composite_figi=_coerce_text(row["composite_figi"]),
+            cik=_coerce_text(row["cik"]),
             active=_coerce_bool(row["active"]),
             delisted_utc=_normalize_to_utc(row.get("delisted_utc")),
         )
         for row in rows
-    ]
+    ])

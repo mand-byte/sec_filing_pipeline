@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -152,6 +153,9 @@ def test_build_bundles_from_provider_emits_form4_transaction_rows(monkeypatch) -
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("insider_transaction_quant", "document")] == "buy"
     assert text_facts[("insider_role_ownership_structure_quant", "document")] == "director"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundle.facts if fact.value_json is not None}
+    assert json.loads(json_facts[("insider_transaction_quant", "document")])["transaction_type"] == "purchase"
+    assert json.loads(json_facts[("insider_role_ownership_structure_quant", "document")])["is_director"] is True
 
     evidence_keys = {(e.field_name, e.subject_key) for e in bundle.evidences}
     assert ("transaction_price_per_share", "txn:1") in evidence_keys
@@ -640,8 +644,12 @@ def test_build_bundles_from_provider_emits_13g_owner_rows(monkeypatch) -> None:
     assert numeric_facts[("shared_voting_power", "filer:1")] == 34567.0
     assert numeric_facts[("sole_dispositive_power", "filer:1")] == 1100000.0
     assert numeric_facts[("shared_dispositive_power", "filer:1")] == 14567.0
+    numeric_fact_keys = [(fact.field_name, fact.subject_key) for fact in bundle.facts if fact.value_numeric is not None]
+    assert len(numeric_fact_keys) == len(set(numeric_fact_keys))
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("beneficial_ownership_intent_quant", "document")] == "passive"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundle.facts if fact.value_json is not None}
+    assert json.loads(json_facts[("beneficial_ownership_intent_quant", "document")])["stance"] == "passive"
     assert repo.logs == []
 
 
@@ -835,6 +843,8 @@ def test_build_bundles_from_provider_preserves_13d_text_when_schedule_bundle_vio
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
     assert text_facts[("source_of_funds_quant", "document")] == "Cash"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("source_of_funds_quant", "document")])["cash_pct"] == 100
     numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
     assert ("beneficially_owned_shares", "document") not in numeric_fields
     assert repo.logs[-1]["error_type"] == "SPECIALIZED_SUBJECT_CONTRACT_VIOLATION"
@@ -1096,6 +1106,8 @@ def test_build_bundles_from_provider_emits_13d_owner_rows_and_funds(monkeypatch)
     assert numeric_facts[("aggregate_purchase_price", "filer:1")] == 1250000.0
     assert numeric_facts[("aggregate_purchase_price", "filer:2")] == 950000.0
     assert ("aggregate_purchase_price", "document") not in numeric_facts
+    numeric_fact_keys = [(fact.field_name, fact.subject_key) for fact in bundle.facts if fact.value_numeric is not None]
+    assert len(numeric_fact_keys) == len(set(numeric_fact_keys))
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("beneficial_ownership_intent_quant", "document")] == "activist"
     assert text_facts[("source_of_funds_quant", "document")] == "Cash"
@@ -1264,6 +1276,8 @@ def test_build_bundles_from_provider_emits_form144_sale_notice_rows(monkeypatch)
     assert facts[("market_value_sold_past_3m", "sold_past_3m:1")] == 410000.0
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("rule144_sale_plan_quant", "document")] == "diversification"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundle.facts if fact.value_json is not None}
+    assert json.loads(json_facts[("rule144_sale_plan_quant", "document")])["sale_reason"] == "diversification"
     assert repo.logs == []
 
 

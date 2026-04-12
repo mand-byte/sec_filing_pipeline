@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Mapping
+from types import MappingProxyType
+from typing import Any, Literal, Mapping
 
 RouteName = Literal["issuer", "owner", "holding"]
 TextLocatorKind = Literal["item_window", "section_window", "parse_text_window"]
@@ -44,6 +45,7 @@ class TextFieldSpec:
     output_schema: str | None = None
     span_policy: SpanPolicy | None = None
     implemented: bool = True
+    normalizer_overrides: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         field_name = self.field_name.strip()
@@ -70,6 +72,7 @@ class TextFieldSpec:
         output_schema = self.output_schema.strip() if isinstance(self.output_schema, str) else None
         if self.output_kind == "json" and not output_schema:
             raise ValueError("json text fields must define output_schema")
+        normalizer_overrides = dict(self.normalizer_overrides or {})
 
         object.__setattr__(self, "field_name", field_name)
         object.__setattr__(self, "form_families", form_families)
@@ -77,6 +80,7 @@ class TextFieldSpec:
         object.__setattr__(self, "anchor_terms", anchor_terms)
         object.__setattr__(self, "regex_patterns", regex_patterns)
         object.__setattr__(self, "output_schema", output_schema)
+        object.__setattr__(self, "normalizer_overrides", MappingProxyType(normalizer_overrides))
         object.__setattr__(self, "qa_rules", MappingProxyType(dict(self.qa_rules)))
 
 

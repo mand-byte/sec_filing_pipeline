@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+import os
 from typing import Any
 
 from src.pipeline.extraction.registry import all_numeric_field_specs
@@ -125,7 +126,13 @@ def _first_int_attribute(target: object, *names: str) -> int | None:
     return None
 
 
-def fetch_filings_for_security(*, security: Any, route: str, start_accepted_at: datetime) -> list[FilingEnvelope]:
+def fetch_filings_for_security(
+    *,
+    security: Any,
+    route: str,
+    start_accepted_at: datetime,
+    identity: str | None = None,
+) -> list[FilingEnvelope]:
     forms = _route_forms(route)
     if not forms:
         return []
@@ -135,15 +142,23 @@ def fetch_filings_for_security(*, security: Any, route: str, start_accepted_at: 
         return []
 
     try:
-        from edgar import Company
+        import edgar
     except Exception:
         return []
+    Company = getattr(edgar, "Company", None)
+    if Company is None:
+        return []
+    set_identity = getattr(edgar, "set_identity", None)
+
+    effective_identity = (identity or os.environ.get("EDGAR_IDENTITY") or "").strip()
+    if effective_identity and callable(set_identity):
+        set_identity(effective_identity)
 
     try:
         company = Company(str(cik))
         filings = company.get_filings(form=list(forms))
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError(f"edgar fetch failed for cik={cik} route={route}: {exc}") from exc
 
     start_utc = _normalize_to_utc(start_accepted_at)
     envelopes: list[FilingEnvelope] = []

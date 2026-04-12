@@ -50,6 +50,7 @@ def write_run_artifacts(
     silver_alignment: list[dict[str, Any]] | None = None,
     invariants: list[dict[str, Any]] | None = None,
     review_packets: list[dict[str, Any]] | None = None,
+    phase_gates: list[dict[str, Any]] | None = None,
 ) -> None:
     run_dir = _resolve_run_dir(base_dir=base_dir, run_id=run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -59,6 +60,7 @@ def write_run_artifacts(
     silver_alignment_payload = silver_alignment or []
     invariant_payload = invariants or []
     review_packet_payload = review_packets or []
+    phase_gate_payload = phase_gates or []
 
     (run_dir / "manifest.json").write_text(
         json.dumps(manifest_payload, ensure_ascii=False, indent=2),
@@ -74,6 +76,10 @@ def write_run_artifacts(
     )
     (run_dir / "coverage.json").write_text(
         json.dumps(coverage_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "phase_gates.json").write_text(
+        json.dumps(phase_gate_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

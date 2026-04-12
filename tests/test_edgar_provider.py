@@ -25,6 +25,15 @@ class FakeCompany:
         ]
 
 
+class RaisingCompany:
+    def __init__(self, cik: str):
+        self.cik = cik
+
+    def get_filings(self, *, form: list[str]) -> list[object]:
+        del form
+        raise RuntimeError("identity missing")
+
+
 def test_fetch_filings_for_security_populates_filing_metadata(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=FakeCompany))
 
@@ -39,3 +48,31 @@ def test_fetch_filings_for_security_populates_filing_metadata(monkeypatch) -> No
     assert envelope.filed_at == datetime(2024, 5, 1, tzinfo=timezone.utc)
     assert envelope.period_end == datetime(2024, 3, 31, tzinfo=timezone.utc)
     assert envelope.amendment_no == 2
+
+
+def test_fetch_filings_for_security_applies_identity_and_surfaces_provider_error(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_set_identity(identity: str) -> None:
+        captured["identity"] = identity
+
+    monkeypatch.setitem(
+        sys.modules,
+        "edgar",
+        SimpleNamespace(Company=RaisingCompany, set_identity=fake_set_identity),
+    )
+
+    try:
+        fetch_filings_for_security(
+            security=SimpleNamespace(cik="0000789019"),
+            route="issuer",
+            start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+            identity="Example Ops ops@example.test",
+        )
+    except RuntimeError as exc:
+        assert "edgar fetch failed" in str(exc)
+        assert "identity missing" in str(exc)
+    else:
+        raise AssertionError("expected runtime provider error")
+
+    assert captured["identity"] == "Example Ops ops@example.test"

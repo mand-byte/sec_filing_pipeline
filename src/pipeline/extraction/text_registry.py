@@ -74,6 +74,7 @@ def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
                 output_kind=str(raw_entry.get("output_kind", "text")),
                 qa_rules=dict(raw_entry.get("qa_rules", {})),
                 output_schema=output_schema_ref,
+                normalizer_overrides=dict(raw_entry.get("normalizer_overrides", {})),
                 span_policy=span_policy,
                 implemented=implemented,
             )

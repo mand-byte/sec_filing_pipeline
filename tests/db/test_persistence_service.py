@@ -146,6 +146,70 @@ def test_persist_filing_bundle_preserves_rich_text_evidence_metadata() -> None:
     assert evidence.selection_trace_json == '{"selected_value":"event"}'
 
 
+def test_persist_filing_bundle_truncates_bounded_evidence_metadata() -> None:
+    session = _session()
+    service = PersistenceService(session)
+    long_section = "Section " + ("A" * 200)
+    long_item = "1." + ("2" * 50)
+    long_concept = "us-gaap:" + ("Revenue" * 30)
+
+    service.persist_filing_bundle(
+        filing=_filing(),
+        route="issuer",
+        facts=[FactInput(field_name="current_event_quant", value_text="event", confidence=0.99)],
+        evidences=[
+            EvidenceInput(
+                field_name="current_event_quant",
+                locator_kind="section_window",
+                source_span="12:17",
+                source_section=long_section,
+                source_item_no=long_item,
+                xbrl_concept=long_concept,
+                source_xpath="sections[Current report]",
+                raw_value="event",
+                normalized_value="event",
+            )
+        ],
+    )
+
+    evidence = session.query(ExtractionEvidence).one()
+    assert evidence.source_section == long_section[:128]
+    assert evidence.source_item_no == long_item[:32]
+    assert evidence.xbrl_concept == long_concept[:128]
+
+
+def test_persist_filing_bundle_flushes_filing_document_before_evidence_rows() -> None:
+    session = _session()
+    service = PersistenceService(session)
+    flush_snapshots: list[list[str]] = []
+    original_flush = session.flush
+
+    def recording_flush(*args, **kwargs):
+        flush_snapshots.append(sorted(type(obj).__name__ for obj in session.new))
+        return original_flush(*args, **kwargs)
+
+    session.flush = recording_flush  # type: ignore[method-assign]
+
+    service.persist_filing_bundle(
+        filing=_filing(),
+        route="issuer",
+        facts=[FactInput(field_name="current_event_quant", value_text="event", confidence=0.99)],
+        evidences=[
+            EvidenceInput(
+                field_name="current_event_quant",
+                locator_kind="section_window",
+                source_span="12:17",
+                source_xpath="sections[Current report]",
+                raw_value="event",
+                normalized_value="event",
+            )
+        ],
+    )
+
+    assert flush_snapshots[0] == ["FilingDocument"]
+    assert "ExtractionEvidence" in flush_snapshots[1]
+
+
 def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:
     session = _session()
     service = PersistenceService(session)

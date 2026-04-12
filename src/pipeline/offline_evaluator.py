@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from src.pipeline.edgar_provider import classify_form_family
+from src.pipeline.strict_v2_gates import evaluate_phase_gates
+from src.pipeline.strict_v2_summary import build_strict_v2_summary
 from src.pipeline.extraction.text_contracts import TextFieldSpec
 from src.pipeline.extraction.text_engine import TextExtractionEngine
 from src.pipeline.extraction.text_registry import all_text_field_specs
@@ -81,6 +83,33 @@ def _as_string_tuple(values: object) -> tuple[str, ...]:
     return tuple(str(value) for value in values)
 
 
+def _validate_field_override_shape(*, field_name: str, override: Mapping[str, Any]) -> None:
+    required_keys = (
+        "route",
+        "form_families",
+        "locators",
+        "anchor_terms",
+        "regex_patterns",
+        "output_kind",
+        "qa_rules",
+    )
+    missing_keys = [key for key in required_keys if key not in override]
+    if missing_keys:
+        raise ValueError(
+            f"tier2 regex field override must be self-sufficient for {field_name}: "
+            + ", ".join(missing_keys)
+        )
+
+    output_kind = str(override.get("output_kind", "")).strip().lower()
+    if output_kind == "json":
+        json_required = [key for key in ("output_schema", "normalizer_overrides") if key not in override]
+        if json_required:
+            raise ValueError(
+                f"tier2 regex json field override must define {field_name}: "
+                + ", ".join(json_required)
+            )
+
+
 def _apply_field_override(spec: TextFieldSpec, override: Mapping[str, Any]) -> TextFieldSpec:
     route = str(override.get("route", spec.route))
 
@@ -97,11 +126,17 @@ def _apply_field_override(spec: TextFieldSpec, override: Mapping[str, Any]) -> T
     regex_patterns = _as_string_tuple(regex_patterns_value)
 
     output_kind = str(override.get("output_kind", spec.output_kind))
+    output_schema = override.get("output_schema", spec.output_schema)
+    output_schema_ref = str(output_schema).strip() if isinstance(output_schema, str) and output_schema.strip() else None
 
     qa_rules_raw = override.get("qa_rules", spec.qa_rules)
     if not isinstance(qa_rules_raw, Mapping):
         raise ValueError("qa_rules override must be a mapping")
     qa_rules = dict(qa_rules_raw)
+    normalizer_overrides_raw = override.get("normalizer_overrides", spec.normalizer_overrides or {})
+    if not isinstance(normalizer_overrides_raw, Mapping):
+        raise ValueError("normalizer_overrides must be a mapping")
+    normalizer_overrides = dict(normalizer_overrides_raw)
 
     return TextFieldSpec(
         field_name=spec.field_name,
@@ -112,6 +147,8 @@ def _apply_field_override(spec: TextFieldSpec, override: Mapping[str, Any]) -> T
         regex_patterns=regex_patterns,
         output_kind=output_kind,  # type: ignore[arg-type]
         qa_rules=qa_rules,
+        output_schema=output_schema_ref,
+        normalizer_overrides=normalizer_overrides,
     )
 
 
@@ -127,6 +164,7 @@ def _build_spec_map(regex_config: Mapping[str, Any]) -> dict[FieldKey, TextField
         field_name = str(field_name_raw)
         if not isinstance(override_raw, Mapping):
             continue
+        _validate_field_override_shape(field_name=field_name, override=override_raw)
 
         target_route_raw = override_raw.get("route")
         if target_route_raw is not None:
@@ -296,6 +334,11 @@ def run_offline_tier2_evaluation(
     silver_alignment: list[dict[str, Any]] = []
     invariants: list[dict[str, Any]] = []
     review_packets: list[dict[str, Any]] = []
+    selected_fields: set[str] = set()
+    selected_routes: set[str] = set()
+    selected_form_types: set[str] = set()
+    selected_ciks: set[str] = set()
+    selected_filing_years: set[str] = set()
 
     total_cases = 0
 
@@ -337,11 +380,22 @@ def run_offline_tier2_evaluation(
             continue
 
         total_cases += 1
+        selected_routes.add(route)
+        selected_form_types.add(form_type)
+        cik = str(case_raw.get("cik", "")).strip()
+        if cik:
+            selected_ciks.add(cik)
+        for date_key in ("accepted_at", "filed_at", "period_end"):
+            date_value = str(case_raw.get(date_key, "")).strip()
+            if len(date_value) >= 4 and date_value[:4].isdigit():
+                selected_filing_years.add(date_value[:4])
+                break
 
         for field_name in sorted(str(field_name_raw) for field_name_raw in expected_raw.keys()):
             expected_value_raw = expected_raw[field_name]
             if selected_field and field_name != selected_field:
                 continue
+            selected_fields.add(field_name)
 
             expected_value: dict[str, Any] = (
                 dict(expected_value_raw)
@@ -488,36 +542,61 @@ def run_offline_tier2_evaluation(
     silver_total = len(silver_applicable)
     invariant_total = len(invariant_pass_fail)
 
-    summary = {
-        "run_id": run_id_value,
-        "selectors": {
+    coverage = {
+        "total_cases": total_cases,
+        "total_candidates": total_candidates,
+        "gold_applicable_rows": gold_total,
+        "silver_applicable_rows": silver_total,
+        "invariant_rows": invariant_total,
+        "distinct_ciks": len(selected_ciks),
+        "distinct_filing_years": len(selected_filing_years),
+    }
+    metrics = {
+        "passed": total_passed,
+        "failed": total_failures,
+        "pass_rate": pass_rate,
+        "min_pass_rate": min_pass_rate,
+        "passes_threshold": pass_rate >= min_pass_rate,
+        "regressions": regressions,
+        "gold_strict_accuracy": (len(gold_matched) / gold_total) if gold_total else 0.0,
+        "gold_coverage": (len(gold_ok) / gold_total) if gold_total else 0.0,
+        "row_selection_accuracy": (len(gold_matched) / gold_total) if gold_total else 0.0,
+        "not_applicable_precision": 1.0,
+        "silver_alignment": (len(silver_matched) / silver_total) if silver_total else 0.0,
+        "invariant_pass_rate": (len(invariant_passed) / invariant_total) if invariant_total else 0.0,
+    }
+    phase_gates = evaluate_phase_gates(
+        gates_raw=golden_set.get("phase_gates", []),
+        coverage=coverage,
+        metrics=metrics,
+        set_values={
+            "required_fields": selected_fields,
+            "required_routes": selected_routes,
+            "required_form_types": selected_form_types,
+            "required_ciks": selected_ciks,
+            "required_filing_years": selected_filing_years,
+        },
+        selector_context={
             "route": selectors.route,
             "form_family": selectors.form_family,
             "field_name": selectors.field_name,
             "case_id": selectors.case_id,
         },
-        "coverage": {
-            "total_cases": total_cases,
-            "total_candidates": total_candidates,
-            "gold_applicable_rows": gold_total,
-            "silver_applicable_rows": silver_total,
-            "invariant_rows": invariant_total,
+    )
+    failed_phase_gates = [gate for gate in phase_gates if gate.get("status") == "failed"]
+
+    summary = build_strict_v2_summary(
+        run_id=run_id_value,
+        selectors={
+            "route": selectors.route,
+            "form_family": selectors.form_family,
+            "field_name": selectors.field_name,
+            "case_id": selectors.case_id,
         },
-        "metrics": {
-            "passed": total_passed,
-            "failed": total_failures,
-            "pass_rate": pass_rate,
-            "min_pass_rate": min_pass_rate,
-            "passes_threshold": pass_rate >= min_pass_rate,
-            "regressions": regressions,
-            "gold_strict_accuracy": (len(gold_matched) / gold_total) if gold_total else 0.0,
-            "gold_coverage": (len(gold_ok) / gold_total) if gold_total else 0.0,
-            "row_selection_accuracy": (len(gold_matched) / gold_total) if gold_total else 0.0,
-            "not_applicable_precision": 1.0,
-            "silver_alignment": (len(silver_matched) / silver_total) if silver_total else 0.0,
-            "invariant_pass_rate": (len(invariant_passed) / invariant_total) if invariant_total else 0.0,
-        },
-    }
+        coverage=coverage,
+        metrics=metrics,
+        phase_gates=phase_gates,
+    )
 
     write_run_artifacts(
         base_dir=artifacts_dir,
@@ -539,11 +618,15 @@ def run_offline_tier2_evaluation(
         silver_alignment=silver_alignment,
         invariants=invariants,
         review_packets=review_packets,
+        phase_gates=phase_gates,
     )
 
     if regressions:
         raise ValueError(f"baseline regression detected for fields: {', '.join(regressions)}")
     if pass_rate < min_pass_rate:
         raise ValueError(f"pass_rate {pass_rate:.4f} below threshold {min_pass_rate:.4f}")
+    if failed_phase_gates:
+        gate_names = ", ".join(str(gate.get("name")) for gate in failed_phase_gates)
+        raise ValueError(f"phase gate failure: {gate_names}")
 
     return OfflineEvalResult(run_id=run_id_value, summary=summary)

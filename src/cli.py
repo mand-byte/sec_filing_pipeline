@@ -6,22 +6,26 @@ from pathlib import Path
 from typing import Any, cast
 
 import typer
-from sqlalchemy import func, select
 
 from src.config import Settings
-from src.db.rollout import describe_rollout_assets
-from src.db.models import FilingAttempt, PipelineLog
+from src.db.rollout import apply_rollout_assets, describe_rollout_assets, dry_run_rollout_result, init_database_schema
 from src.db.repositories import PipelineRepository
-from src.db.session import get_session_factory
+from src.db.session import build_engine, get_session_factory
 from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
 from src.pipeline.extraction._config import tier2_path
 from src.pipeline.extraction.bundles import (
     coerce_numeric_value,
 )
 from src.pipeline.extraction.provider import build_bundles_from_provider
+from src.pipeline.extraction.text_normalization import normalizer_from_settings
 from src.pipeline.offline_artifacts import write_run_artifacts
 from src.pipeline.offline_evaluator import OfflineEvalSelectors, run_offline_tier2_evaluation
 from src.pipeline.golden_10q_numeric_batch import evaluate_10q_numeric_batch
+from src.pipeline.runtime_verification import (
+    build_run_artifact_payloads,
+    verify_runtime_run as verify_runtime_run_with_session,
+)
+from src.pipeline.strict_v2_summary import build_strict_v2_summary
 from src.pipeline.route_runtime import (
     BundleBuildOutcome,
     FilingBundle,
@@ -36,6 +40,8 @@ from src.pipeline.routers.owner import OwnerRouter
 from src.pipeline.review.dashboard import build_review_dashboard_packets, write_review_dashboard
 from src.pipeline.review.server import ReviewServerConfig, run_review_server
 from src.pipeline.review.workflow import ReviewWorkflowError, ReviewWorkflowService, review_task_detail_asdict
+from src.pipeline.runtime_cohorts import load_backfill_cohorts
+from src.pipeline.runtime_preflight import run_runtime_preflight
 from src.pipeline.scheduler import (
     ROUTE_ORDER,
     build_blocking_scheduler,
@@ -44,6 +50,7 @@ from src.pipeline.scheduler import (
     run_single_tick,
 )
 from src.pipeline.services import PersistenceService
+from src.pipeline.truth_selection import select_preferred_truth
 from src.pipeline.types import FilingRecord, RouteName
 from src.pipeline.universe import SecurityUniverseRow, load_security_universe
 
@@ -57,12 +64,37 @@ def db_rollout_assets() -> None:
     typer.echo(json.dumps(describe_rollout_assets(), ensure_ascii=False, indent=2))
 
 
+@app.command("db-rollout-apply")
+def db_rollout_apply(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview rollout statements without executing SQL"),
+) -> None:
+    """Apply checked-in rollout SQL to the configured PostgreSQL database."""
+    if dry_run:
+        result = dry_run_rollout_result()
+    else:
+        settings = Settings()
+        result = apply_rollout_assets(engine=build_engine(settings), dry_run=False)
+    typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+
+
+@app.command("db-init")
+def db_init() -> None:
+    """Bootstrap the base database schema from SQLAlchemy metadata."""
+    settings = Settings()
+    result = init_database_schema(engine=build_engine(settings))
+    typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+
+
 def _coerce_numeric_value(value: object) -> float | None:
     return coerce_numeric_value(value)
 
 
 def _load_run_once_securities(session: Any, settings: Settings) -> list[SecurityUniverseRow]:
     return load_security_universe(session=session, settings=settings)
+
+
+def _build_run_artifact_payloads(*, session: Any, run_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    return build_run_artifact_payloads(session=session, run_id=run_id)
 
 
 def _build_bundles_from_provider(
@@ -72,87 +104,22 @@ def _build_bundles_from_provider(
     start_accepted_at: datetime,
     repo: PipelineRepository,
     run_id: str,
+    settings: Settings | None = None,
 ) -> list[FilingBundle]:
+    fetch_callable = fetch_filings_for_security
+    if settings is not None:
+        edgar_identity = getattr(settings, "edgar_identity", None)
+        if isinstance(edgar_identity, str) and edgar_identity.strip():
+            fetch_callable = partial(fetch_filings_for_security, identity=edgar_identity)
     return build_bundles_from_provider(
         security=security,
         route=route,
         start_accepted_at=start_accepted_at,
         repo=repo,
         run_id=run_id,
-        fetch_filings=fetch_filings_for_security,
+        fetch_filings=fetch_callable,
+        text_normalizer=normalizer_from_settings(settings) if settings is not None else None,
     )
-
-
-def _build_run_artifact_payloads(*, session: Any, run_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    route_rows = session.execute(
-        select(PipelineLog.route, func.count())
-        .where(PipelineLog.run_id == run_id, PipelineLog.stage == "persist", PipelineLog.level == "INFO")
-        .group_by(PipelineLog.route)
-    ).all()
-    route_coverage = {route: int(count) for route, count in route_rows}
-
-    error_rows = session.execute(
-        select(PipelineLog.error_type, func.count())
-        .where(PipelineLog.run_id == run_id, PipelineLog.level == "ERROR")
-        .group_by(PipelineLog.error_type)
-    ).all()
-    error_distribution = {
-        (error_type or "UNKNOWN"): int(count)
-        for error_type, count in error_rows
-    }
-
-    filing_attempt_rows = session.scalars(
-        select(FilingAttempt)
-        .where(FilingAttempt.run_id == run_id)
-        .order_by(FilingAttempt.route.asc(), FilingAttempt.accession_no.asc(), FilingAttempt.id.asc())
-    ).all()
-    filing_attempt_status_counts: dict[str, int] = {}
-    filing_attempt_route_counts: dict[str, dict[str, int]] = {}
-    for row in filing_attempt_rows:
-        filing_attempt_status_counts[row.status] = filing_attempt_status_counts.get(row.status, 0) + 1
-        route_status_counts = filing_attempt_route_counts.setdefault(row.route, {})
-        route_status_counts[row.status] = route_status_counts.get(row.status, 0) + 1
-
-    sample_logs = session.scalars(
-        select(PipelineLog)
-        .where(PipelineLog.run_id == run_id)
-        .order_by(PipelineLog.id.asc())
-    ).all()
-    samples = [
-        {
-            "route": row.route,
-            "stage": row.stage,
-            "level": row.level,
-            "message": row.message,
-            "cik": row.cik,
-            "accession_no": row.accession_no,
-            "error_type": row.error_type,
-            "error_detail": row.error_detail,
-        }
-        for row in sample_logs
-    ]
-
-    summary = {
-        "run_id": run_id,
-        "coverage": {
-            "routes": route_coverage,
-            "filing_attempts": {
-                "total": len(filing_attempt_rows),
-                "by_status": filing_attempt_status_counts,
-                "by_route": filing_attempt_route_counts,
-            },
-        },
-        "errors": {
-            "distribution": error_distribution,
-        },
-        "metrics": {
-            "total_logs": len(sample_logs),
-            "total_filing_attempts": len(filing_attempt_rows),
-        },
-    }
-
-    diff_markdown = "# Diff\n- baseline comparison unavailable for this run"
-    return summary, samples, diff_markdown
 
 
 def _parse_route_name(route: str | None) -> RouteName | None:
@@ -167,28 +134,131 @@ def _parse_route_name(route: str | None) -> RouteName | None:
     return cast(RouteName, normalized)
 
 
+def _parse_start_date_value(start_date: str | None) -> date | None:
+    if start_date is None:
+        return None
+    cleaned = start_date.strip()
+    if not cleaned:
+        return None
+    try:
+        return date.fromisoformat(cleaned)
+    except ValueError as exc:
+        raise typer.BadParameter("start_date must be YYYY-MM-DD") from exc
+
+
 def _selected_routes(route: RouteName | None) -> tuple[RouteName, ...]:
     if route is None:
         return cast(tuple[RouteName, ...], ROUTE_ORDER)
     return (route,)
 
 
-def _run_once_pipeline(*, route: RouteName | None = None) -> None:
+def _normalize_security_filters(values: list[str] | tuple[str, ...] | None, *, upper: bool = False) -> tuple[str, ...]:
+    if not values:
+        return ()
+
+    normalized: list[str] = []
+    for value in values:
+        cleaned = str(value).strip()
+        if not cleaned:
+            continue
+        normalized.append(cleaned.upper() if upper else cleaned)
+    return tuple(normalized)
+
+
+def _filter_pipeline_securities(
+    *,
+    securities: list[Any],
+    tickers: tuple[str, ...] = (),
+    ciks: tuple[str, ...] = (),
+    limit: int | None = None,
+) -> list[Any]:
+    selected = list(securities)
+    if tickers:
+        ticker_set = {ticker.upper() for ticker in tickers}
+        selected = [
+            security
+            for security in selected
+            if str(getattr(security, "ticker", "")).strip().upper() in ticker_set
+        ]
+    if ciks:
+        cik_set = {cik.strip() for cik in ciks}
+        selected = [
+            security
+            for security in selected
+            if str(getattr(security, "cik", "")).strip() in cik_set
+        ]
+    if limit is not None:
+        selected = selected[:limit]
+    return selected
+
+
+def _build_runtime_run_manifest(
+    *,
+    run_id: str,
+    mode: str,
+    selected_routes: tuple[RouteName, ...],
+    start_date: date,
+    ignore_existing_watermarks: bool,
+    tickers: tuple[str, ...],
+    ciks: tuple[str, ...],
+    limit: int | None,
+    securities: list[Any],
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "mode": mode,
+        "routes": list(selected_routes),
+        "start_date": start_date.isoformat(),
+        "ignore_existing_watermarks": ignore_existing_watermarks,
+        "filters": {
+            "tickers": list(tickers),
+            "ciks": list(ciks),
+            "limit": limit,
+        },
+        "selected_security_count": len(securities),
+        "selected_security_sample": [
+            {
+                "ticker": str(getattr(security, "ticker", "")).strip() or None,
+                "cik": str(getattr(security, "cik", "")).strip() or None,
+                "active": bool(getattr(security, "active", False)),
+            }
+            for security in securities[:20]
+        ],
+    }
+
+
+def _run_pipeline(
+    *,
+    mode: str,
+    route: RouteName | None = None,
+    start_date_override: date | None = None,
+    tickers: tuple[str, ...] = (),
+    ciks: tuple[str, ...] = (),
+    limit: int | None = None,
+    ignore_existing_watermarks: bool = False,
+) -> str:
     settings = Settings()
     session_factory = get_session_factory(settings)
     selected_routes = _selected_routes(route)
+    effective_start_date = start_date_override or settings.start_date
 
     run_id = make_run_id()
 
     with session_factory() as session:
         repo = PipelineRepository(session)
         persistence_service = PersistenceService(session)
-        securities = _load_run_once_securities(session, settings)
+        securities = _filter_pipeline_securities(
+            securities=_load_run_once_securities(session, settings),
+            tickers=tickers,
+            ciks=ciks,
+            limit=limit,
+        )
         processor = RouteProcessor(
             repo=repo,
             persistence_service=persistence_service,
-            start_date=settings.start_date,
-            provider_bundle_builder=_build_bundles_from_provider,
+            start_date=effective_start_date,
+            provider_bundle_builder=partial(_build_bundles_from_provider, settings=settings),
+            ignore_existing_watermarks=ignore_existing_watermarks,
         )
         router_map = {
             "issuer": IssuerRouter(processor),
@@ -196,7 +266,15 @@ def _run_once_pipeline(*, route: RouteName | None = None) -> None:
             "holding": HoldingRouter(processor),
         }
         routers = ordered_routers({route_name: router_map[route_name] for route_name in selected_routes})
+        typer.echo(f"runtime run_id: {run_id}")
         typer.echo("route order: " + " -> ".join(router.name for router in routers))
+        typer.echo(f"security cohort: count={len(securities)}")
+        if mode == "backfill":
+            typer.echo(
+                "backfill mode: "
+                + f"start_date={effective_start_date.isoformat()} "
+                + f"ignore_existing_watermarks={ignore_existing_watermarks}"
+            )
 
         run_single_tick(
             run_id=run_id,
@@ -218,7 +296,81 @@ def _run_once_pipeline(*, route: RouteName | None = None) -> None:
                 failures=[sample for sample in sample_payload if sample.get("level") == "ERROR"],
                 candidates=sample_payload,
                 diff_markdown=diff_markdown,
+                manifest=_build_runtime_run_manifest(
+                    run_id=run_id,
+                    mode=mode,
+                    selected_routes=selected_routes,
+                    start_date=effective_start_date,
+                    ignore_existing_watermarks=ignore_existing_watermarks,
+                    tickers=tickers,
+                    ciks=ciks,
+                    limit=limit,
+                    securities=securities,
+                ),
             )
+    return run_id
+
+
+def _run_once_pipeline(*, route: RouteName | None = None) -> None:
+    _run_pipeline(mode="run_once", route=route)
+
+
+def _run_backfill_pipeline(
+    *,
+    route: RouteName | None = None,
+    start_date: date | None = None,
+    tickers: tuple[str, ...] = (),
+    ciks: tuple[str, ...] = (),
+    limit: int | None = None,
+    ignore_existing_watermarks: bool = True,
+) -> str:
+    return _run_pipeline(
+        mode="backfill",
+        route=route,
+        start_date_override=start_date,
+        tickers=tickers,
+        ciks=ciks,
+        limit=limit,
+        ignore_existing_watermarks=ignore_existing_watermarks,
+    )
+
+
+def _write_backfill_cohort_manifest(
+    *,
+    base_dir: Path,
+    cohort_name: str,
+    description: str | None,
+    selected_routes: tuple[RouteName, ...],
+    start_date: date | None,
+    tickers: tuple[str, ...],
+    ciks: tuple[str, ...],
+    limit: int | None,
+    ignore_existing_watermarks: bool,
+    route_run_ids: list[dict[str, str]],
+) -> Path:
+    cohort_dir = base_dir / "cohorts"
+    cohort_dir.mkdir(parents=True, exist_ok=True)
+    manifest_run_id = make_run_id()
+    manifest_path = cohort_dir / f"{cohort_name}__{manifest_run_id}.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "cohort_name": cohort_name,
+                "description": description,
+                "routes": list(selected_routes),
+                "start_date": start_date.isoformat() if start_date is not None else None,
+                "tickers": list(tickers),
+                "ciks": list(ciks),
+                "limit": limit,
+                "ignore_existing_watermarks": ignore_existing_watermarks,
+                "route_runs": route_run_ids,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 @app.command("run-once")
@@ -253,6 +405,86 @@ def run_owner() -> None:
 def run_holding() -> None:
     """Run the holding route once."""
     _run_once_pipeline(route="holding")
+
+
+@app.command("backfill")
+def backfill(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    start_date: str | None = typer.Option(None, "--start-date", help="Override historical backfill start date (YYYY-MM-DD)"),
+    ticker: list[str] | None = typer.Option(None, "--ticker", help="Optional ticker filter; repeatable"),
+    cik: list[str] | None = typer.Option(None, "--cik", help="Optional CIK filter; repeatable"),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Optional max securities after filtering"),
+    ignore_existing_watermarks: bool = typer.Option(
+        True,
+        "--ignore-existing-watermarks/--respect-watermarks",
+        help="Ignore stored route watermarks so historical filings before the current watermark can be replayed.",
+    ),
+) -> None:
+    """Run a historical backfill cohort with optional security filters and watermark replay."""
+    _run_backfill_pipeline(
+        route=_parse_route_name(route),
+        start_date=_parse_start_date_value(start_date),
+        tickers=_normalize_security_filters(ticker, upper=True),
+        ciks=_normalize_security_filters(cik),
+        limit=limit,
+        ignore_existing_watermarks=ignore_existing_watermarks,
+    )
+
+
+@app.command("backfill-cohort")
+def backfill_cohort(
+    cohort: str = typer.Option(..., "--cohort", help="Named backfill cohort from configs/runtime/backfill_cohorts.yaml"),
+    route: str | None = typer.Option(None, "--route", help="Optional single route override: issuer, owner, holding"),
+    start_date: str | None = typer.Option(None, "--start-date", help="Override historical backfill start date (YYYY-MM-DD)"),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Optional max securities after cohort filtering"),
+    ignore_existing_watermarks: bool = typer.Option(
+        True,
+        "--ignore-existing-watermarks/--respect-watermarks",
+        help="Ignore stored route watermarks so historical filings before the current watermark can be replayed.",
+    ),
+) -> None:
+    """Run a named seed cohort backfill from versioned runtime config."""
+    settings = Settings()
+    cohorts = load_backfill_cohorts()
+    selected = cohorts.get(cohort.strip())
+    if selected is None:
+        available = ", ".join(sorted(cohorts))
+        raise typer.BadParameter(f"unknown cohort {cohort!r}; available cohorts: {available}")
+
+    parsed_route = _parse_route_name(route)
+    selected_routes = (parsed_route,) if parsed_route is not None else cast(tuple[RouteName, ...], selected.routes or ROUTE_ORDER)
+    parsed_start_date = _parse_start_date_value(start_date)
+    typer.echo(
+        "backfill cohort: "
+        + f"{selected.name} "
+        + f"tickers={','.join(selected.tickers) if selected.tickers else '-'} "
+        + f"routes={','.join(selected_routes)}"
+    )
+    route_run_ids: list[dict[str, str]] = []
+    for route_name in selected_routes:
+        route_run_id = _run_backfill_pipeline(
+            route=route_name,
+            start_date=parsed_start_date,
+            tickers=selected.tickers,
+            ciks=selected.ciks,
+            limit=limit,
+            ignore_existing_watermarks=ignore_existing_watermarks,
+        )
+        route_run_ids.append({"route": route_name, "run_id": route_run_id})
+    if getattr(settings, "write_offline_artifacts", False):
+        manifest_path = _write_backfill_cohort_manifest(
+            base_dir=settings.offline_artifacts_dir,
+            cohort_name=selected.name,
+            description=selected.description,
+            selected_routes=selected_routes,
+            start_date=parsed_start_date,
+            tickers=selected.tickers,
+            ciks=selected.ciks,
+            limit=limit,
+            ignore_existing_watermarks=ignore_existing_watermarks,
+            route_run_ids=route_run_ids,
+        )
+        typer.echo(f"cohort manifest: {manifest_path}")
 
 
 def _run_strict_v2_eval(
@@ -293,6 +525,109 @@ def _run_strict_v2_eval(
         + f"gold_strict_accuracy={result.summary['metrics']['gold_strict_accuracy']:.4f} "
         + f"silver_alignment={result.summary['metrics']['silver_alignment']:.4f}"
     )
+    phase_gates = result.summary.get("phase_gates", {})
+    if isinstance(phase_gates, dict) and phase_gates:
+        typer.echo(
+            "strict-v2 phase-gates: "
+            + f"total={phase_gates.get('total', 0)} "
+            + f"passed={phase_gates.get('passed', 0)} "
+            + f"failed={phase_gates.get('failed', 0)} "
+            + f"skipped={phase_gates.get('skipped', 0)}"
+        )
+
+
+def _run_strict_v2_numeric_batch_eval(
+    *,
+    golden_path: str,
+    snapshot_dir: str,
+    artifacts_dir: str,
+    min_pass_rate: float,
+) -> None:
+    if not 0.0 <= min_pass_rate <= 1.0:
+        raise typer.BadParameter("min_pass_rate must be between 0.0 and 1.0")
+
+    run_id = make_run_id()
+    result = evaluate_10q_numeric_batch(
+        golden_path=Path(golden_path),
+        snapshot_dir=Path(snapshot_dir),
+    )
+    metrics = result.summary["metrics"]
+    pass_rate = float(metrics["top1_accuracy"])
+    summary = build_strict_v2_summary(
+        run_id=run_id,
+        selectors={
+            "route": "issuer",
+            "form_family": "10-Q",
+            "field_name": None,
+            "case_id": None,
+            "mode": "numeric_batch",
+        },
+        coverage={
+            "total_cases": int(metrics["total_batches"]),
+            "total_candidates": int(metrics["total_field_checks"]),
+            "gold_applicable_rows": int(metrics["total_field_checks"]),
+            "silver_applicable_rows": 0,
+            "invariant_rows": 0,
+        },
+        metrics={
+            "passed": int(metrics["passed"]),
+            "failed": int(metrics["failed"]),
+            "pass_rate": pass_rate,
+            "min_pass_rate": min_pass_rate,
+            "passes_threshold": pass_rate >= min_pass_rate,
+            "gold_strict_accuracy": float(metrics["top1_accuracy"]),
+            "gold_coverage": float(metrics["candidate_recall"]),
+            "row_selection_accuracy": float(metrics["top1_accuracy"]),
+            "not_applicable_precision": 1.0,
+            "silver_alignment": 0.0,
+            "invariant_pass_rate": 0.0,
+            "candidate_recall": float(metrics["candidate_recall"]),
+            "batch_all_match_rate": float(metrics["batch_all_match_rate"]),
+            "total_batches": int(metrics["total_batches"]),
+            "total_field_checks": int(metrics["total_field_checks"]),
+        },
+        phase_gates=result.phase_gates,
+    )
+    write_run_artifacts(
+        base_dir=Path(artifacts_dir),
+        run_id=run_id,
+        summary=summary,
+        by_field=result.by_field,
+        failures=result.failures,
+        candidates=[],
+        diff_markdown="# Diff\n- numeric batch mismatches captured in mismatches.ndjson" if result.failures else "# Diff\n- no failures",
+        manifest={
+            "run_id": run_id,
+            "mode": "numeric_batch",
+            "config_paths": {
+                "golden_path": str(Path(golden_path)),
+                "snapshot_dir": str(Path(snapshot_dir)),
+            },
+        },
+        coverage=summary["coverage"],
+        phase_gates=result.phase_gates,
+        review_packets=result.review_packets,
+    )
+    typer.echo(f"strict-v2 run_id: {run_id}")
+    typer.echo(
+        "strict-v2 metrics: "
+        + f"passed={summary['metrics']['passed']} "
+        + f"failed={summary['metrics']['failed']} "
+        + f"gold_strict_accuracy={summary['metrics']['gold_strict_accuracy']:.4f} "
+        + f"silver_alignment={summary['metrics']['silver_alignment']:.4f}"
+    )
+    typer.echo(
+        "strict-v2 phase-gates: "
+        + f"total={summary['phase_gates']['total']} "
+        + f"passed={summary['phase_gates']['passed']} "
+        + f"failed={summary['phase_gates']['failed']} "
+        + f"skipped={summary['phase_gates']['skipped']}"
+    )
+    failed_phase_gates = [gate for gate in result.phase_gates if gate.get("status") == "failed"]
+    if failed_phase_gates:
+        raise typer.Exit(code=1)
+    if pass_rate < min_pass_rate:
+        raise typer.Exit(code=1)
 
 
 @app.command("offline-eval")
@@ -367,8 +702,21 @@ def strict_v2_eval(
     case_id: str | None = typer.Option(None, "--case-id", help="Optional case id filter"),
     baseline: str | None = typer.Option(None, "--baseline", help="Optional baseline summary json"),
     min_pass_rate: float = typer.Option(0.95, "--min-pass-rate", min=0.0, max=1.0, help="Minimum pass rate threshold"),
+    numeric_batch_golden_path: str | None = typer.Option(None, "--numeric-batch-golden-path", help="Optional adjudicated 10-Q numeric batch yaml"),
+    numeric_batch_snapshot_dir: str | None = typer.Option(None, "--numeric-batch-snapshot-dir", help="Optional directory of numeric batch snapshots"),
 ) -> None:
     """Run strict-v2 evaluation and emit the golden artifact contract."""
+    if (numeric_batch_golden_path is None) ^ (numeric_batch_snapshot_dir is None):
+        raise typer.BadParameter("numeric batch strict-v2 mode requires both --numeric-batch-golden-path and --numeric-batch-snapshot-dir")
+    if numeric_batch_golden_path is not None and numeric_batch_snapshot_dir is not None:
+        _run_strict_v2_numeric_batch_eval(
+            golden_path=numeric_batch_golden_path,
+            snapshot_dir=numeric_batch_snapshot_dir,
+            artifacts_dir=artifacts_dir,
+            min_pass_rate=min_pass_rate,
+        )
+        return
+
     _run_strict_v2_eval(
         regex_config=regex_config,
         golden_set=golden_set,
@@ -395,27 +743,20 @@ def golden_10q_numeric_batch(
         "--snapshot-dir",
         help="Directory containing batch_001 candidate snapshots",
     ),
+    artifacts_dir: str = typer.Option(
+        "artifacts/golden",
+        "--artifacts-dir",
+        help="Directory for strict-v2 numeric batch artifacts",
+    ),
+    min_pass_rate: float = typer.Option(0.95, "--min-pass-rate", min=0.0, max=1.0, help="Minimum pass rate threshold"),
 ) -> None:
-    result = evaluate_10q_numeric_batch(
-        golden_path=Path(golden_path),
-        snapshot_dir=Path(snapshot_dir),
+    """Compatibility alias that routes numeric batch adjudication through strict-v2 artifacts."""
+    _run_strict_v2_numeric_batch_eval(
+        golden_path=golden_path,
+        snapshot_dir=snapshot_dir,
+        artifacts_dir=artifacts_dir,
+        min_pass_rate=min_pass_rate,
     )
-    metrics = result.summary["metrics"]
-    typer.echo(
-        "golden metrics: "
-        + f"batches={metrics['total_batches']} "
-        + f"field_checks={metrics['total_field_checks']} "
-        + f"candidate_recall={metrics['candidate_recall']} "
-        + f"top1_accuracy={metrics['top1_accuracy']} "
-        + f"batch_all_match_rate={metrics['batch_all_match_rate']}"
-    )
-    for field_name, field_metrics in result.by_field.items():
-        typer.echo(
-            "field "
-            + f"{field_name}: "
-            + f"candidate_recall={field_metrics['candidate_recall']} "
-            + f"top1_accuracy={field_metrics['top1_accuracy']}"
-        )
 
 
 @app.command("review-list")
@@ -566,11 +907,90 @@ def release_gate(
         "--output-dir",
         help="Directory for exported fix-once regression packets and summary",
     ),
+    strict_summary: list[str] | None = typer.Option(
+        None,
+        "--strict-summary",
+        help="Optional strict-v2 summary.json path; repeat to require multiple evaluator summaries to pass",
+    ),
+    runtime_run_id: list[str] | None = typer.Option(
+        None,
+        "--runtime-run-id",
+        help="Optional runtime run id to verify against DB/artifacts; repeat to require multiple runtime runs to verify cleanly",
+    ),
+    runtime_cohort_manifest: list[str] | None = typer.Option(
+        None,
+        "--runtime-cohort-manifest",
+        help="Optional backfill cohort manifest json; repeat to require every listed route run to verify cleanly",
+    ),
+    runtime_artifacts_dir: Path | None = typer.Option(
+        None,
+        "--runtime-artifacts-dir",
+        help="Optional runtime artifacts base directory; defaults to OFFLINE_ARTIFACTS_DIR when runtime run ids are provided",
+    ),
 ) -> None:
     settings = Settings()
     with get_session_factory(settings)() as session:
-        result = evaluate_fix_once_release_gate(session=session, output_dir=output_dir)
+        result = evaluate_fix_once_release_gate(
+            session=session,
+            output_dir=output_dir,
+            strict_summary_paths=[Path(path) for path in strict_summary] if strict_summary else None,
+            runtime_run_ids=runtime_run_id,
+            runtime_artifacts_dir=(runtime_artifacts_dir or settings.offline_artifacts_dir)
+            if (runtime_run_id or runtime_cohort_manifest)
+            else None,
+            runtime_cohort_manifests=[Path(path) for path in runtime_cohort_manifest] if runtime_cohort_manifest else None,
+        )
     typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command("truth-select")
+def truth_select(
+    accession_no: str = typer.Option(..., "--accession-no", help="Filing accession number"),
+    route: str = typer.Option(..., "--route", help="Route name: issuer, owner, holding"),
+    field_name: str = typer.Option(..., "--field", help="Field name"),
+    subject_key: str = typer.Option("document", "--subject-key", help="Subject key, defaults to document"),
+) -> None:
+    """Resolve the preferred downstream truth with ground-truth-over-parsed precedence."""
+    settings = Settings()
+    with get_session_factory(settings)() as session:
+        preferred_truth = select_preferred_truth(
+            session=session,
+            accession_no=accession_no,
+            route=_parse_route_name(route) or route,
+            field_name=field_name,
+            subject_key=subject_key,
+        )
+    if preferred_truth is None:
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(preferred_truth.asdict(), ensure_ascii=False, indent=2))
+
+
+@app.command("verify-runtime-run")
+def verify_runtime_run(
+    run_id: str = typer.Option(..., "--run-id", help="Runtime run id to verify against DB state"),
+    artifacts_dir: Path | None = typer.Option(None, "--artifacts-dir", help="Runtime artifacts base directory; defaults to OFFLINE_ARTIFACTS_DIR"),
+) -> None:
+    """Verify runtime run artifacts against filing_attempt and pipeline_log DB state."""
+    settings = Settings()
+    base_dir = artifacts_dir or settings.offline_artifacts_dir
+
+    with get_session_factory(settings)() as session:
+        result = verify_runtime_run_with_session(session=session, run_id=run_id, base_dir=base_dir)
+
+    payload = result.__dict__
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command("runtime-preflight")
+def runtime_preflight() -> None:
+    """Check whether the current environment is ready for real runtime/backfill evidence collection."""
+    settings = Settings()
+    result = run_runtime_preflight(settings=settings)
+    typer.echo(json.dumps(result.asdict(), ensure_ascii=False, indent=2))
     if not result.passed:
         raise typer.Exit(code=1)
 

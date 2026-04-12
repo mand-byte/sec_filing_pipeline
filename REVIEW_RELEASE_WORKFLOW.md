@@ -8,6 +8,10 @@ This workflow is the operator-facing fix-once loop for SEC extraction review. It
 - `uv run python main.py review-serve --status open --host 127.0.0.1 --port 8765` runs the local HTTP workbench for task listing, evidence replay, assignment, and resolution.
 - `uv run python main.py review-list`, `review-show`, `review-assign`, and `review-resolve` provide the same operator flow through the CLI.
 - `uv run python main.py release-gate --output-dir artifacts/release_gate` blocks release when open review tasks remain or when resolved fix-once tasks are missing regression packets.
+- `release-gate` also accepts repeatable `--strict-summary` inputs and repeatable `--runtime-run-id` inputs so release checks can require:
+  - all strict-v2 evaluator summaries to pass
+  - all referenced runtime runs to verify cleanly against DB-backed artifacts
+- `release-gate` also accepts repeatable `--runtime-cohort-manifest` inputs so a named historical seed/backfill cohort can be verified through its per-route runtime run ids without manually expanding them.
 
 ## Evidence replay contract
 

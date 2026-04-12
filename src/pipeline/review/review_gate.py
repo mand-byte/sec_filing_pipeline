@@ -4,7 +4,14 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
 
-ReviewReason = Literal["first_seen_for_issuer", "first_seen_template", "outlier_vs_history"]
+ReviewReason = Literal[
+    "first_seen_for_issuer",
+    "first_seen_template",
+    "outlier_vs_history",
+    "provider_low_confidence",
+    "provider_insufficient_context",
+    "provider_multiple_candidate_targets",
+]
 
 
 class ReviewGateDecision(TypedDict):
@@ -34,6 +41,9 @@ REVIEW_PRIORITY_BY_REASON: dict[ReviewReason, str] = {
     "first_seen_for_issuer": "high",
     "first_seen_template": "medium",
     "outlier_vs_history": "high",
+    "provider_low_confidence": "high",
+    "provider_insufficient_context": "high",
+    "provider_multiple_candidate_targets": "high",
 }
 
 

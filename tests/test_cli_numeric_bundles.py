@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
 
 import src.cli as cli_module
 import src.pipeline.extraction.provider as provider_module
 from src.pipeline.edgar_provider import FilingEnvelope
+from src.pipeline.extraction.text_normalization import NormalizationSuccess
 from src.pipeline.route_runtime import BundleBuildOutcome, FilingBundle
 from src.pipeline.services import EvidenceInput, FactInput
 
@@ -1050,8 +1052,75 @@ def test_build_bundles_from_provider_emits_8k_current_event_text(monkeypatch) ->
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("current_event_quant", "document")] == "agreement"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("current_event_quant", "document")])["event_type"] == "agreement"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("current_event_quant", "document")].source_section in {"Current report", "current report"}
+    assert repo.logs == []
+
+
+def test_build_bundles_from_provider_uses_http_json_normalizer_when_configured(monkeypatch) -> None:
+    accepted_at = datetime(2024, 5, 4, tzinfo=timezone.utc)
+    filing = FakeEightKFiling(
+        form="8-K",
+        report=FakeEightKReport(
+            items=["Item 1.01"],
+            item_map={"Item 1.01": "Entry into a material definitive agreement."},
+        ),
+        sections=["Current report\nMaterial definitive agreement entered into on signing date."],
+    )
+    envelope = FilingEnvelope(
+        accession_no="0000000000-24-000004B",
+        cik="0000789019",
+        form_type="8-K",
+        accepted_at=accepted_at,
+        filing=filing,
+    )
+
+    class FakeHttpNormalizer:
+        def normalize(self, *, field_spec, schema_ref, selected_span):
+            assert field_spec.field_name == "current_event_quant"
+            assert schema_ref == "v1/current_event_quant"
+            assert selected_span.source_section in {"Current report", "current report"}
+            return NormalizationSuccess(
+                value={
+                    "event_type": "agreement",
+                    "materiality_score": 5,
+                    "cash_impact_usd": None,
+                    "dilution_pct": None,
+                },
+                retry_history_json='[{"attempt":1,"status":"http_json"}]',
+                selection_trace_json='{"normalizer_mode":"http_json","normalizer_model":"fake-model"}',
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "fetch_filings_for_security",
+        lambda *, security, route, start_accepted_at: [envelope],
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "normalizer_from_settings",
+        lambda settings: FakeHttpNormalizer(),
+    )
+
+    repo = FakeRepo()
+    security = SimpleNamespace(cik="0000789019", ticker="MSFT")
+    bundles = cli_module._build_bundles_from_provider(
+        security=security,
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        repo=repo,
+        run_id="run-4-current-event-provider",
+        settings=SimpleNamespace(text_normalizer_mode="http_json"),
+    )
+
+    assert len(bundles) == 1
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("current_event_quant", "document")])["materiality_score"] == 5
+    evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
+    assert json.loads(evidence[("current_event_quant", "document")].retry_history_json)[0]["status"] == "http_json"
+    assert json.loads(evidence[("current_event_quant", "document")].selection_trace_json)["normalizer_model"] == "fake-model"
     assert repo.logs == []
 
 
@@ -1087,6 +1156,8 @@ def test_build_bundles_from_provider_emits_6k_current_event_text(monkeypatch) ->
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("current_event_quant", "document")] == "agreement"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("current_event_quant", "document")])["event_type"] == "agreement"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("current_event_quant", "document")].source_section in {"Current report", "current report"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
@@ -1482,6 +1553,8 @@ def test_build_bundles_from_provider_emits_delay_reason_text(monkeypatch) -> Non
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("delay_reason_quant", "document")] == "audit"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("delay_reason_quant", "document")])["reason_type"] == "audit"
     numeric_facts = {(fact.field_name, fact.subject_key): fact.value_numeric for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_facts[("filing_delay_days", "document")] == 5.0
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
@@ -1614,6 +1687,8 @@ def test_build_bundles_from_provider_emits_mdna_outlook_text(monkeypatch) -> Non
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("mdna_outlook_quant", "document")] == "up"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("mdna_outlook_quant", "document")])["direction"] == "up"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("mdna_outlook_quant", "document")].source_section in {"md&a", "MD&A"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
@@ -1705,6 +1780,8 @@ def test_build_bundles_from_provider_emits_risk_factor_text(monkeypatch) -> None
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("risk_factor_quant", "document")] == "Cybersecurity"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("risk_factor_quant", "document")])["categories"] == ["cybersecurity"]
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("risk_factor_quant", "document")].source_section in {"risk factors", "Risk Factors"}
 
@@ -1816,6 +1893,8 @@ def test_build_bundles_from_provider_emits_use_of_proceeds_text(monkeypatch) -> 
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("use_of_proceeds_quant", "document")] == "working capital"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("use_of_proceeds_quant", "document")])["working_capital_pct"] == 100
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("use_of_proceeds_quant", "document")].source_section in {"use of proceeds", "Use of Proceeds"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)
@@ -1906,6 +1985,8 @@ def test_build_bundles_from_provider_emits_proxy_proposal_text(monkeypatch) -> N
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("proxy_proposal_quant", "document")] == "election"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("proxy_proposal_quant", "document")])["proposal_type"] == "election"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("proxy_proposal_quant", "document")].source_section in {"proposal", "Proposal 1"}
 
@@ -1942,6 +2023,8 @@ def test_build_bundles_from_provider_emits_comp_policy_text(monkeypatch) -> None
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("comp_policy_quant", "document")] == "pay for performance"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("comp_policy_quant", "document")])["pay_for_performance"] is True
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("comp_policy_quant", "document")].source_section in {"cd&a", "CD&A"}
 
@@ -1978,6 +2061,8 @@ def test_build_bundles_from_provider_emits_tender_going_private_text(monkeypatch
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("tender_going_private_quant", "document")] == "cash merger"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("tender_going_private_quant", "document")])["transaction_type"] == "merger"
     evidence = {(item.field_name, item.subject_key): item for item in bundles[0].evidences}
     assert evidence[("tender_going_private_quant", "document")].source_section in {"summary term sheet", "Summary term sheet"}
     assert any(log["error_type"] == "TYPE_MISMATCH" for log in repo.logs)

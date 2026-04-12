@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
+import json
 import traceback
 from typing import Any, Callable
 
@@ -128,6 +129,27 @@ def _review_metric_for_gate(fact: FactInput) -> float | None:
     return None
 
 
+def _provider_uncertainty_signal(evidence: EvidenceInput | None) -> tuple[str | None, str | None]:
+    if evidence is None or not evidence.adequacy_signals_json:
+        return None, None
+    try:
+        payload = json.loads(evidence.adequacy_signals_json)
+    except json.JSONDecodeError:
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+
+    if payload.get("multiple_candidate_targets") is True:
+        return "provider_multiple_candidate_targets", "high"
+    if payload.get("sufficient_context") is False:
+        return "provider_insufficient_context", "high"
+
+    confidence = payload.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and confidence < 0.5:
+        return "provider_low_confidence", "high"
+    return None, None
+
+
 def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stats: SqlAlchemyReviewStats) -> None:
     form_family = classify_form_family(bundle.filing.form_type)
     text_field_names = {
@@ -143,34 +165,38 @@ def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stat
         if evidence.field_name not in evidence_by_field:
             evidence_by_field[evidence.field_name] = evidence
 
-    for index, fact in enumerate(bundle.facts):
-        if fact.field_name not in text_field_names:
-            continue
+        for index, fact in enumerate(bundle.facts):
+            if fact.field_name not in text_field_names:
+                continue
 
-        evidence = evidence_by_field.get(fact.field_name)
-        metric = _review_metric_for_gate(fact)
-        review_decision = evaluate_review_gate(
-            candidate=ReviewGateInput(
-                cik=bundle.filing.cik,
-                route=route,
+            evidence = evidence_by_field.get(fact.field_name)
+            provider_reason, provider_priority = _provider_uncertainty_signal(evidence)
+            metric = _review_metric_for_gate(fact)
+            review_decision = evaluate_review_gate(
+                candidate=ReviewGateInput(
+                    cik=bundle.filing.cik,
+                    route=route,
                 field_name=fact.field_name,
                 template_hash=evidence.source_xpath if evidence else None,
                 value_numeric=metric,
-            ),
-            stats=stats,
-        )
+                ),
+                stats=stats,
+            )
+            needs_review = review_decision["decision"] == "needs_review" or provider_reason is not None or (
+                isinstance(fact.confidence, (int, float)) and not isinstance(fact.confidence, bool) and fact.confidence < 0.5
+            )
 
-        bundle.facts[index] = FactInput(
-            field_name=fact.field_name,
-            subject_key=fact.subject_key,
-            value_numeric=fact.value_numeric,
-            value_text=fact.value_text,
-            value_json=fact.value_json,
-            value_unit=fact.value_unit,
-            confidence=0.49 if review_decision["decision"] == "needs_review" else 0.99,
-            review_priority=review_decision["priority"],
-            review_reason=review_decision["reason"],
-        )
+            bundle.facts[index] = FactInput(
+                field_name=fact.field_name,
+                subject_key=fact.subject_key,
+                value_numeric=fact.value_numeric,
+                value_text=fact.value_text,
+                value_json=fact.value_json,
+                value_unit=fact.value_unit,
+                confidence=0.49 if needs_review else (fact.confidence if fact.confidence is not None else 0.99),
+                review_priority=fact.review_priority or provider_priority or review_decision["priority"],
+                review_reason=fact.review_reason or provider_reason or review_decision["reason"],
+            )
 
 
 @dataclass(frozen=True)
@@ -179,6 +205,7 @@ class RouteProcessor:
     persistence_service: PersistenceService
     start_date: date
     provider_bundle_builder: Callable[..., list[FilingBundle]]
+    ignore_existing_watermarks: bool = False
 
     def run(self, *, security: Any, route: RouteName, run_id: str) -> None:
         cik = getattr(security, "cik", None)
@@ -256,7 +283,8 @@ class RouteProcessor:
             return
 
         watermark = self.repo.get_route_watermark(cik, route)
-        start_accepted_at = watermark or _as_utc_start_of_day(self.start_date)
+        configured_start_accepted_at = _as_utc_start_of_day(self.start_date)
+        start_accepted_at = configured_start_accepted_at if self.ignore_existing_watermarks else (watermark or configured_start_accepted_at)
 
         bundles = _load_route_filing_bundles(
             security=security,
@@ -264,13 +292,27 @@ class RouteProcessor:
             start_accepted_at=start_accepted_at,
         )
         if not bundles:
-            bundles = self.provider_bundle_builder(
-                security=security,
-                route=route,
-                start_accepted_at=start_accepted_at,
-                repo=self.repo,
-                run_id=run_id,
-            )
+            try:
+                bundles = self.provider_bundle_builder(
+                    security=security,
+                    route=route,
+                    start_accepted_at=start_accepted_at,
+                    repo=self.repo,
+                    run_id=run_id,
+                )
+            except Exception as exc:
+                _safe_write_log(
+                    self.repo,
+                    run_id=run_id,
+                    route=route,
+                    cik=cik,
+                    stage="extract",
+                    level="ERROR",
+                    message="provider bundle build failed",
+                    error_type=exc.__class__.__name__,
+                    error_detail=_format_exception_detail(exc),
+                )
+                bundles = []
 
         eligible_bundles: list[FilingBundle] = []
         normalized_start = _normalize_to_utc(start_accepted_at)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -141,6 +142,8 @@ def test_build_bundles_from_provider_emits_13f_position_rows(monkeypatch) -> Non
     assert facts[("info_table_value_total_usd", "document")] == 2000000.0
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundle.facts if fact.value_text is not None}
     assert text_facts[("manager_structure_quant", "document")] == "holdings"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundle.facts if fact.value_json is not None}
+    assert json.loads(json_facts[("manager_structure_quant", "document")])["report_type"] == "other"
 
     evidence = {(item.field_name, item.subject_key): item for item in bundle.evidences}
     assert evidence[("position_value_usd", "position:1")].source_span == "infotable[0].Value"
@@ -463,6 +466,8 @@ def test_build_bundles_from_provider_preserves_holding_text_when_bundle_has_no_r
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("manager_structure_quant", "document")] == "holdings"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("manager_structure_quant", "document")])["report_type"] == "other"
     numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_fields == set()
     assert repo.logs[-1]["error_type"] == "NO_HOLDING_ROWS_EXTRACTED"
@@ -508,6 +513,8 @@ def test_build_bundles_from_provider_preserves_holding_text_when_obj_bundle_unav
     assert len(bundles) == 1
     text_facts = {(fact.field_name, fact.subject_key): fact.value_text for fact in bundles[0].facts if fact.value_text is not None}
     assert text_facts[("manager_structure_quant", "document")] == "holdings"
+    json_facts = {(fact.field_name, fact.subject_key): fact.value_json for fact in bundles[0].facts if fact.value_json is not None}
+    assert json.loads(json_facts[("manager_structure_quant", "document")])["report_type"] == "other"
     numeric_fields = {(fact.field_name, fact.subject_key) for fact in bundles[0].facts if fact.value_numeric is not None}
     assert numeric_fields == set()
     assert repo.logs[-1]["error_type"] == "HOLDING_OBJ_UNAVAILABLE"
@@ -660,6 +667,7 @@ def test_build_bundles_from_provider_merges_13f_amendment_text(monkeypatch) -> N
     assert facts[("position_value_usd", "position:1")].value_numeric == 1250000.0
     assert facts[("info_table_value_total_usd", "document")].value_numeric == 1250000.0
     assert facts[("amendment_scope_quant", "document")].value_text == "correction"
+    assert json.loads(facts[("amendment_scope_quant", "document")].value_json)["scope"] == "other"
 
     evidence = {(item.field_name, item.subject_key): item for item in bundle.evidences}
     assert evidence[("amendment_scope_quant", "document")].locator_kind == "section_window"
