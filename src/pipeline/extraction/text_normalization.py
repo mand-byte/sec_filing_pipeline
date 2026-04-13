@@ -53,7 +53,9 @@ class SpanNormalizer(Protocol):
         field_spec: TextFieldSpec,
         schema_ref: str,
         selected_span: SelectedSpan,
-    ) -> NormalizationOutcome: ...
+    ) -> NormalizationOutcome:
+        """Normalize one selected text span into the schema-specific output."""
+        ...
 
 
 class UnavailableSpanNormalizer:
@@ -64,6 +66,7 @@ class UnavailableSpanNormalizer:
         schema_ref: str,
         selected_span: SelectedSpan,
     ) -> NormalizationOutcome:
+        """Report that structured normalization is not currently available."""
         del field_spec, schema_ref, selected_span
         return NormalizationFailure(error_code="NORMALIZATION_UNAVAILABLE")
 
@@ -75,6 +78,7 @@ class RegexJsonSpanNormalizer:
         bool_patterns: dict[Any, Any],
         text: str,
     ) -> bool | None:
+        """Resolve a boolean field from configured true/false regex patterns."""
         true_pattern = bool_patterns.get("true", bool_patterns.get(True))
         false_pattern = bool_patterns.get("false", bool_patterns.get(False))
 
@@ -93,6 +97,7 @@ class RegexJsonSpanNormalizer:
         text: str,
         node: Any,
     ) -> float | None:
+        """Resolve a numeric field from regex captures or constant pattern maps."""
         parsed: float | None = None
         matched_text = ""
 
@@ -126,6 +131,7 @@ class RegexJsonSpanNormalizer:
         schema_ref: str,
         selected_span: SelectedSpan,
     ) -> NormalizationOutcome:
+        """Normalize a span with regex-driven JSON field extraction rules."""
         schema = load_text_schema(schema_ref)
         if schema.root.type != "object":
             return NormalizationFailure(error_code="SCHEMA_VALIDATION_FAILED")
@@ -238,6 +244,7 @@ class RegexJsonSpanNormalizer:
 
 class HttpJsonSpanNormalizer:
     def __init__(self, *, base_url: str, model: str, api_key: str | None, timeout_seconds: float):
+        """Configure the HTTP-backed JSON span normalizer."""
         self._base_url = base_url
         self._model = model
         self._api_key = api_key
@@ -250,6 +257,7 @@ class HttpJsonSpanNormalizer:
         schema_ref: str,
         selected_span: SelectedSpan,
     ) -> NormalizationOutcome:
+        """Call the external provider to normalize one span into structured JSON."""
         schema = load_text_schema(schema_ref)
         normalizer_input_text = (
             selected_span.normalizer_input_text
@@ -327,6 +335,7 @@ class HttpJsonSpanNormalizer:
 
 
 def normalizer_from_settings(settings: Settings | None = None) -> SpanNormalizer | None:
+    """Build the configured span normalizer from settings when supported."""
     effective_settings = settings or Settings()
     mode = str(effective_settings.text_normalizer_mode).strip().lower()
     if mode == "http_json":
@@ -344,6 +353,7 @@ def normalizer_from_settings(settings: Settings | None = None) -> SpanNormalizer
 
 
 def merge_selection_trace(*, base_json: str, additions: dict[str, Any]) -> str:
+    """Merge extra trace metadata into a persisted selection-trace JSON blob."""
     payload = json.loads(base_json)
     if not isinstance(payload, dict):
         payload = {}

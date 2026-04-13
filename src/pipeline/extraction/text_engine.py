@@ -49,9 +49,11 @@ TextExtractionOutcome = TextExtractionOk | TextExtractionFailure
 
 class TextExtractionEngine:
     def __init__(self, *, normalizer: SpanNormalizer | None = None):
+        """Create a text extraction engine with an optional normalization backend."""
         self._normalizer = normalizer
 
     def _effective_normalizer(self, *, field_spec: TextFieldSpec) -> SpanNormalizer:
+        """Select the normalizer implementation for one field spec."""
         if self._normalizer is not None:
             return self._normalizer
         mode = str(field_spec.normalizer_overrides.get("mode", "")).strip().lower() if field_spec.normalizer_overrides else ""
@@ -69,6 +71,7 @@ class TextExtractionEngine:
         return UnavailableSpanNormalizer()
 
     def _heading_path_json(self, *, window_hit: Mapping[str, object]) -> str:
+        """Build the heading-path JSON payload for one locator hit."""
         locator_path = str(window_hit["locator_path"])
         heading = locator_path
         if "[" in locator_path and locator_path.endswith("]"):
@@ -84,6 +87,7 @@ class TextExtractionEngine:
         source_start: int,
         source_end: int,
     ) -> str:
+        """Build the block-offset JSON payload for a selected match span."""
         payload = {
             "window_base": int(window_hit["window_base"]),
             "span_start_in_window": span_start,
@@ -106,6 +110,7 @@ class TextExtractionEngine:
         distinct_match_count: int,
         value_text: str,
     ) -> str:
+        """Capture adequacy signals for one selected text window and match."""
         window_token_count = len(re.findall(r"\S+", window_text))
         value_token_count = len(re.findall(r"\S+", value_text))
         preferred_tokens_match = None
@@ -125,6 +130,7 @@ class TextExtractionEngine:
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     def _span_policy_error(self, *, window_text: str, span_policy: SpanPolicy) -> str | None:
+        """Return the span-policy failure code when a window violates the policy."""
         lowered_window = window_text.casefold()
         header_text = window_text.splitlines()[0].strip().casefold() if window_text.splitlines() else ""
 
@@ -156,6 +162,7 @@ class TextExtractionEngine:
         return None
 
     def _qa_check(self, value_text: str, qa_rules: Mapping[str, int | float | bool]) -> str | None:
+        """Apply simple QA length checks to one extracted text value."""
         min_len = qa_rules.get("min_len")
         if isinstance(min_len, (int, float)) and not isinstance(min_len, bool) and len(value_text) < int(min_len):
             return "QA_FAILED"
@@ -167,6 +174,7 @@ class TextExtractionEngine:
         return None
 
     def _selected_span_ok(self, *, selected_span: SelectedSpan, value_json: str | None = None) -> TextExtractionOk:
+        """Convert a selected span into the standard successful extraction payload."""
         return {
             "status": "ok",
             "value_text": selected_span.value_text,
@@ -185,6 +193,7 @@ class TextExtractionEngine:
         }
 
     def _normalizer_input_candidates(self, *, selected_span: SelectedSpan, span_policy: SpanPolicy | None) -> list[tuple[int, str]]:
+        """Generate candidate normalizer inputs for retry/expansion logic."""
         window_text = (
             selected_span.normalizer_window_text
             or selected_span.normalizer_input_text
@@ -223,6 +232,7 @@ class TextExtractionEngine:
         current_index: int,
         candidate_count: int,
     ) -> tuple[str, int, str] | None:
+        """Decide whether adequacy signals warrant a retry on another candidate span."""
         if candidate_count <= 1 or not adequacy_signals_json:
             return None
         try:
@@ -250,6 +260,7 @@ class TextExtractionEngine:
         field_spec: TextFieldSpec,
         selected_span: SelectedSpan,
     ) -> NormalizationOutcome:
+        """Normalize one selected span and optionally retry with expanded context."""
         if not field_spec.output_schema:
             return NormalizationFailure(error_code="NORMALIZATION_FAILED")
 
@@ -308,6 +319,7 @@ class TextExtractionEngine:
         )
 
     def _select_candidate(self, *, filing: object, field_spec: TextFieldSpec) -> SelectedSpan | TextExtractionFailure:
+        """Find the best text span candidate for one field spec."""
         best_failure: str = "PATTERN_NOT_MATCHED"
         failure_priority = {
             "PATTERN_NOT_MATCHED": 0,
@@ -441,6 +453,7 @@ class TextExtractionEngine:
         return {"status": "error", "error_code": best_failure}
 
     def extract_field(self, *, filing: object, field_spec: TextFieldSpec) -> TextExtractionOutcome:
+        """Extract and optionally normalize one text field from a filing."""
         selection = self._select_candidate(filing=filing, field_spec=field_spec)
         if isinstance(selection, dict):
             return selection
