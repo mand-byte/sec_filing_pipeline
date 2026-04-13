@@ -41,12 +41,15 @@ class _OfflineFixtureFiling:
     section_payload: object | None
 
     def parse(self) -> str:
+        """Expose the fixture text through the filing parse surface."""
         return self.parse_text
 
     def text(self) -> str:
+        """Expose the fixture text through the filing text surface."""
         return self.parse_text
 
     def sections(self) -> object | None:
+        """Expose the optional structured section payload for the fixture."""
         return self.section_payload
 
 
@@ -54,12 +57,14 @@ FieldKey = tuple[str, str]
 
 
 def _require_yaml() -> Any:
+    """Require the optional PyYAML dependency for offline evaluation."""
     if yaml is None:
         raise RuntimeError("PyYAML is required for offline evaluator")
     return yaml
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Load a YAML mapping file and reject non-mapping roots."""
     parser = _require_yaml()
     payload = parser.safe_load(path.read_text(encoding="utf-8"))
     if payload is None:
@@ -70,6 +75,7 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
 
 
 def _resolve_fixture_path(*, fixtures_dir: Path, fixture_file: str) -> Path:
+    """Resolve a fixture path while preventing directory traversal."""
     fixtures_root = fixtures_dir.resolve()
     candidate = (fixtures_root / fixture_file).resolve()
     if candidate.parent != fixtures_root and fixtures_root not in candidate.parents:
@@ -78,12 +84,14 @@ def _resolve_fixture_path(*, fixtures_dir: Path, fixture_file: str) -> Path:
 
 
 def _as_string_tuple(values: object) -> tuple[str, ...]:
+    """Normalize a sequence-like config value into a tuple of strings."""
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
         raise ValueError("Expected sequence of strings")
     return tuple(str(value) for value in values)
 
 
 def _validate_field_override_shape(*, field_name: str, override: Mapping[str, Any]) -> None:
+    """Validate that a tier2 field override is self-sufficient."""
     required_keys = (
         "route",
         "form_families",
@@ -111,6 +119,7 @@ def _validate_field_override_shape(*, field_name: str, override: Mapping[str, An
 
 
 def _apply_field_override(spec: TextFieldSpec, override: Mapping[str, Any]) -> TextFieldSpec:
+    """Apply one tier2 regex override onto a base runtime text spec."""
     route = str(override.get("route", spec.route))
 
     form_families_value = override.get("form_families", spec.form_families)
@@ -153,6 +162,7 @@ def _apply_field_override(spec: TextFieldSpec, override: Mapping[str, Any]) -> T
 
 
 def _build_spec_map(regex_config: Mapping[str, Any]) -> dict[FieldKey, TextFieldSpec]:
+    """Build the effective text-spec map after applying regex overrides."""
     base_specs = all_text_field_specs()
     spec_map: dict[FieldKey, TextFieldSpec] = {(spec.route, spec.field_name): spec for spec in base_specs}
 
@@ -188,6 +198,7 @@ def _update_by_field(
     matched: bool,
     status: str,
 ) -> None:
+    """Accumulate per-field offline evaluation counters."""
     stats = by_field.setdefault(
         field_name,
         {"total": 0, "matched": 0, "failed": 0, "ok": 0, "error": 0, "not_applicable": 0},
@@ -206,6 +217,7 @@ def _update_by_field(
 
 
 def _load_baseline(path: Path) -> dict[str, Any]:
+    """Load a baseline summary file for regression comparisons."""
     if not path.exists():
         raise ValueError(f"baseline file not found: {path}")
 
@@ -216,6 +228,7 @@ def _load_baseline(path: Path) -> dict[str, Any]:
 
 
 def _matched_rate(field_stats: Mapping[str, Any]) -> float:
+    """Compute the matched-rate metric from a per-field summary row."""
     total = field_stats.get("total")
     matched = field_stats.get("matched")
     if not isinstance(total, int) or total <= 0:
@@ -226,6 +239,7 @@ def _matched_rate(field_stats: Mapping[str, Any]) -> float:
 
 
 def _build_diff_markdown(failures: list[dict[str, Any]], regressions: list[str]) -> str:
+    """Render the failures/regressions section for offline diff artifacts."""
     if not failures and not regressions:
         return "# Diff\n- no failures\n- no regressions vs baseline"
 
@@ -244,6 +258,7 @@ def _build_diff_markdown(failures: list[dict[str, Any]], regressions: list[str])
 
 
 def _subject_key_for_candidate(candidate: Mapping[str, Any]) -> str:
+    """Choose the subject key to use when exporting review packets."""
     for key in ("subject_key", "subject_id"):
         value = candidate.get(key)
         if isinstance(value, str) and value.strip():
@@ -254,6 +269,7 @@ def _subject_key_for_candidate(candidate: Mapping[str, Any]) -> str:
 
 
 def _matches_expected_ok_value(*, expected_value: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+    """Compare a successful candidate payload against the expected value."""
     if candidate.get("status") != "ok":
         return False
 
@@ -281,6 +297,7 @@ def _build_manifest(
     selectors: OfflineEvalSelectors,
     baseline_path: Path | None,
 ) -> dict[str, Any]:
+    """Build the offline-evaluator artifact manifest payload."""
     return {
         "run_id": run_id,
         "config_paths": {
@@ -311,6 +328,7 @@ def run_offline_tier2_evaluation(
     baseline_path: Path | None = None,
     min_pass_rate: float = 0.95,
 ) -> OfflineEvalResult:
+    """Run the offline tier2 evaluator and write strict-v2 artifacts."""
     selectors = selectors or OfflineEvalSelectors()
     run_id_value = run_id or make_run_id()
 
