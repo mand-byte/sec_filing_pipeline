@@ -31,6 +31,7 @@ class BundleBuildOutcome:
 
 
 def _normalize_to_utc(value: datetime) -> datetime:
+    """Normalize datetimes to UTC before routing comparisons."""
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
 
@@ -38,18 +39,22 @@ def _normalize_to_utc(value: datetime) -> datetime:
 
 
 def _as_utc_start_of_day(start_date: date) -> datetime:
+    """Convert a configured start date into the first UTC instant of that day."""
     return datetime.combine(start_date, time.min, tzinfo=timezone.utc)
 
 
 def _as_utc_end_of_day(end_date: date) -> datetime:
+    """Convert a configured end date into the last UTC instant of that day."""
     return datetime.combine(end_date, time.max, tzinfo=timezone.utc)
 
 
 def _bundle_sort_key(bundle: FilingBundle) -> tuple[datetime, str]:
+    """Sort bundles by accepted time and accession number."""
     return (_normalize_to_utc(bundle.filing.accepted_at), bundle.filing.accession_no)
 
 
 def _format_exception_detail(exc: BaseException) -> str:
+    """Render an exception traceback into one persisted log string."""
     return "".join(traceback.TracebackException.from_exception(exc).format()).strip()
 
 
@@ -61,6 +66,7 @@ def _route_summary_message(
     skipped_before_watermark: int,
     skipped_ineligible: int,
 ) -> str:
+    """Build the standard per-route summary log message."""
     return (
         "route processed: "
         f"eligible={eligible_count} "
@@ -78,6 +84,7 @@ def _load_route_filing_bundles(
     start_accepted_at: datetime,
     end_accepted_at: datetime | None = None,
 ) -> list[FilingBundle]:
+    """Load prebuilt filing bundles from a test/security fixture when available."""
     del start_accepted_at
     bundles_by_route = getattr(security, "filing_bundles_by_route", None)
     if not isinstance(bundles_by_route, dict):
@@ -112,6 +119,7 @@ def _safe_write_log(
     error_type: str | None = None,
     error_detail: str | None = None,
 ) -> None:
+    """Write a log record while swallowing secondary logging failures."""
     try:
         repo.write_log(
             run_id=run_id,
@@ -129,6 +137,7 @@ def _safe_write_log(
 
 
 def _review_metric_for_gate(fact: FactInput) -> float | None:
+    """Derive the scalar metric used by the review gate from one fact."""
     if isinstance(fact.value_numeric, (int, float)) and not isinstance(fact.value_numeric, bool):
         return float(fact.value_numeric)
 
@@ -141,6 +150,7 @@ def _review_metric_for_gate(fact: FactInput) -> float | None:
 
 
 def _provider_uncertainty_signal(evidence: EvidenceInput | None) -> tuple[str | None, str | None]:
+    """Map provider adequacy signals to review reasons and priorities."""
     if evidence is None or not evidence.adequacy_signals_json:
         return None, None
     try:
@@ -162,6 +172,7 @@ def _provider_uncertainty_signal(evidence: EvidenceInput | None) -> tuple[str | 
 
 
 def _apply_review_gate_to_bundle(*, bundle: FilingBundle, route: RouteName, stats: SqlAlchemyReviewStats) -> None:
+    """Apply review-gate heuristics to text facts inside one filing bundle."""
     form_family = classify_form_family(bundle.filing.form_type)
     text_field_names = {
         spec.field_name
@@ -220,6 +231,7 @@ class RouteProcessor:
     ignore_existing_watermarks: bool = False
 
     def run(self, *, security: Any, route: RouteName, run_id: str) -> None:
+        """Process one security for one route, including persistence and watermarks."""
         cik = getattr(security, "cik", None)
         if cik is None:
             _safe_write_log(

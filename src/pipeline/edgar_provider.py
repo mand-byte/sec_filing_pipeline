@@ -23,6 +23,7 @@ class FilingEnvelope:
 
 
 def classify_form_family(form_type: str) -> str:
+    """Normalize SEC form strings into the form-family keys used downstream."""
     normalized = form_type.strip().upper()
     if normalized.startswith("SC 13D") or normalized.startswith("SCHEDULE 13D"):
         return "13D"
@@ -34,6 +35,7 @@ def classify_form_family(form_type: str) -> str:
 
 
 def _route_forms(route: str) -> tuple[str, ...]:
+    """Return the set of filing forms relevant to one pipeline route."""
     if route == "owner":
         base_forms = {
             "3",
@@ -72,12 +74,14 @@ def _route_forms(route: str) -> tuple[str, ...]:
 
 
 def _normalize_to_utc(value: datetime) -> datetime:
+    """Normalize datetimes to UTC before comparing filing timestamps."""
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
 
 def _coerce_datetime(value: object) -> datetime | None:
+    """Coerce mixed filing metadata date values into UTC datetimes."""
     if isinstance(value, datetime):
         return _normalize_to_utc(value)
 
@@ -96,6 +100,7 @@ def _coerce_datetime(value: object) -> datetime | None:
 
 
 def _first_datetime_attribute(target: object, *names: str) -> datetime | None:
+    """Return the first datetime-like attribute that can be coerced successfully."""
     for name in names:
         try:
             value = getattr(target, name, None)
@@ -108,6 +113,7 @@ def _first_datetime_attribute(target: object, *names: str) -> datetime | None:
 
 
 def _coerce_int(value: object) -> int | None:
+    """Coerce integer-like values while rejecting booleans and non-integral floats."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -122,6 +128,7 @@ def _coerce_int(value: object) -> int | None:
 
 
 def _first_int_attribute(target: object, *names: str) -> int | None:
+    """Return the first integer-like attribute that can be coerced successfully."""
     for name in names:
         try:
             value = getattr(target, name, None)
@@ -134,11 +141,13 @@ def _first_int_attribute(target: object, *names: str) -> int | None:
 
 
 def _filing_storage_day(*, filed_at: datetime | None, accepted_at: datetime) -> str:
+    """Choose the YYYYMMDD storage bucket for one filing artifact."""
     effective_filing_date = filed_at or accepted_at
     return _normalize_to_utc(effective_filing_date).strftime("%Y%m%d")
 
 
 def _local_filing_exists(*, local_data_dir: Path, filing_day: str, accession_no: str) -> bool:
+    """Check whether a filing artifact already exists in local EDGAR storage."""
     final_dir = local_data_dir / "filings" / filing_day
     if (final_dir / f"{accession_no}.nc").exists():
         return True
@@ -148,6 +157,7 @@ def _local_filing_exists(*, local_data_dir: Path, filing_day: str, accession_no:
 
 
 def _filing_exists_via_edgar_storage(*, edgar_module: object, filing_day: str, accession_no: str) -> bool:
+    """Check whether a filing artifact already exists via EdgarPath storage."""
     try:
         from edgar.filesystem import EdgarPath
     except Exception:
@@ -158,6 +168,7 @@ def _filing_exists_via_edgar_storage(*, edgar_module: object, filing_day: str, a
 
 
 def _download_full_submission_text(filing: object) -> str | None:
+    """Download or read the full submission text for one filing object."""
     full_text_method = getattr(filing, "full_text_submission", None)
     if callable(full_text_method):
         try:
@@ -190,6 +201,7 @@ def _store_filtered_filings_locally(
     local_data_dir: Path,
     use_cloud_storage: bool = False,
 ) -> None:
+    """Persist newly fetched filing text into local or cloud-backed EDGAR storage."""
     for envelope in envelopes:
         filing_day = _filing_storage_day(
             filed_at=envelope.filed_at,
@@ -248,6 +260,7 @@ def fetch_filings_for_security(
     cloud_access_id: str | None = None,
     cloud_access_key: str | None = None,
 ) -> list[FilingEnvelope]:
+    """Fetch and normalize filings for one security and route from edgartools."""
     forms = _route_forms(route)
     if not forms:
         return []
