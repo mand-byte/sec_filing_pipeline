@@ -14,6 +14,7 @@ from src.pipeline.types import FilingRecord
 
 
 def coerce_numeric_value(value: object) -> float | None:
+    """Coerce mixed numeric-like inputs into finite floats."""
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float, Decimal)):
@@ -32,6 +33,7 @@ def coerce_numeric_value(value: object) -> float | None:
 
 
 def build_owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
+    """Build owner-route Form 3/4/5 bundles from the object-backed filing surface."""
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
         return BundleBuildOutcome(bundle=None)
@@ -185,6 +187,7 @@ def build_owner_ownership_bundle(*, envelope: Any, filing: FilingRecord) -> Bund
 
 
 def build_holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
+    """Build holding-route 13F bundles from the object-backed filing surface."""
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
         return BundleBuildOutcome(bundle=None)
@@ -321,6 +324,7 @@ def build_holding_13f_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBu
 
 
 def build_issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
+    """Build issuer-route 8-K vote bundles from Item 5.07 content."""
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
         return BundleBuildOutcome(bundle=None)
@@ -448,12 +452,14 @@ def build_issuer_8k_vote_bundle(*, envelope: Any, filing: FilingRecord) -> Bundl
 
 
 def strip_namespace(tag: str) -> str:
+    """Remove an XML namespace prefix from a tag name."""
     if "}" in tag:
         return tag.rsplit("}", 1)[1]
     return tag
 
 
 def xml_root(xml_text: str) -> ET.Element | None:
+    """Parse XML text into an ElementTree root when valid."""
     try:
         return ET.fromstring(xml_text)
     except ET.ParseError:
@@ -461,10 +467,12 @@ def xml_root(xml_text: str) -> ET.Element | None:
 
 
 def xml_findall(element: ET.Element, tag_name: str) -> list[ET.Element]:
+    """Find all descendant elements whose local tag matches the target name."""
     return [child for child in element.iter() if strip_namespace(child.tag) == tag_name]
 
 
 def xml_child_text(element: ET.Element, tag_name: str) -> str | None:
+    """Return the first non-empty descendant text for the given tag name."""
     for child in element.iter():
         if strip_namespace(child.tag) != tag_name:
             continue
@@ -477,6 +485,7 @@ def xml_child_text(element: ET.Element, tag_name: str) -> str | None:
 
 
 def xml_direct_child_text(element: ET.Element, tag_name: str) -> str | None:
+    """Return the first non-empty direct-child text for the given tag name."""
     for child in list(element):
         if strip_namespace(child.tag) != tag_name:
             continue
@@ -489,6 +498,7 @@ def xml_direct_child_text(element: ET.Element, tag_name: str) -> str | None:
 
 
 def extract_monetary_amount(text: str | None) -> float | None:
+    """Extract a single monetary amount from owner-route narrative text."""
     if not isinstance(text, str):
         return None
 
@@ -530,6 +540,7 @@ def extract_monetary_amount(text: str | None) -> float | None:
 
 
 def build_owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, form_family: str) -> BundleBuildOutcome:
+    """Build owner-route Schedule 13D/13G bundles from the filing XML surface."""
     xml_method = getattr(envelope.filing, "xml", None)
     if not callable(xml_method):
         return BundleBuildOutcome(bundle=None)
@@ -677,6 +688,7 @@ def build_owner_schedule_13dg_bundle(*, envelope: Any, filing: FilingRecord, for
 
 
 def build_owner_form144_bundle(*, envelope: Any, filing: FilingRecord) -> BundleBuildOutcome:
+    """Build owner-route Form 144 bundles from the object-backed filing surface."""
     obj_method = getattr(envelope.filing, "obj", None)
     if not callable(obj_method):
         return BundleBuildOutcome(bundle=None)
