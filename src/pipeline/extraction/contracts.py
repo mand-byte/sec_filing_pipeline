@@ -48,6 +48,7 @@ class NumericFieldSpec:
     xbrl_enabled_form_families: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """Normalize configured numeric field spec values and validate ranges."""
         object.__setattr__(self, "field_name", self.field_name.strip())
         object.__setattr__(
             self,
@@ -96,6 +97,7 @@ class NumericFieldCatalogEntry:
     form_families: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        """Normalize catalog entry values after dataclass construction."""
         object.__setattr__(self, "field_name", self.field_name.strip())
         object.__setattr__(
             self,

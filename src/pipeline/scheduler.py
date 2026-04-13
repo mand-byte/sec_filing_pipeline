@@ -19,10 +19,13 @@ class RouterContext(Protocol):
 class Router(Protocol):
     name: str
 
-    def run(self, *, security: Any, context: RouterContext) -> None: ...
+    def run(self, *, security: Any, context: RouterContext) -> None:
+        """Process one security for this router."""
+        ...
 
 
 def ordered_routers(router_map: dict[str, object]) -> list[object]:
+    """Return routers ordered by the canonical route sequence."""
     return [router_map[route_name] for route_name in ROUTE_ORDER if route_name in router_map]
 
 
@@ -32,6 +35,7 @@ def run_single_tick(
     routers: Iterable[Router],
     repo: Any,
 ) -> None:
+    """Run one scheduler tick across the provided securities and routers."""
     for security in securities:
         for router in routers:
             try:
@@ -70,6 +74,7 @@ def build_blocking_scheduler(
     interval_minutes: int,
     tick_callable: Callable[[], None],
 ) -> BlockingScheduler:
+    """Build the interval scheduler used by the CLI schedule command."""
     scheduler = BlockingScheduler()
     scheduler.add_job(
         tick_callable,
@@ -81,4 +86,5 @@ def build_blocking_scheduler(
 
 
 def make_run_id() -> str:
+    """Generate the canonical UTC run id used by runtime artifacts."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")

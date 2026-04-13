@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from types import MappingProxyType
-from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
 RouteName = Literal["issuer", "owner", "holding"]
@@ -21,6 +20,7 @@ class SpanPolicy:
     avoid: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """Normalize span-policy tuple fields after dataclass construction."""
         object.__setattr__(self, "anchor_headers", tuple(self.anchor_headers))
         object.__setattr__(self, "expand_steps", tuple(int(step) for step in self.expand_steps))
         object.__setattr__(self, "must_include", tuple(self.must_include))
@@ -48,6 +48,7 @@ class TextFieldSpec:
     normalizer_overrides: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        """Normalize and validate one runtime text field specification."""
         field_name = self.field_name.strip()
         if not field_name:
             raise ValueError("field_name must be non-empty after stripping")
@@ -92,6 +93,7 @@ class TextFieldCatalogEntry:
     implemented: bool
 
     def __post_init__(self) -> None:
+        """Normalize catalog entry values after dataclass construction."""
         object.__setattr__(self, "field_name", self.field_name.strip())
         object.__setattr__(
             self,

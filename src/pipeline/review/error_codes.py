@@ -18,6 +18,7 @@ REVIEW_ERROR_CODES: tuple[str, ...] = (
 
 
 def normalize_review_error_code(value: str) -> str:
+    """Normalize and validate a review error code token."""
     normalized = value.strip().lower().replace("-", "_")
     if normalized not in REVIEW_ERROR_CODES:
         allowed = ", ".join(REVIEW_ERROR_CODES)

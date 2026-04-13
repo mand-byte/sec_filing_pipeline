@@ -10,9 +10,11 @@ from src.db.models import ExtractedFact, ExtractionEvidence, FilingDocument
 
 class SqlAlchemyReviewStats:
     def __init__(self, session: Session):
+        """Back the review-gate heuristics with SQLAlchemy queries."""
         self.session = session
 
     def issuer_field_count(self, cik: str, route: str, field_name: str) -> int:
+        """Count historical facts for one issuer/route/field combination."""
         count = self.session.scalar(
             select(func.count())
             .select_from(ExtractedFact)
@@ -26,6 +28,7 @@ class SqlAlchemyReviewStats:
         return int(count or 0)
 
     def template_field_count(self, template_hash: str, route: str, field_name: str) -> int:
+        """Count how often one extraction template produced this field."""
         count = self.session.scalar(
             select(func.count()).select_from(ExtractionEvidence).where(
                 ExtractionEvidence.source_xpath == template_hash,
@@ -36,6 +39,7 @@ class SqlAlchemyReviewStats:
         return int(count or 0)
 
     def zscore(self, value_numeric: float, route: str, field_name: str) -> float | None:
+        """Measure how extreme a numeric value is relative to past facts."""
         rows = self.session.execute(
             select(ExtractedFact.value_numeric, ExtractedFact.value_text).where(
                 ExtractedFact.route == route,

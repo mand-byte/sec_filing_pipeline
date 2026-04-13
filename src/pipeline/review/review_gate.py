@@ -21,11 +21,17 @@ class ReviewGateDecision(TypedDict):
 
 
 class ReviewStats(Protocol):
-    def issuer_field_count(self, cik: str, route: str, field_name: str) -> int: ...
+    def issuer_field_count(self, cik: str, route: str, field_name: str) -> int:
+        """Return how many historical facts exist for this issuer/field."""
+        ...
 
-    def template_field_count(self, template_hash: str, route: str, field_name: str) -> int: ...
+    def template_field_count(self, template_hash: str, route: str, field_name: str) -> int:
+        """Return how often this template/field pairing has been seen."""
+        ...
 
-    def zscore(self, value_numeric: float, route: str, field_name: str) -> float | None: ...
+    def zscore(self, value_numeric: float, route: str, field_name: str) -> float | None:
+        """Return the outlier score for one numeric candidate when available."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,7 @@ def evaluate_review_gate(
     stats: ReviewStats,
     outlier_zscore_threshold: float = 3.0,
 ) -> ReviewGateDecision:
+    """Decide whether a candidate can auto-accept or must go to review."""
     if stats.issuer_field_count(candidate.cik, candidate.route, candidate.field_name) <= 0:
         reason: ReviewReason = "first_seen_for_issuer"
         return {

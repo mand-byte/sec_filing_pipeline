@@ -24,10 +24,12 @@ class PreferredTruth:
     value_unit: str | None
 
     def asdict(self) -> dict[str, object]:
+        """Return a JSON-serializable representation of the preferred truth row."""
         return asdict(self)
 
 
 def _coerce_numeric(value: Decimal | float | int | None) -> float | None:
+    """Normalize mixed numeric DB values to floats."""
     if value is None:
         return None
     return float(value)
@@ -41,6 +43,7 @@ def select_preferred_truth(
     field_name: str,
     subject_key: str = "document",
 ) -> PreferredTruth | None:
+    """Prefer manual-review ground truth, then fall back to parsed facts."""
     manual_truth_row = session.execute(
         select(GoldenTruth, GoldenCase, GoldenSubject)
         .join(GoldenCase, GoldenCase.case_id == GoldenTruth.case_id)
