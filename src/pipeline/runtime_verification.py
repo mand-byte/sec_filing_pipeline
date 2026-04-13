@@ -13,6 +13,7 @@ from src.db.models import FilingAttempt, PipelineLog
 
 
 def build_run_artifact_payloads(*, session: Session, run_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    """Rebuild runtime artifact payloads from the authoritative DB state."""
     route_rows = session.execute(
         select(PipelineLog.route, func.count())
         .where(PipelineLog.run_id == run_id, PipelineLog.stage == "persist", PipelineLog.level == "INFO")
@@ -85,6 +86,7 @@ def build_run_artifact_payloads(*, session: Session, run_id: str) -> tuple[dict[
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
+    """Load one JSON object file and reject non-object payloads."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"expected JSON object in {path}")
@@ -92,6 +94,7 @@ def load_json_file(path: Path) -> dict[str, Any]:
 
 
 def load_ndjson_file(path: Path) -> list[dict[str, Any]]:
+    """Load NDJSON records and reject any non-object row."""
     lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     records: list[dict[str, Any]] = []
     for line in lines:
@@ -112,6 +115,7 @@ class RuntimeRunVerificationResult:
 
 
 def load_backfill_cohort_manifest(path: Path) -> list[str]:
+    """Extract the runtime run ids from one cohort manifest artifact."""
     payload = load_json_file(path)
     route_runs = payload.get("route_runs", [])
     if not isinstance(route_runs, Sequence) or isinstance(route_runs, (str, bytes)):
@@ -134,6 +138,7 @@ def verify_runtime_run(
     run_id: str,
     base_dir: Path,
 ) -> RuntimeRunVerificationResult:
+    """Compare one runtime artifact directory against DB-derived truth."""
     run_dir = base_dir / run_id
 
     mismatches: list[str] = []

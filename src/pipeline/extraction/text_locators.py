@@ -24,11 +24,13 @@ LocatorHandler = Callable[[object, tuple[str, ...]], TextLocatorHit | None]
 
 
 def _call_quietly(method: Callable[[], object]) -> object:
+    """Call a provider method without leaking stdout or stderr noise."""
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         return method()
 
 
 def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | None:
+    """Return a safe zero-argument bound method when the target exposes it."""
     try:
         candidate = getattr(target, name, None)
     except Exception:
@@ -46,6 +48,7 @@ def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | No
 
 
 def _score_anchor_occurrence(text: str, *, anchor_start: int, anchor_end: int) -> int:
+    """Score one anchor occurrence so heading-like matches beat TOC noise."""
     line_start = text.rfind("\n", 0, anchor_start) + 1
     line_end = text.find("\n", anchor_end)
     if line_end < 0:
@@ -84,6 +87,7 @@ def _score_anchor_occurrence(text: str, *, anchor_start: int, anchor_end: int) -
 
 
 def _window_around_anchor(text: str, anchor: str, radius: int = 220) -> tuple[str, int, int] | None:
+    """Return the best-scoring text window around one anchor term."""
     lowered_text = text.lower()
     lowered_anchor = anchor.lower()
 
@@ -111,6 +115,7 @@ def _window_around_anchor(text: str, anchor: str, radius: int = 220) -> tuple[st
 
 
 def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit | None:
+    """Resolve anchors against filing.items when that structured surface exists."""
     items = getattr(filing, "items", None)
     if not isinstance(items, Mapping):
         return None
@@ -152,6 +157,7 @@ def _try_item_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit
 
 
 def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit | None:
+    """Resolve anchors against filing.sections content or headings."""
     sections_method = _get_zero_arg_method(filing, "sections")
     if sections_method is None:
         return None
@@ -233,6 +239,7 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
 
 
 def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLocatorHit | None:
+    """Resolve anchors against parsed full-text content."""
     parse_method = _get_zero_arg_method(filing, "parse")
     parsed_text: object | None = None
     source_path = "parse"
@@ -272,6 +279,7 @@ def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLoca
 
 
 def run_text_locator(*, filing: object, locator: str, anchors: Sequence[str]) -> TextLocatorHit | None:
+    """Run one named text locator strategy against the filing."""
     handlers: dict[str, LocatorHandler] = {
         "item_window": _try_item_window,
         "section_window": _try_section_window,
@@ -286,12 +294,3 @@ def run_text_locator(*, filing: object, locator: str, anchors: Sequence[str]) ->
         return None
 
     return handler(filing, normalized_anchors)
-
-
-def run_text_locator_chain(*, filing: object, locators: Sequence[str], anchors: Sequence[str]) -> TextLocatorHit | None:
-    for locator in locators:
-        hit = run_text_locator(filing=filing, locator=locator, anchors=anchors)
-        if hit is not None:
-            return hit
-
-    return None

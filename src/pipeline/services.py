@@ -44,10 +44,12 @@ class EvidenceInput:
 
 class PersistenceService:
     def __init__(self, session: Session):
+        """Persist extracted facts, evidences, and review tasks into the DB."""
         self.session = session
 
     @staticmethod
     def _bounded_text(value: str | None, *, limit: int) -> str | None:
+        """Trim text fields to the database column limit when present."""
         if value is None:
             return None
         text = str(value)
@@ -55,6 +57,7 @@ class PersistenceService:
 
     @staticmethod
     def _effective_source_locator_json(evidence: EvidenceInput) -> str:
+        """Reuse explicit locator JSON or derive a stable fallback payload."""
         if evidence.source_locator_json is not None:
             return evidence.source_locator_json
 
@@ -71,38 +74,6 @@ class PersistenceService:
             sort_keys=True,
         )
 
-    def persist_numeric_field(
-        self,
-        *,
-        filing: FilingRecord,
-        route: RouteName | str,
-        field_name: str,
-        value_numeric: float | int,
-        locator_kind: str,
-        locator_path: str,
-        raw_value: str | float | int,
-    ) -> None:
-        self.persist_filing_bundle(
-            filing=filing,
-            route=route,
-            facts=[
-                FactInput(
-                    field_name=field_name,
-                    value_numeric=float(value_numeric),
-                    confidence=0.99,
-                )
-            ],
-            evidences=[
-                EvidenceInput(
-                    field_name=field_name,
-                    locator_kind=locator_kind,
-                    source_span=locator_path,
-                    raw_value=str(raw_value),
-                    normalized_value=str(value_numeric),
-                )
-            ],
-        )
-
     def persist_filing_bundle(
         self,
         *,
@@ -111,6 +82,7 @@ class PersistenceService:
         facts: list[FactInput],
         evidences: list[EvidenceInput],
     ) -> None:
+        """Upsert one filing's extracted facts and linked evidence rows."""
         if facts and not evidences:
             raise ValueError("at least one evidence")
 

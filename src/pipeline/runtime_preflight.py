@@ -39,6 +39,7 @@ class RuntimePreflightResult:
     checks: list[RuntimePreflightCheck]
 
     def asdict(self) -> dict[str, object]:
+        """Return a JSON-serializable representation of the preflight result."""
         return {
             "passed": self.passed,
             "checks": [asdict(check) for check in self.checks],
@@ -46,10 +47,12 @@ class RuntimePreflightResult:
 
 
 def _check(name: str, status: str, detail: str) -> RuntimePreflightCheck:
+    """Build one normalized preflight check row."""
     return RuntimePreflightCheck(name=name, status=status, detail=detail)
 
 
 def _split_qualified_name(value: str) -> tuple[str | None, str]:
+    """Split an optional database-qualified table name."""
     cleaned = value.strip()
     if "." not in cleaned:
         return None, cleaned
@@ -63,6 +66,7 @@ def run_runtime_preflight(
     engine: Engine | None = None,
     clickhouse_client_factory: Callable[..., object] | None = None,
 ) -> RuntimePreflightResult:
+    """Validate DB, EDGAR, text-normalizer, and universe-source readiness."""
     effective_settings = settings or Settings()
     effective_engine = engine or build_engine(effective_settings)
     checks: list[RuntimePreflightCheck] = []
