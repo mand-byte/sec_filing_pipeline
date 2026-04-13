@@ -2,6 +2,7 @@ from src.cli import app
 
 
 def main() -> None:
+    """Run the Typer CLI application."""
     app()
 
 

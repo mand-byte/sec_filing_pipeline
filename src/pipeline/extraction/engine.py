@@ -39,9 +39,11 @@ MAX_XBRL_RECORDS = 500
 
 class NumericExtractionEngine:
     def __init__(self) -> None:
+        """Create a numeric extraction engine with per-filing XBRL caching."""
         self._xbrl_cache: dict[int, tuple[bool, object | None]] = {}
 
     def _get_zero_arg_method(self, target: object, name: str) -> Any:
+        """Return a bound zero-argument method when the target exposes one safely."""
         candidate = getattr(target, name, None)
         if not callable(candidate):
             return None
@@ -54,10 +56,12 @@ class NumericExtractionEngine:
         return cast(Any, candidate)
 
     def _call_quietly(self, method: Any) -> object:
+        """Call a provider method without leaking stdout or stderr noise."""
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return method()
 
     def _load_xbrl_once(self, filing: object) -> tuple[object | None, bool]:
+        """Load the filing's XBRL payload once and cache both payload and failures."""
         filing_key = id(filing)
         cached = self._xbrl_cache.get(filing_key)
         if cached is not None:
@@ -78,6 +82,7 @@ class NumericExtractionEngine:
         return xbrl, False
 
     def _normalize_number(self, value: object, value_type: ValueType) -> float | int:
+        """Normalize one raw numeric candidate into the field's target value type."""
         if isinstance(value, bool):
             raise TypeError("boolean is not a numeric extraction value")
 
@@ -102,6 +107,7 @@ class NumericExtractionEngine:
         return numeric
 
     def _qa_check(self, value: float | int, qa_rules: Mapping[str, float | int | bool]) -> str | None:
+        """Apply numeric QA constraints to a normalized candidate value."""
         min_rule = qa_rules.get("min")
         if isinstance(min_rule, (int, float)) and not isinstance(min_rule, bool) and value < float(min_rule):
             return "VALUE_OUT_OF_RANGE"
@@ -116,6 +122,7 @@ class NumericExtractionEngine:
         return None
 
     def _normalized_form_family(self, form_type: object) -> str | None:
+        """Normalize the filing form into the downstream form-family key."""
         if not isinstance(form_type, str):
             return None
 
@@ -123,12 +130,14 @@ class NumericExtractionEngine:
         return normalized or None
 
     def _record_get(self, record: Mapping[str, Any], *keys: str) -> Any:
+        """Return the first present field among a record's schema aliases."""
         for key in keys:
             if key in record:
                 return record[key]
         return None
 
     def _normalize_concept(self, concept: object) -> str | None:
+        """Normalize concept names for case-insensitive comparisons."""
         if not isinstance(concept, str):
             return None
 
@@ -141,6 +150,7 @@ class NumericExtractionEngine:
         return cleaned.casefold()
 
     def _record_concept(self, record: Mapping[str, Any]) -> str | None:
+        """Read the concept/qname field from one XBRL record."""
         concept = self._record_get(record, "concept", "Concept", "qname", "name")
         if not isinstance(concept, str):
             return None
@@ -148,6 +158,7 @@ class NumericExtractionEngine:
         return cleaned or None
 
     def _record_statement_type(self, record: Mapping[str, Any]) -> str | None:
+        """Read the statement type across record schema aliases."""
         value = self._record_get(record, "statement_type", "statementType", "statement")
         if not isinstance(value, str):
             return None
@@ -155,6 +166,7 @@ class NumericExtractionEngine:
         return cleaned or None
 
     def _record_dimensioned(self, record: Mapping[str, Any]) -> bool:
+        """Detect whether a record carries dimensional qualifiers."""
         explicit = self._record_get(record, "dimensioned", "is_dimensioned")
         if isinstance(explicit, bool):
             return explicit
@@ -167,6 +179,7 @@ class NumericExtractionEngine:
         return False
 
     def _coerce_date(self, value: Any) -> date | None:
+        """Coerce mixed date-like values into plain `date` objects."""
         if isinstance(value, datetime):
             return value.date()
         if isinstance(value, date):
@@ -188,11 +201,13 @@ class NumericExtractionEngine:
         return None
 
     def _record_period_end_date(self, record: Mapping[str, Any]) -> date | None:
+        """Read the record's period end date across schema aliases."""
         return self._coerce_date(
             self._record_get(record, "period_end", "periodEnd", "end_date", "endDate")
         )
 
     def _record_duration_days(self, record: Mapping[str, Any]) -> int | None:
+        """Compute the inclusive duration length for a duration-period record."""
         period_start = self._coerce_date(
             self._record_get(record, "period_start", "periodStart", "start_date", "startDate")
         )
@@ -202,6 +217,7 @@ class NumericExtractionEngine:
         return (period_end - period_start).days + 1
 
     def _record_instant_date(self, record: Mapping[str, Any]) -> date | None:
+        """Read the instant/as-of date for instant-period records."""
         instant = self._coerce_date(
             self._record_get(record, "instant", "periodInstant", "as_of_date", "asOfDate")
         )
@@ -219,9 +235,11 @@ class NumericExtractionEngine:
         return None
 
     def _record_has_instant_period(self, record: Mapping[str, Any]) -> bool:
+        """Check whether the record represents an instant period."""
         return self._record_instant_date(record) is not None
 
     def _record_value(self, record: Mapping[str, Any]) -> object | None:
+        """Read the raw numeric value across record schema aliases."""
         value = self._record_get(record, "value", "numeric_value", "amount")
         if value is None:
             return None
@@ -231,6 +249,7 @@ class NumericExtractionEngine:
         return value
 
     def _candidate_key(self, record: Mapping[str, Any]) -> str:
+        """Build the stable identity used to dedupe and rank XBRL records."""
         for key in ("fact_key", "id", "key"):
             value = record.get(key)
             if isinstance(value, str) and value.strip():
@@ -244,6 +263,7 @@ class NumericExtractionEngine:
         return f"{concept}|{period_start}|{period_end}|{instant}|{dimensions}"
 
     def _records_from_query_result(self, payload: object) -> list[dict[str, Any]]:
+        """Normalize heterogeneous XBRL query payloads into record dictionaries."""
         if payload is None:
             return []
 
@@ -267,6 +287,7 @@ class NumericExtractionEngine:
         return []
 
     def _query_xbrl_source(self, source: object, concepts: tuple[str, ...]) -> tuple[list[dict[str, Any]], bool]:
+        """Query one XBRL source surface for concept-matched records."""
         collected: list[dict[str, Any]] = []
         had_error = False
 
@@ -301,6 +322,7 @@ class NumericExtractionEngine:
             return [], True
 
     def _build_xbrl_search_concepts(self, field_spec: NumericFieldSpec) -> tuple[str, ...]:
+        """Build the concept search list used against XBRL query surfaces."""
         search_concepts: list[str] = []
         for concept in field_spec.xbrl_concepts:
             candidates = [concept]
@@ -321,6 +343,7 @@ class NumericExtractionEngine:
         preferred_duration_days: int | None = None,
         preferred_period_end: date | None = None,
     ) -> int:
+        """Score one XBRL record so the most plausible runtime pick sorts first."""
         score = 0
 
         desired_concepts = {
@@ -371,6 +394,7 @@ class NumericExtractionEngine:
         return score
 
     def _build_xbrl_source_span(self, record: Mapping[str, Any]) -> str:
+        """Summarize XBRL period and dimension metadata for persisted evidence."""
         parts: list[str] = []
         period_start = self._record_get(record, "period_start", "periodStart", "start_date", "startDate")
         period_end = self._record_get(record, "period_end", "periodEnd", "end_date", "endDate")
@@ -389,6 +413,7 @@ class NumericExtractionEngine:
         return "; ".join(parts) if parts else "xbrl-fact"
 
     def _extract_from_xbrl(self, *, filing: object, field_spec: NumericFieldSpec) -> dict[str, Any] | None:
+        """Extract a numeric candidate from the filing's XBRL surfaces when enabled."""
         form_family = self._normalized_form_family(getattr(filing, "form", None))
         if field_spec.xbrl_enabled_form_families and form_family not in field_spec.xbrl_enabled_form_families:
             return None
@@ -545,11 +570,13 @@ class NumericExtractionEngine:
         field_spec: NumericFieldSpec,
         locator: str,
     ) -> dict[str, Any] | None:
+        """Resolve one configured locator into a raw numeric candidate payload."""
         if locator == "xbrl_xml" and field_spec.xbrl_concepts:
             return self._extract_from_xbrl(filing=filing, field_spec=field_spec)
         return run_locator_chain(filing=filing, locators=(locator,))
 
     def extract_field(self, *, filing: object, field_spec: NumericFieldSpec) -> ExtractionOutcome:
+        """Extract, normalize, and QA-check one numeric field from a filing."""
         form_family = self._normalized_form_family(getattr(filing, "form", None))
         if field_spec.xbrl_enabled_form_families and form_family not in field_spec.xbrl_enabled_form_families:
             return {"status": "error", "error_code": "FIELD_NOT_FOUND"}
