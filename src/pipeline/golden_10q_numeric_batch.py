@@ -4,7 +4,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
-import math
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,7 @@ _FIELD_CONCEPTS: dict[str, tuple[str, ...]] = {
 
 
 def _normalize_concept(value: object) -> str | None:
+    """Normalize XBRL concept names to a case-insensitive comparison key."""
     if not isinstance(value, str):
         return None
 
@@ -37,6 +37,7 @@ def _normalize_concept(value: object) -> str | None:
 
 
 def _record_concept(candidate: dict[str, Any]) -> str | None:
+    """Read the best available concept/qname field from one candidate record."""
     value = _record_get(candidate, "concept", "Concept", "qname", "name")
     if not isinstance(value, str):
         return None
@@ -45,6 +46,7 @@ def _record_concept(candidate: dict[str, Any]) -> str | None:
 
 
 def _candidate_key(candidate: dict[str, Any]) -> str:
+    """Build the stable candidate identifier used by adjudication and ranking."""
     for key in ("fact_key", "id", "key"):
         value = candidate.get(key)
         if isinstance(value, str) and value.strip():
@@ -86,6 +88,7 @@ class NumericBatchEvalResult:
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Load a YAML mapping file and reject non-mapping roots."""
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, Mapping):
         raise ValueError(f"numeric batch yaml root must be a mapping: {path}")
@@ -93,6 +96,7 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
 
 
 def load_10q_numeric_batch_cases(golden_path: Path) -> list[NumericBatchCase]:
+    """Parse typed numeric-batch cases from the adjudicated golden YAML."""
     payload = _load_yaml_mapping(golden_path)
     cases_raw = payload.get("cases", [])
     cases: list[NumericBatchCase] = []
@@ -120,39 +124,8 @@ def load_10q_numeric_batch_cases(golden_path: Path) -> list[NumericBatchCase]:
     return cases
 
 
-def apply_adjudication_update(
-    *,
-    golden_path: Path,
-    case_id: str,
-    field_name: str,
-    selected_candidate_key: str,
-    actual_value: float | int,
-    confidence: float,
-    reason: str,
-    confidence_threshold: float,
-) -> bool:
-    payload = yaml.safe_load(golden_path.read_text(encoding="utf-8")) or {}
-    if not math.isfinite(confidence) or confidence < confidence_threshold:
-        return False
-
-    for case in payload.get("cases", []):
-        if str(case.get("case_id")) != case_id:
-            continue
-        for field in case.get("fields", []):
-            if str(field.get("field_name")) != field_name:
-                continue
-            adjudication = field.setdefault("adjudication", {})
-            adjudication["selected_candidate_key"] = selected_candidate_key
-            adjudication["value_numeric"] = actual_value
-            adjudication["selection_reason"] = reason
-            adjudication["adjudicated_by"] = "snippet_financial_analyst"
-            adjudication["adjudication_confidence"] = confidence
-            golden_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-            return True
-    return False
-
-
 def _record_get(candidate: dict[str, Any], *keys: str) -> Any:
+    """Return the first present field among the candidate's schema aliases."""
     for key in keys:
         if key in candidate:
             return candidate[key]
@@ -160,6 +133,7 @@ def _record_get(candidate: dict[str, Any], *keys: str) -> Any:
 
 
 def _coerce_date(value: Any) -> date | None:
+    """Coerce heterogeneous date-like values into `date` objects."""
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -182,6 +156,7 @@ def _coerce_date(value: Any) -> date | None:
 
 
 def _duration_days(candidate: dict[str, Any]) -> int | None:
+    """Compute the inclusive duration length for one candidate period."""
     period_start = _coerce_date(
         _record_get(candidate, "period_start", "periodStart", "start_date", "startDate")
     )
@@ -194,6 +169,7 @@ def _duration_days(candidate: dict[str, Any]) -> int | None:
 
 
 def _record_statement_type(candidate: dict[str, Any]) -> str | None:
+    """Read the candidate's statement type across schema aliases."""
     value = _record_get(candidate, "statement_type", "statementType", "statement")
     if not isinstance(value, str):
         return None
@@ -202,6 +178,7 @@ def _record_statement_type(candidate: dict[str, Any]) -> str | None:
 
 
 def _record_dimensioned(candidate: dict[str, Any]) -> bool:
+    """Detect whether the candidate carries dimensional qualifiers."""
     explicit = _record_get(candidate, "dimensioned", "is_dimensioned")
     if isinstance(explicit, bool):
         return explicit
@@ -215,6 +192,7 @@ def _record_dimensioned(candidate: dict[str, Any]) -> bool:
 
 
 def _record_value(candidate: dict[str, Any]) -> Any:
+    """Read the candidate's numeric payload across schema aliases."""
     value = _record_get(candidate, "value", "numeric_value", "amount")
     if isinstance(value, str):
         cleaned = value.strip()
@@ -223,6 +201,7 @@ def _record_value(candidate: dict[str, Any]) -> Any:
 
 
 def _passes_runtime_filters(*, field_name: str, candidate: dict[str, Any]) -> bool:
+    """Apply the runtime-style filtering rules used before ranking candidates."""
     desired_concepts = {
         _normalize_concept(concept)
         for concept in _FIELD_CONCEPTS.get(field_name, ())
@@ -247,6 +226,7 @@ def _passes_runtime_filters(*, field_name: str, candidate: dict[str, Any]) -> bo
 
 
 def _candidate_score(*, field_name: str, candidate: dict[str, Any]) -> int:
+    """Score one candidate so the most plausible runtime pick sorts first."""
     score = 0
 
     desired_concepts = {
@@ -274,6 +254,7 @@ def _candidate_score(*, field_name: str, candidate: dict[str, Any]) -> int:
 
 
 def _update_by_field(*, by_field: dict[str, dict[str, int]], field_name: str, recall_hit: bool, top1_hit: bool) -> None:
+    """Accumulate per-field recall and top-1 accuracy counters."""
     stats = by_field.setdefault(
         field_name,
         {"total": 0, "candidate_recall_hits": 0, "top1_hits": 0},
@@ -286,6 +267,7 @@ def _update_by_field(*, by_field: dict[str, dict[str, int]], field_name: str, re
 
 
 def _finalize_by_field(by_field: dict[str, dict[str, int]]) -> dict[str, dict[str, float | int]]:
+    """Convert raw per-field counters into finalized summary metrics."""
     finalized: dict[str, dict[str, float | int]] = {}
     for field_name, stats in by_field.items():
         total = stats["total"]
@@ -298,6 +280,7 @@ def _finalize_by_field(by_field: dict[str, dict[str, int]]) -> dict[str, dict[st
 
 
 def evaluate_10q_numeric_batch(*, golden_path: Path, snapshot_dir: Path) -> NumericBatchEvalResult:
+    """Evaluate adjudicated 10-Q numeric snapshots against runtime ranking logic."""
     golden_payload = _load_yaml_mapping(golden_path)
     cases = load_10q_numeric_batch_cases(golden_path)
     total_batches = len(cases)

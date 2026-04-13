@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _clean_text(value: object) -> str | None:
+        """Normalize optional environment text values to stripped strings."""
         if value is None:
             return None
         text = str(value).strip()
@@ -62,6 +63,7 @@ class Settings(BaseSettings):
 
     @classmethod
     def _build_postgres_dsn(cls, values: dict[str, object]) -> str | None:
+        """Build a Postgres DSN from legacy component env vars when possible."""
         host = cls._clean_text(values.get("POSTGRES_HOST") or values.get("postgres_host"))
         database = cls._clean_text(values.get("POSTGRES_DB") or values.get("postgres_db"))
         user = cls._clean_text(values.get("POSTGRES_USER") or values.get("postgres_user"))
@@ -77,6 +79,7 @@ class Settings(BaseSettings):
 
     @classmethod
     def _build_clickhouse_dsn(cls, values: dict[str, object]) -> str | None:
+        """Build a ClickHouse DSN from legacy component env vars when possible."""
         host = cls._clean_text(values.get("CLICKHOUSE_HOST") or values.get("clickhouse_host"))
         database = cls._clean_text(values.get("CLICKHOUSE_DATABASE") or values.get("clickhouse_database"))
         user = cls._clean_text(values.get("CLICKHOUSE_USER") or values.get("clickhouse_user"))
@@ -93,6 +96,7 @@ class Settings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def _apply_legacy_runtime_env_compatibility(cls, data: object) -> object:
+        """Map legacy runtime env vars onto the current settings surface."""
         if not isinstance(data, dict):
             return data
 
