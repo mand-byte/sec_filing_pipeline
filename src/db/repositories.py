@@ -9,6 +9,7 @@ from src.pipeline.types import RouteName
 
 
 def _normalize_to_utc(value: datetime) -> datetime:
+    """Normalize datetimes to UTC before comparing persistence timestamps."""
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
 
@@ -17,13 +18,16 @@ def _normalize_to_utc(value: datetime) -> datetime:
 
 class PipelineRepository:
     def __init__(self, session: Session):
+        """Persist runtime watermarks, logs, and filing attempts."""
         self.session = session
 
     def _is_postgresql(self) -> bool:
+        """Check whether the current session is bound to PostgreSQL."""
         bind = self.session.get_bind()
         return bind is not None and bind.dialect.name == "postgresql"
 
     def _commit_with_rollback(self) -> None:
+        """Commit the current transaction and roll back on failure."""
         try:
             self.session.commit()
         except Exception:
@@ -31,6 +35,7 @@ class PipelineRepository:
             raise
 
     def get_route_watermark(self, cik: str, route: RouteName) -> datetime | None:
+        """Fetch the stored watermark for one CIK/route pair."""
         row = self.session.scalar(
             select(RouteWatermark).where(
                 RouteWatermark.cik == cik,
@@ -49,6 +54,7 @@ class PipelineRepository:
         cik: str,
         route: RouteName,
     ) -> DelistedRouteCompletion | None:
+        """Fetch the persisted completion marker for a delisted security route."""
         return self.session.scalar(
             select(DelistedRouteCompletion).where(
                 DelistedRouteCompletion.composite_figi == composite_figi,
@@ -58,6 +64,7 @@ class PipelineRepository:
         )
 
     def upsert_route_watermark(self, *, cik: str, route: RouteName, accepted_at: datetime) -> None:
+        """Advance a route watermark when a newer filing has been processed."""
         now = datetime.now(timezone.utc)
 
         if self._is_postgresql():
@@ -111,6 +118,7 @@ class PipelineRepository:
         delisted_utc_snapshot: datetime | None,
         last_seen_accepted_at: datetime | None,
     ) -> None:
+        """Persist that a delisted security's route has been fully processed."""
         now = datetime.now(timezone.utc)
 
         if self._is_postgresql():
@@ -173,6 +181,7 @@ class PipelineRepository:
         cik: str,
         route: RouteName,
     ) -> None:
+        """Clear a delisted-route completion marker so work can resume."""
         now = datetime.now(timezone.utc)
         row = self.session.scalar(
             select(DelistedRouteCompletion).where(
@@ -205,6 +214,7 @@ class PipelineRepository:
         error_type: str | None = None,
         error_detail: str | None = None,
     ) -> None:
+        """Persist one pipeline log record."""
         now = datetime.now(timezone.utc)
 
         self.session.add(
@@ -235,6 +245,7 @@ class PipelineRepository:
         error_type: str | None = None,
         error_detail: str | None = None,
     ) -> None:
+        """Insert or update the filing-attempt status for one runtime run."""
         now = datetime.now(timezone.utc)
         row = self.session.scalar(
             select(FilingAttempt).where(

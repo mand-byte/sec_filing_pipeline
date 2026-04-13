@@ -11,14 +11,17 @@ from src.db.base import Base
 
 
 def migration_dir() -> Path:
+    """Return the checked-in directory that holds rollout SQL assets."""
     return Path(__file__).resolve().parent / "migrations"
 
 
 def migration_readme_path() -> Path:
+    """Return the README that documents the rollout assets."""
     return migration_dir() / "README.md"
 
 
 def migration_asset_paths() -> list[Path]:
+    """List migration SQL assets in deterministic filename order."""
     return sorted(
         path
         for path in migration_dir().glob("*.sql")
@@ -27,10 +30,12 @@ def migration_asset_paths() -> list[Path]:
 
 
 def migration_sql(path: Path) -> str:
+    """Read one migration SQL asset from disk."""
     return path.read_text(encoding="utf-8")
 
 
 def split_sql_statements(sql_text: str) -> list[str]:
+    """Split a SQL script into executable statements while respecting quotes."""
     statements: list[str] = []
     current: list[str] = []
     in_single_quote = False
@@ -77,12 +82,14 @@ class DbInitResult:
 
 
 def _dialect_name(engine: Engine) -> str:
+    """Return the SQLAlchemy dialect name for an engine."""
     dialect = getattr(engine, "dialect", None)
     name = getattr(dialect, "name", None)
     return str(name or "unknown")
 
 
 def _require_supported_dialect(engine: Engine) -> str:
+    """Require a PostgreSQL engine for rollout-asset execution."""
     dialect_name = _dialect_name(engine)
     if dialect_name != "postgresql":
         raise RuntimeError(f"db rollout apply requires PostgreSQL engine, got: {dialect_name}")
@@ -90,6 +97,7 @@ def _require_supported_dialect(engine: Engine) -> str:
 
 
 def rollout_plan() -> list[dict[str, Any]]:
+    """Describe the rollout assets and statement counts without executing them."""
     plan: list[dict[str, Any]] = []
     for path in migration_asset_paths():
         statements = split_sql_statements(migration_sql(path))
@@ -104,6 +112,7 @@ def rollout_plan() -> list[dict[str, Any]]:
 
 
 def dry_run_rollout_result() -> RolloutApplyResult:
+    """Build the dry-run payload for DB rollout assets."""
     plan = rollout_plan()
     return RolloutApplyResult(
         applied=False,
@@ -116,6 +125,7 @@ def dry_run_rollout_result() -> RolloutApplyResult:
 
 
 def apply_rollout_assets(*, engine: Engine, dry_run: bool = False) -> RolloutApplyResult:
+    """Apply checked-in rollout SQL assets to a PostgreSQL engine."""
     dialect_name = _require_supported_dialect(engine)
     plan = rollout_plan()
     statement_count = int(sum(item["statement_count"] for item in plan))
@@ -146,6 +156,7 @@ def apply_rollout_assets(*, engine: Engine, dry_run: bool = False) -> RolloutApp
 
 
 def init_database_schema(*, engine: Engine) -> DbInitResult:
+    """Create the base SQLAlchemy schema for the configured engine."""
     Base.metadata.create_all(engine)
     inspector = inspect(engine)
     tables = sorted(inspector.get_table_names())
@@ -158,6 +169,7 @@ def init_database_schema(*, engine: Engine) -> DbInitResult:
 
 
 def describe_rollout_assets() -> dict[str, Any]:
+    """Describe the rollout directory, README, and migration asset plan."""
     readme_path = migration_readme_path()
     instructions = None
     if readme_path.exists():
