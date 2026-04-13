@@ -40,6 +40,7 @@ def _specialized_numeric_bundle_contract_error(
     bundle: FilingBundle,
     numeric_specs_by_field: dict[str, Any],
 ) -> str | None:
+    """Describe any numeric subject-contract violations in one bundle."""
     violations: set[str] = set()
     for record_type, entries in (("fact", bundle.facts), ("evidence", bundle.evidences)):
         for entry in entries:
@@ -85,6 +86,7 @@ def _extend_specialized_numeric_bundle_if_valid(
     accession_no: str | None,
     violation_message: str,
 ) -> bool:
+    """Append a specialized numeric bundle only when its subject contract is valid."""
     contract_error_detail = _specialized_numeric_bundle_contract_error(
         route=route,
         bundle=bundle,
@@ -117,6 +119,7 @@ def _append_partial_bundle_if_any(
     evidences: list[EvidenceInput],
     bundles: list[FilingBundle],
 ) -> bool:
+    """Persist any text-only facts that were recovered before a structured extraction failure."""
     if not facts:
         return False
 
@@ -131,6 +134,7 @@ def _append_partial_bundle_if_any(
 
 
 def _supports_text_extraction_surface(filing: object) -> bool:
+    """Detect whether a filing exposes any text surface worth attempting."""
     for attr_name in ("sections", "parse", "text", "items"):
         attr = getattr(filing, attr_name, None)
         if callable(attr):
@@ -147,54 +151,17 @@ def _supports_text_extraction_surface(filing: object) -> bool:
 
 
 def _extract_delay_days_from_text(filing: object) -> float | None:
-    text_sources: list[str] = []
-    for attr_name in ("parse", "text", "sections"):
-        attr = getattr(filing, attr_name, None)
-        if callable(attr):
-            try:
-                value = attr()
-            except Exception:
-                continue
-        else:
-            value = attr
-
-        if isinstance(value, str) and value.strip():
-            text_sources.append(value)
-        elif isinstance(value, list):
-            text_sources.extend(str(item) for item in value if str(item).strip())
-        elif isinstance(value, dict):
-            text_sources.extend(str(item) for item in value.values() if str(item).strip())
-
+    """Extract the delay-day count from any available free-text filing surface."""
     pattern = re.compile(r"(?i)\b(\d+)\s+calendar\s+days?\b")
-    for source in text_sources:
+    for _, source in _extract_text_sections(filing):
         match = pattern.search(source)
         if match is not None:
             return float(match.group(1))
     return None
 
 
-def _extract_text_sources(filing: object) -> list[str]:
-    text_sources: list[str] = []
-    for attr_name in ("parse", "text", "sections"):
-        attr = getattr(filing, attr_name, None)
-        if callable(attr):
-            try:
-                value = attr()
-            except Exception:
-                continue
-        else:
-            value = attr
-
-        if isinstance(value, str) and value.strip():
-            text_sources.append(value)
-        elif isinstance(value, list):
-            text_sources.extend(str(item) for item in value if str(item).strip())
-        elif isinstance(value, dict):
-            text_sources.extend(str(item) for item in value.values() if str(item).strip())
-    return text_sources
-
-
 def _extract_text_sections(filing: object) -> list[tuple[str | None, str]]:
+    """Normalize filing text surfaces into named text sections."""
     sections: list[tuple[str | None, str]] = []
 
     raw_sections = getattr(filing, "sections", None)
@@ -234,22 +201,10 @@ def _extract_text_sections(filing: object) -> list[tuple[str | None, str]]:
     return sections
 
 
-def _extract_first_currency(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
-    for source in text_sources:
-        normalized = " ".join(source.split())
-        for pattern in patterns:
-            match = re.search(pattern, normalized)
-            if match is None:
-                continue
-            candidate = coerce_numeric_value(match.group(1))
-            if candidate is not None:
-                return float(candidate)
-    return None
-
-
 def _extract_first_currency_with_section(
     patterns: tuple[str, ...], text_sections: list[tuple[str | None, str]]
 ) -> tuple[float | None, str | None]:
+    """Find the first matching currency amount and report the source section."""
     for section_name, source in text_sections:
         normalized = " ".join(source.split())
         for pattern in patterns:
@@ -262,22 +217,10 @@ def _extract_first_currency_with_section(
     return None, None
 
 
-def _extract_first_count(patterns: tuple[str, ...], text_sources: list[str]) -> float | None:
-    for source in text_sources:
-        normalized = " ".join(source.split())
-        for pattern in patterns:
-            match = re.search(pattern, normalized)
-            if match is None:
-                continue
-            candidate = coerce_numeric_value(match.group(1))
-            if candidate is not None:
-                return float(candidate)
-    return None
-
-
 def _extract_first_count_with_section(
     patterns: tuple[str, ...], text_sections: list[tuple[str | None, str]]
 ) -> tuple[float | None, str | None]:
+    """Find the first matching share/count value and report the source section."""
     for section_name, source in text_sections:
         normalized = " ".join(source.split())
         for pattern in patterns:
@@ -291,6 +234,7 @@ def _extract_first_count_with_section(
 
 
 def _build_issuer_offering_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
+    """Extract offering-level numeric facts from issuer free text."""
     field_extractors = {
         "gross_proceeds": _extract_first_currency_with_section(
             (
@@ -368,6 +312,7 @@ def _build_issuer_offering_text_facts(*, filing: FilingRecord, text_sections: li
 
 
 def _build_issuer_deal_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
+    """Extract deal-level numeric facts from issuer free text."""
     field_extractors = {
         "deal_value": _extract_first_currency_with_section(
             (
@@ -439,6 +384,7 @@ def _build_issuer_deal_text_facts(*, filing: FilingRecord, text_sections: list[t
 
 
 def _build_issuer_row_numeric_text_facts(*, filing: FilingRecord, text_sections: list[tuple[str | None, str]]) -> FilingBundle | None:
+    """Extract repeated executive or holder numeric rows from free text."""
     facts: list[FactInput] = []
     evidences: list[EvidenceInput] = []
     executive_index = 0
@@ -542,6 +488,7 @@ def build_bundles_from_provider(
     fetch_filings=fetch_filings_for_security,
     text_normalizer: SpanNormalizer | None = None,
 ) -> list[FilingBundle]:
+    """Build filing bundles for one security/route using provider-backed filings."""
     if end_accepted_at is None:
         envelopes = fetch_filings(
             security=security,

@@ -13,9 +13,6 @@ from src.db.repositories import PipelineRepository
 from src.db.session import build_engine, get_session_factory
 from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
 from src.pipeline.extraction._config import tier2_path
-from src.pipeline.extraction.bundles import (
-    coerce_numeric_value,
-)
 from src.pipeline.extraction.provider import build_bundles_from_provider
 from src.pipeline.extraction.text_normalization import normalizer_from_settings
 from src.pipeline.offline_artifacts import write_run_artifacts
@@ -66,6 +63,7 @@ _SCHEMA_READY_DSNS: set[str] = set()
 
 @app.callback(invoke_without_command=True)
 def _default_entrypoint(ctx: typer.Context) -> None:
+    """Default to the scheduler loop when no explicit subcommand is provided."""
     if ctx.invoked_subcommand is None:
         schedule()
 
@@ -97,11 +95,8 @@ def db_init() -> None:
     typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 
-def _coerce_numeric_value(value: object) -> float | None:
-    return coerce_numeric_value(value)
-
-
 def _ensure_runtime_schema_ready(settings: Any | None = None) -> None:
+    """Initialize the runtime schema once per configured Postgres DSN."""
     effective_settings = settings or Settings()
     pg_dsn = getattr(effective_settings, "pg_dsn", None)
     if pg_dsn is None:
@@ -122,12 +117,8 @@ def _ensure_runtime_schema_ready(settings: Any | None = None) -> None:
 
 
 def _load_run_once_securities(session: Any, settings: Settings) -> list[SecurityUniverseRow]:
+    """Load the security cohort for a runtime tick."""
     return load_security_universe(session=session, settings=settings)
-
-
-def _build_run_artifact_payloads(*, session: Any, run_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    return build_run_artifact_payloads(session=session, run_id=run_id)
-
 
 def _build_bundles_from_provider(
     *,
@@ -139,6 +130,7 @@ def _build_bundles_from_provider(
     run_id: str,
     settings: Settings | None = None,
 ) -> list[FilingBundle]:
+    """Apply settings-backed EDGAR fetch options before bundle extraction."""
     fetch_callable = fetch_filings_for_security
     if settings is not None:
         fetch_kwargs: dict[str, object] = {}
@@ -180,6 +172,7 @@ def _build_bundles_from_provider(
 
 
 def _parse_route_name(route: str | None) -> RouteName | None:
+    """Validate and normalize an optional route name."""
     if route is None:
         return None
 
@@ -192,14 +185,17 @@ def _parse_route_name(route: str | None) -> RouteName | None:
 
 
 def _parse_start_date_value(start_date: str | None) -> date | None:
+    """Parse the optional backfill start date."""
     return _parse_optional_date_value(start_date, label="start_date")
 
 
 def _parse_end_date_value(end_date: str | None) -> date | None:
+    """Parse the optional backfill end date."""
     return _parse_optional_date_value(end_date, label="end_date")
 
 
 def _parse_optional_date_value(value: str | None, *, label: str) -> date | None:
+    """Parse an optional ISO date value from CLI input."""
     if value is None:
         return None
     cleaned = value.strip()
@@ -212,17 +208,20 @@ def _parse_optional_date_value(value: str | None, *, label: str) -> date | None:
 
 
 def _validate_date_window(*, start_date: date, end_date: date | None) -> None:
+    """Reject end dates that would invert the requested window."""
     if end_date is not None and end_date < start_date:
         raise typer.BadParameter("end_date must be on or after start_date")
 
 
 def _selected_routes(route: RouteName | None) -> tuple[RouteName, ...]:
+    """Expand a single optional route into the concrete route tuple to run."""
     if route is None:
         return cast(tuple[RouteName, ...], ROUTE_ORDER)
     return (route,)
 
 
 def _normalize_security_filters(values: list[str] | tuple[str, ...] | None, *, upper: bool = False) -> tuple[str, ...]:
+    """Trim empty filter values and optionally normalize them to uppercase."""
     if not values:
         return ()
 
@@ -242,6 +241,7 @@ def _filter_pipeline_securities(
     ciks: tuple[str, ...] = (),
     limit: int | None = None,
 ) -> list[Any]:
+    """Apply ticker, CIK, and limit filters to the loaded security cohort."""
     selected = list(securities)
     if tickers:
         ticker_set = {ticker.upper() for ticker in tickers}
@@ -276,6 +276,7 @@ def _build_runtime_run_manifest(
     securities: list[Any],
     artifacts_base_dir: Path,
 ) -> dict[str, Any]:
+    """Describe the runtime inputs that produced one artifact set."""
     return {
         "run_id": run_id,
         "mode": mode,
@@ -302,6 +303,7 @@ def _build_runtime_run_manifest(
 
 
 def _build_routers(*, processor: RouteProcessor, selected_routes: tuple[RouteName, ...]) -> list[object]:
+    """Instantiate and order the routers for the selected routes."""
     router_map = {
         "issuer": IssuerRouter(processor),
         "owner": OwnerRouter(processor),
@@ -322,6 +324,7 @@ def _run_pipeline(
     ignore_existing_watermarks: bool = False,
     artifacts_dir: Path | None = None,
 ) -> str:
+    """Run one runtime pass for the selected cohort and optionally write artifacts."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     session_factory = get_session_factory(settings)
@@ -374,7 +377,7 @@ def _run_pipeline(
 
     if settings.write_offline_artifacts:
         with session_factory() as session:
-            summary_payload, sample_payload, diff_markdown = _build_run_artifact_payloads(
+            summary_payload, sample_payload, diff_markdown = build_run_artifact_payloads(
                 session=session,
                 run_id=run_id,
             )
@@ -404,6 +407,7 @@ def _run_pipeline(
 
 
 def _run_once_pipeline(*, route: RouteName | None = None, artifacts_dir: Path | None = None) -> None:
+    """Run the incremental pipeline once."""
     _run_pipeline(mode="run_once", route=route, artifacts_dir=artifacts_dir)
 
 
@@ -418,6 +422,7 @@ def _run_backfill_pipeline(
     ignore_existing_watermarks: bool = True,
     artifacts_dir: Path | None = None,
 ) -> str:
+    """Run the historical backfill variant of the pipeline."""
     return _run_pipeline(
         mode="backfill",
         route=route,
@@ -445,6 +450,7 @@ def _write_backfill_cohort_manifest(
     ignore_existing_watermarks: bool,
     route_run_ids: list[dict[str, str]],
 ) -> Path:
+    """Persist the route run ids produced by a named backfill cohort."""
     cohort_dir = base_dir / "cohorts"
     cohort_dir.mkdir(parents=True, exist_ok=True)
     manifest_run_id = make_run_id()
@@ -617,6 +623,7 @@ def _run_strict_v2_eval(
     baseline: str | None,
     min_pass_rate: float,
 ) -> None:
+    """Run the text strict-v2 evaluator and print its summary."""
     if not 0.0 <= min_pass_rate <= 1.0:
         raise typer.BadParameter("min_pass_rate must be between 0.0 and 1.0")
 
@@ -660,6 +667,7 @@ def _run_strict_v2_numeric_batch_eval(
     artifacts_dir: str,
     min_pass_rate: float,
 ) -> None:
+    """Run the numeric batch evaluator and emit strict-v2 artifacts."""
     if not 0.0 <= min_pass_rate <= 1.0:
         raise typer.BadParameter("min_pass_rate must be between 0.0 and 1.0")
 
@@ -882,6 +890,7 @@ def review_list(
     route: str | None = typer.Option(None, "--route", help="Optional route filter"),
     limit: int = typer.Option(100, "--limit", min=1, max=1000, help="Maximum tasks to return"),
 ) -> None:
+    """List review tasks from the persisted queue."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
@@ -900,6 +909,7 @@ def review_list(
 def review_show(
     task_id: int = typer.Argument(..., help="Review task id"),
 ) -> None:
+    """Show one review task with its fact and evidence detail."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
@@ -916,6 +926,7 @@ def review_assign(
     task_id: int = typer.Argument(..., help="Review task id"),
     assignee: str = typer.Argument(..., help="Assignee name"),
 ) -> None:
+    """Assign a queued review task to one reviewer."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
@@ -946,6 +957,7 @@ def review_resolve(
     comment: str | None = typer.Option(None, "--comment", help="Optional review comment"),
     corrected_json: str | None = typer.Option(None, "--corrected-json", help="JSON payload for corrected decisions"),
 ) -> None:
+    """Persist a review decision for one task."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
@@ -985,6 +997,7 @@ def review_dashboard(
         help="Directory for the exported review dashboard",
     ),
 ) -> None:
+    """Export the static review dashboard for the current queue slice."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
@@ -1007,6 +1020,7 @@ def review_serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Host interface to bind"),
     port: int = typer.Option(8765, "--port", min=1, max=65535, help="Port to bind"),
 ) -> None:
+    """Serve the interactive review HTTP surface."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     session_factory = get_session_factory(settings)
@@ -1051,6 +1065,7 @@ def release_gate(
         help="Optional runtime artifacts base directory; defaults to OFFLINE_ARTIFACTS_DIR when runtime run ids are provided",
     ),
 ) -> None:
+    """Evaluate the fix-once release gate against strict and runtime evidence."""
     settings = Settings()
     _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:

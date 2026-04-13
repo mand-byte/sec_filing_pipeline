@@ -7,6 +7,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 import src.cli as cli_module
+from src.pipeline.extraction.bundles import coerce_numeric_value
 
 
 runner = CliRunner()
@@ -231,8 +232,8 @@ def test_golden_10q_numeric_batch_command_routes_through_strict_v2_numeric_helpe
 
 
 def test_coerce_numeric_value_rejects_non_finite_numbers() -> None:
-    assert cli_module._coerce_numeric_value(float("nan")) is None
-    assert cli_module._coerce_numeric_value(float("inf")) is None
-    assert cli_module._coerce_numeric_value("NaN") is None
-    assert cli_module._coerce_numeric_value("Infinity") is None
-    assert cli_module._coerce_numeric_value(Decimal("42.5")) == 42.5
+    assert coerce_numeric_value(float("nan")) is None
+    assert coerce_numeric_value(float("inf")) is None
+    assert coerce_numeric_value("NaN") is None
+    assert coerce_numeric_value("Infinity") is None
+    assert coerce_numeric_value(Decimal("42.5")) == 42.5

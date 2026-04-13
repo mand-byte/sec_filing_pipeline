@@ -105,7 +105,7 @@ def test_build_run_artifact_payloads_includes_structured_filing_attempt_coverage
     )
     session.commit()
 
-    summary, samples, diff_markdown = cli_module._build_run_artifact_payloads(session=session, run_id="run-001")
+    summary, samples, diff_markdown = cli_module.build_run_artifact_payloads(session=session, run_id="run-001")
 
     assert summary["coverage"]["routes"] == {"issuer": 1}
     assert summary["coverage"]["filing_attempts"]["total"] == 2
