@@ -60,6 +60,7 @@ class ReviewWorkflowError(ValueError):
 
 
 def _task_summary(task: ReviewTask) -> ReviewTaskSummary:
+    """Project the ORM task row into the lightweight summary dataclass."""
     return ReviewTaskSummary(
         task_id=task.task_id,
         accession_no=task.accession_no,
@@ -75,6 +76,7 @@ def _task_summary(task: ReviewTask) -> ReviewTaskSummary:
 
 
 def _normalize_decision(value: str) -> str:
+    """Normalize and validate a review decision token."""
     normalized = value.strip().lower().replace("-", "_")
     if normalized not in REVIEW_DECISIONS:
         allowed = ", ".join(sorted(REVIEW_DECISIONS))
@@ -83,6 +85,7 @@ def _normalize_decision(value: str) -> str:
 
 
 def _normalize_corrected_payload(value: str | None) -> dict[str, Any] | None:
+    """Decode the optional corrected-value JSON payload."""
     if value is None:
         return None
     try:
@@ -95,6 +98,7 @@ def _normalize_corrected_payload(value: str | None) -> dict[str, Any] | None:
 
 
 def _normalize_reviewer(value: str) -> str:
+    """Normalize and validate the reviewer name."""
     normalized = value.strip()
     if not normalized:
         raise ReviewWorkflowError("reviewer is required")
@@ -102,6 +106,7 @@ def _normalize_reviewer(value: str) -> str:
 
 
 def _coerce_numeric(value: object) -> float | None:
+    """Coerce corrected numeric payload values into floats."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -120,10 +125,12 @@ def _coerce_numeric(value: object) -> float | None:
 
 
 def _subject_type_for(*, route: str, subject_key: str) -> str:
+    """Resolve the golden-subject type for one route/subject-key pair."""
     return subject_type_for_key(route=route, subject_key=subject_key)
 
 
 def _decimal_or_none(value: object) -> Decimal | None:
+    """Coerce mixed numeric truth values into `Decimal` for storage."""
     if value is None:
         return None
     if isinstance(value, Decimal):
@@ -145,6 +152,7 @@ def _decimal_or_none(value: object) -> Decimal | None:
 
 class ReviewWorkflowService:
     def __init__(self, session: Session):
+        """Manage review task listing, assignment, resolution, and capture."""
         self.session = session
 
     def list_tasks(
@@ -154,6 +162,7 @@ class ReviewWorkflowService:
         route: str | None = None,
         limit: int = 100,
     ) -> list[ReviewTaskSummary]:
+        """List review tasks with optional status and route filters."""
         stmt = select(ReviewTask).order_by(ReviewTask.created_at.asc(), ReviewTask.task_id.asc())
         if status:
             stmt = stmt.where(ReviewTask.status == status)
@@ -163,6 +172,7 @@ class ReviewWorkflowService:
         return [_task_summary(row) for row in rows]
 
     def get_task_detail(self, *, task_id: int) -> ReviewTaskDetail:
+        """Load one review task with filing, fact, and primary-evidence payloads."""
         task = self.session.get(ReviewTask, task_id)
         if task is None:
             raise ReviewWorkflowError(f"review task not found: {task_id}")
@@ -235,6 +245,7 @@ class ReviewWorkflowService:
         )
 
     def assign_task(self, *, task_id: int, assignee: str) -> ReviewTaskSummary:
+        """Assign one review task to the provided assignee."""
         task = self.session.get(ReviewTask, task_id)
         if task is None:
             raise ReviewWorkflowError(f"review task not found: {task_id}")
@@ -252,6 +263,7 @@ class ReviewWorkflowService:
         corrected_json: str | None = None,
         error_code: str | None = None,
     ) -> ReviewTaskSummary:
+        """Resolve one open review task and persist any fix-once side effects."""
         task = self.session.get(ReviewTask, task_id)
         if task is None:
             raise ReviewWorkflowError(f"review task not found: {task_id}")
@@ -341,6 +353,7 @@ class ReviewWorkflowService:
         decided_at: datetime,
         decision: str,
     ) -> None:
+        """Capture a golden regression packet for non-accept review outcomes."""
         filing = self.session.scalar(
             select(FilingDocument).where(FilingDocument.accession_no == task.accession_no)
         )
@@ -507,6 +520,7 @@ class ReviewWorkflowService:
 
 
 def review_task_detail_asdict(detail: ReviewTaskDetail) -> dict[str, Any]:
+    """Convert a detailed review payload into a JSON-serializable dictionary."""
     payload = asdict(detail)
     payload["task"]["created_at"] = detail.task.created_at.isoformat()
     return payload

@@ -26,12 +26,14 @@ class ReviewServerConfig:
 
 
 def _serialize_task_summary(task: ReviewTaskSummary) -> dict[str, Any]:
+    """Convert a review task summary into a JSON-ready dictionary."""
     payload = asdict(task)
     payload["created_at"] = task.created_at.isoformat()
     return payload
 
 
 def build_review_server_html(*, initial_status: str, initial_route: str | None, initial_limit: int) -> str:
+    """Render the interactive review workbench HTML shell."""
     initial_state = {
         "status": initial_status,
         "route": initial_route,
@@ -626,12 +628,14 @@ def build_review_server_html(*, initial_status: str, initial_route: str | None, 
 
 class ReviewApi:
     def __init__(self, *, session_factory: Callable[[], Any], status: str, route: str | None, limit: int) -> None:
+        """Wrap review workflow operations for the local HTTP surface."""
         self.session_factory = session_factory
         self.default_status = status
         self.default_route = route
         self.default_limit = limit
 
     def list_tasks(self, *, status: str | None = None, route: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        """List review tasks with optional overrides to the default filters."""
         effective_status = self.default_status if status is None else status
         effective_route = self.default_route if route is None else route
         effective_limit = self.default_limit if limit is None else limit
@@ -643,17 +647,20 @@ class ReviewApi:
             ]
 
     def get_task(self, *, task_id: int) -> dict[str, Any]:
+        """Fetch one fully-expanded review task payload."""
         with self.session_factory() as session:
             service = ReviewWorkflowService(session)
             return review_task_detail_asdict(service.get_task_detail(task_id=task_id))
 
     def assign_task(self, *, task_id: int, assignee: str) -> dict[str, Any]:
+        """Assign one review task and return the updated summary payload."""
         with self.session_factory() as session:
             service = ReviewWorkflowService(session)
             task = service.assign_task(task_id=task_id, assignee=assignee)
             return _serialize_task_summary(task)
 
     def resolve_task(self, *, task_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Resolve one review task from an HTTP JSON payload."""
         corrected_value = payload.get("corrected_json")
         corrected_json = None
         if corrected_value is not None:
@@ -672,6 +679,7 @@ class ReviewApi:
 
 
 def _json_response(handler: BaseHTTPRequestHandler, *, status: HTTPStatus, payload: dict[str, Any] | list[Any]) -> None:
+    """Write a JSON HTTP response with the provided status code."""
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     handler.send_response(status.value)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
@@ -681,6 +689,7 @@ def _json_response(handler: BaseHTTPRequestHandler, *, status: HTTPStatus, paylo
 
 
 def _text_response(handler: BaseHTTPRequestHandler, *, status: HTTPStatus, content_type: str, body: str) -> None:
+    """Write a text HTTP response with the provided status code."""
     data = body.encode("utf-8")
     handler.send_response(status.value)
     handler.send_header("Content-Type", content_type)
@@ -693,8 +702,10 @@ def create_review_http_handler(
     *,
     api: ReviewApi,
 ) -> type[BaseHTTPRequestHandler]:
+    """Create the HTTP handler class bound to one review API instance."""
     class ReviewHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
+            """Serve the workbench HTML and read-only task API endpoints."""
             parsed = urlsplit(self.path)
             if parsed.path == "/":
                 _text_response(
@@ -749,6 +760,7 @@ def create_review_http_handler(
             _json_response(self, status=HTTPStatus.NOT_FOUND, payload={"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
+            """Handle task assignment and resolution API requests."""
             parsed = urlsplit(self.path)
             if not parsed.path.startswith("/api/tasks/"):
                 _json_response(self, status=HTTPStatus.NOT_FOUND, payload={"error": "not found"})
@@ -793,6 +805,7 @@ def create_review_http_handler(
             _json_response(self, status=HTTPStatus.OK, payload=response)
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            """Silence default BaseHTTPRequestHandler request logging."""
             return
 
     return ReviewHandler
@@ -803,6 +816,7 @@ def run_review_server(
     session_factory: Callable[[], Any],
     config: ReviewServerConfig,
 ) -> None:
+    """Run the local threaded HTTP review server until shutdown."""
     api = ReviewApi(
         session_factory=session_factory,
         status=config.status,
