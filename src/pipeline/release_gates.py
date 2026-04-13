@@ -27,6 +27,7 @@ _NON_BLOCKING_RUNTIME_EXTRACT_ERROR_TYPES = {
 
 
 def _safe_name(value: object, *, fallback: str) -> str:
+    """Sanitize values before using them in exported artifact filenames."""
     text = str(value).strip()
     if not text:
         return fallback
@@ -56,10 +57,12 @@ class ReleaseGateResult:
 
 
 def _strict_summary_has_active_selectors(selectors: dict[str, object]) -> bool:
+    """Detect whether a strict summary was filtered to a subset of cases."""
     return any(value not in (None, "", [], {}) for value in selectors.values())
 
 
 def _evaluate_strict_summary(path: Path | None) -> tuple[bool | None, int | None]:
+    """Validate one strict summary file and return its gate outcome."""
     if path is None:
         return None, None
 
@@ -97,6 +100,7 @@ def _normalize_strict_summary_paths(
     strict_summary_path: Path | None,
     strict_summary_paths: Sequence[Path] | None,
 ) -> list[Path]:
+    """Merge legacy and repeatable strict-summary inputs into one list."""
     normalized_paths: list[Path] = []
     if strict_summary_path is not None:
         normalized_paths.append(strict_summary_path)
@@ -106,6 +110,7 @@ def _normalize_strict_summary_paths(
 
 
 def _evaluate_strict_summaries(paths: Sequence[Path]) -> tuple[bool | None, int | None]:
+    """Aggregate release-gate outcomes across one or more strict summaries."""
     if not paths:
         return None, None
 
@@ -129,6 +134,7 @@ def evaluate_fix_once_release_gate(
     runtime_artifacts_dir: Path | None = None,
     runtime_cohort_manifests: Sequence[Path] | None = None,
 ) -> ReleaseGateResult:
+    """Evaluate the review, evaluator, and runtime evidence release gate."""
     open_review_tasks = session.scalar(
         select(func.count()).select_from(ReviewTask).where(ReviewTask.status == "open")
     )

@@ -17,6 +17,7 @@ class BackfillCohort:
 
 
 def _runtime_config_candidates(relative_path: str) -> tuple[Path, ...]:
+    """Return repo and bundled candidate paths for one runtime config file."""
     repo_root = Path(__file__).resolve().parents[2]
     return (
         repo_root / "configs" / "runtime" / relative_path,
@@ -25,6 +26,7 @@ def _runtime_config_candidates(relative_path: str) -> tuple[Path, ...]:
 
 
 def _load_runtime_mapping(path: Path) -> dict[str, object]:
+    """Load a runtime YAML mapping and reject non-mapping roots."""
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, Mapping):
         raise ValueError(f"runtime config root must be a mapping: {path}")
@@ -32,6 +34,7 @@ def _load_runtime_mapping(path: Path) -> dict[str, object]:
 
 
 def load_backfill_cohorts(config_path: Path | None = None) -> dict[str, BackfillCohort]:
+    """Load named backfill cohorts from the runtime configuration file."""
     if config_path is None:
         for candidate in _runtime_config_candidates("backfill_cohorts.yaml"):
             if candidate.exists():

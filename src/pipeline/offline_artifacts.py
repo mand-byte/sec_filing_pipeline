@@ -10,6 +10,7 @@ _ARTIFACT_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _write_ndjson(path: Path, records: list[dict[str, Any]]) -> None:
+    """Write JSON records as newline-delimited JSON."""
     with path.open("w", encoding="utf-8") as output:
         for record in records:
             output.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -17,6 +18,7 @@ def _write_ndjson(path: Path, records: list[dict[str, Any]]) -> None:
 
 
 def _safe_artifact_name(value: object, *, fallback: str) -> str:
+    """Sanitize arbitrary values into safe artifact path components."""
     text = str(value).strip()
     if not text:
         return fallback
@@ -28,6 +30,7 @@ def _safe_artifact_name(value: object, *, fallback: str) -> str:
 
 
 def _resolve_run_dir(*, base_dir: Path, run_id: str) -> Path:
+    """Resolve one run directory while preventing path traversal."""
     base_dir_resolved = base_dir.resolve()
     run_dir = (base_dir_resolved / _safe_artifact_name(run_id, fallback="run")).resolve()
     if run_dir.parent != base_dir_resolved:
@@ -52,6 +55,7 @@ def write_run_artifacts(
     review_packets: list[dict[str, Any]] | None = None,
     phase_gates: list[dict[str, Any]] | None = None,
 ) -> None:
+    """Write the standard artifact bundle for one evaluation or runtime run."""
     run_dir = _resolve_run_dir(base_dir=base_dir, run_id=run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
 

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 
 def _normalize_to_utc(value: datetime) -> datetime:
+    """Normalize datetimes to UTC for route eligibility comparisons."""
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
 
@@ -13,6 +14,7 @@ def is_filing_eligible(
     delisted_utc: datetime | None,
     accepted_at: datetime,
 ) -> bool:
+    """Decide whether one filing should still be processed for a security."""
     if active:
         return True
 
@@ -28,6 +30,7 @@ def should_skip_delisted_route(
     snapshot: datetime | None,
     current_delisted_utc: datetime | None,
 ) -> bool:
+    """Decide whether a completed delisted route can be skipped unchanged."""
     if snapshot is None or current_delisted_utc is None:
         return (not active) and is_completed and snapshot == current_delisted_utc
 

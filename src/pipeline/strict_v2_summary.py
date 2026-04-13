@@ -5,6 +5,7 @@ from typing import Any
 
 
 def build_phase_gate_summary(phase_gates: list[dict[str, Any]]) -> dict[str, int]:
+    """Collapse detailed phase-gate rows into summary counts."""
     return {
         "total": len(phase_gates),
         "passed": len([gate for gate in phase_gates if gate.get("status") == "passed"]),
@@ -21,6 +22,7 @@ def build_strict_v2_summary(
     metrics: Mapping[str, Any],
     phase_gates: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Build the shared strict-v2 summary payload shape."""
     return {
         "run_id": run_id,
         "selectors": dict(selectors),
