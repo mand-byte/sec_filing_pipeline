@@ -255,6 +255,41 @@ def test_route_processor_can_ignore_existing_watermark_for_historical_backfill()
     assert repo.logs[-1]["message"] == "route processed: eligible=1 persisted=1 failed=0 skipped_before_watermark=0 skipped_ineligible=0"
 
 
+def test_route_processor_respects_optional_end_date() -> None:
+    included_accepted_at = datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
+    excluded_accepted_at = datetime(2024, 5, 2, 12, 0, tzinfo=timezone.utc)
+    repo = FakeRepo()
+    persistence_service = FakePersistenceService()
+    processor = RouteProcessor(
+        repo=repo,
+        persistence_service=persistence_service,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 5, 1),
+        provider_bundle_builder=lambda **kwargs: [
+            FilingBundle(filing=_filing("0000000000-24-000003C", included_accepted_at)),
+            FilingBundle(filing=_filing("0000000000-24-000003D", excluded_accepted_at)),
+        ],
+    )
+
+    processor.run(
+        security=SimpleNamespace(
+            cik="0000789019",
+            active=True,
+            composite_figi="FIGI1",
+            delisted_utc=None,
+        ),
+        route="owner",
+        run_id="run-backfill-end-date-001",
+    )
+
+    assert persistence_service.persisted_accessions == ["0000000000-24-000003C"]
+    assert [attempt["accession_no"] for attempt in repo.filing_attempts] == [
+        "0000000000-24-000003C",
+        "0000000000-24-000003C",
+    ]
+    assert repo.logs[-1]["message"] == "route processed: eligible=1 persisted=1 failed=0 skipped_before_watermark=0 skipped_ineligible=0"
+
+
 def test_route_processor_invalidates_stale_delisted_completion_when_security_reactivates() -> None:
     completion = SimpleNamespace(
         is_completed=True,

@@ -131,6 +131,7 @@ def fetch_filings_for_security(
     security: Any,
     route: str,
     start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
     identity: str | None = None,
 ) -> list[FilingEnvelope]:
     forms = _route_forms(route)
@@ -161,6 +162,7 @@ def fetch_filings_for_security(
         raise RuntimeError(f"edgar fetch failed for cik={cik} route={route}: {exc}") from exc
 
     start_utc = _normalize_to_utc(start_accepted_at)
+    end_utc = _normalize_to_utc(end_accepted_at) if end_accepted_at is not None else None
     envelopes: list[FilingEnvelope] = []
 
     for filing in filings:
@@ -181,6 +183,8 @@ def fetch_filings_for_security(
             continue
 
         if accepted_at <= start_utc:
+            continue
+        if end_utc is not None and accepted_at > end_utc:
             continue
 
         filed_at = _first_datetime_attribute(

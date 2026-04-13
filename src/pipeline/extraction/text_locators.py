@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import inspect
 from collections.abc import Mapping, Sequence
 from typing import Callable, NotRequired, TypedDict, cast
@@ -19,6 +21,11 @@ class TextLocatorHit(TypedDict):
 
 
 LocatorHandler = Callable[[object, tuple[str, ...]], TextLocatorHit | None]
+
+
+def _call_quietly(method: Callable[[], object]) -> object:
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return method()
 
 
 def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | None:
@@ -150,7 +157,7 @@ def _try_section_window(filing: object, anchors: tuple[str, ...]) -> TextLocator
         return None
 
     try:
-        sections = sections_method()
+        sections = _call_quietly(sections_method)
     except Exception:
         return None
 
@@ -232,7 +239,7 @@ def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLoca
 
     if parse_method is not None:
         try:
-            parsed_text = parse_method()
+            parsed_text = _call_quietly(parse_method)
         except Exception:
             parsed_text = None
 
@@ -240,7 +247,7 @@ def _try_parse_text_window(filing: object, anchors: tuple[str, ...]) -> TextLoca
         text_method = _get_zero_arg_method(filing, "text")
         if text_method is not None:
             try:
-                parsed_text = text_method()
+                parsed_text = _call_quietly(text_method)
                 source_path = "text"
             except Exception:
                 parsed_text = None

@@ -536,18 +536,46 @@ def build_bundles_from_provider(
     security: Any,
     route: RouteName,
     start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
     repo: PipelineRepository,
     run_id: str,
     fetch_filings=fetch_filings_for_security,
     text_normalizer: SpanNormalizer | None = None,
 ) -> list[FilingBundle]:
-    envelopes = fetch_filings(
-        security=security,
-        route=route,
-        start_accepted_at=start_accepted_at,
-    )
+    if end_accepted_at is None:
+        envelopes = fetch_filings(
+            security=security,
+            route=route,
+            start_accepted_at=start_accepted_at,
+        )
+    else:
+        try:
+            envelopes = fetch_filings(
+                security=security,
+                route=route,
+                start_accepted_at=start_accepted_at,
+                end_accepted_at=end_accepted_at,
+            )
+        except TypeError as exc:
+            if "end_accepted_at" not in str(exc):
+                raise
+            envelopes = fetch_filings(
+                security=security,
+                route=route,
+                start_accepted_at=start_accepted_at,
+            )
     if not envelopes:
         return []
+
+    if end_accepted_at is not None:
+        normalized_end = _normalize_to_utc(end_accepted_at)
+        envelopes = [
+            envelope
+            for envelope in envelopes
+            if _normalize_to_utc(envelope.accepted_at) <= normalized_end
+        ]
+        if not envelopes:
+            return []
 
     numeric_engine = NumericExtractionEngine()
     text_engine = TextExtractionEngine(normalizer=text_normalizer)

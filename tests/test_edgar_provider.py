@@ -76,3 +76,36 @@ def test_fetch_filings_for_security_applies_identity_and_surfaces_provider_error
         raise AssertionError("expected runtime provider error")
 
     assert captured["identity"] == "Example Ops ops@example.test"
+
+
+class EndDateCompany:
+    def __init__(self, cik: str):
+        self.cik = cik
+
+    def get_filings(self, *, form: list[str]) -> list[object]:
+        assert "10-Q" in form
+        return [
+            SimpleNamespace(
+                accession_no="0000000000-24-000010",
+                form="10-Q",
+                acceptance_datetime="2024-05-02T10:00:00Z",
+            ),
+            SimpleNamespace(
+                accession_no="0000000000-24-000011",
+                form="10-Q",
+                acceptance_datetime="2024-05-03T10:00:00Z",
+            ),
+        ]
+
+
+def test_fetch_filings_for_security_respects_optional_end_accepted_at(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "edgar", SimpleNamespace(Company=EndDateCompany))
+
+    envelopes = fetch_filings_for_security(
+        security=SimpleNamespace(cik="0000789019"),
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        end_accepted_at=datetime(2024, 5, 2, 23, 59, 59, tzinfo=timezone.utc),
+    )
+
+    assert [envelope.accession_no for envelope in envelopes] == ["0000000000-24-000010"]

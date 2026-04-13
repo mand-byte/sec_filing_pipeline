@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 import inspect
+import io
 from collections.abc import Callable, Sequence
 from typing import Literal, TypedDict, cast
 
@@ -16,6 +18,11 @@ class LocatorResult(TypedDict):
 
 
 LocatorHandler = Callable[[object], LocatorResult | None]
+
+
+def _call_quietly(method: Callable[[], object]) -> object:
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return method()
 
 
 def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | None:
@@ -38,7 +45,7 @@ def _try_obj(filing: object) -> LocatorResult | None:
     if obj is None:
         return None
 
-    value = obj()
+    value = _call_quietly(obj)
     if value is None:
         return None
 
@@ -50,7 +57,7 @@ def _try_xbrl_xml(filing: object) -> LocatorResult | None:
     if xbrl is None:
         return None
 
-    value = xbrl()
+    value = _call_quietly(xbrl)
     if value is None:
         return None
 
@@ -62,7 +69,7 @@ def _try_sections_search(filing: object) -> LocatorResult | None:
     if sections is None:
         return None
 
-    value = sections()
+    value = _call_quietly(sections)
     if not value:
         return None
 
@@ -77,12 +84,12 @@ def _try_parse_text(filing: object) -> LocatorResult | None:
     parsed: object | None = None
     parse = _get_zero_arg_method(filing, "parse")
     if parse is not None:
-        parsed = parse()
+        parsed = _call_quietly(parse)
 
     if parsed is None:
         text = _get_zero_arg_method(filing, "text")
         if text is not None:
-            parsed = text()
+            parsed = _call_quietly(text)
 
     if parsed is None:
         return None

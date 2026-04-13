@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import inspect
 import math
@@ -36,6 +38,9 @@ MAX_XBRL_RECORDS = 500
 
 
 class NumericExtractionEngine:
+    def __init__(self) -> None:
+        self._xbrl_cache: dict[int, tuple[bool, object | None]] = {}
+
     def _get_zero_arg_method(self, target: object, name: str) -> Any:
         candidate = getattr(target, name, None)
         if not callable(candidate):
@@ -47,6 +52,30 @@ class NumericExtractionEngine:
             return None
 
         return cast(Any, candidate)
+
+    def _call_quietly(self, method: Any) -> object:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return method()
+
+    def _load_xbrl_once(self, filing: object) -> tuple[object | None, bool]:
+        filing_key = id(filing)
+        cached = self._xbrl_cache.get(filing_key)
+        if cached is not None:
+            had_error, payload = cached
+            return payload, had_error
+
+        xbrl_method = self._get_zero_arg_method(filing, "xbrl")
+        if xbrl_method is None:
+            return None, False
+
+        try:
+            xbrl = self._call_quietly(xbrl_method)
+        except Exception:
+            self._xbrl_cache[filing_key] = (True, None)
+            return None, True
+
+        self._xbrl_cache[filing_key] = (False, xbrl)
+        return xbrl, False
 
     def _normalize_number(self, value: object, value_type: ValueType) -> float | int:
         if isinstance(value, bool):
@@ -364,13 +393,8 @@ class NumericExtractionEngine:
         if field_spec.xbrl_enabled_form_families and form_family not in field_spec.xbrl_enabled_form_families:
             return None
 
-        xbrl_method = self._get_zero_arg_method(filing, "xbrl")
-        if xbrl_method is None:
-            return None
-
-        try:
-            xbrl = xbrl_method()
-        except Exception:
+        xbrl, xbrl_had_error = self._load_xbrl_once(filing)
+        if xbrl_had_error:
             return {"error_code": "XBRL_QUERY_FAILED"}
         if xbrl is None:
             return None

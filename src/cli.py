@@ -55,7 +55,17 @@ from src.pipeline.types import FilingRecord, RouteName
 from src.pipeline.universe import SecurityUniverseRow, load_security_universe
 
 
-app = typer.Typer(help="SEC filing pipeline CLI for running phase 1 tasks.")
+app = typer.Typer(
+    help="SEC filing pipeline CLI for running phase 1 tasks.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+
+
+@app.callback(invoke_without_command=True)
+def _default_entrypoint(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        schedule()
 
 
 @app.command("db-rollout-assets")
@@ -102,6 +112,7 @@ def _build_bundles_from_provider(
     security: Any,
     route: RouteName,
     start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
     repo: PipelineRepository,
     run_id: str,
     settings: Settings | None = None,
@@ -115,6 +126,7 @@ def _build_bundles_from_provider(
         security=security,
         route=route,
         start_accepted_at=start_accepted_at,
+        end_accepted_at=end_accepted_at,
         repo=repo,
         run_id=run_id,
         fetch_filings=fetch_callable,
@@ -135,15 +147,28 @@ def _parse_route_name(route: str | None) -> RouteName | None:
 
 
 def _parse_start_date_value(start_date: str | None) -> date | None:
-    if start_date is None:
+    return _parse_optional_date_value(start_date, label="start_date")
+
+
+def _parse_end_date_value(end_date: str | None) -> date | None:
+    return _parse_optional_date_value(end_date, label="end_date")
+
+
+def _parse_optional_date_value(value: str | None, *, label: str) -> date | None:
+    if value is None:
         return None
-    cleaned = start_date.strip()
+    cleaned = value.strip()
     if not cleaned:
         return None
     try:
         return date.fromisoformat(cleaned)
     except ValueError as exc:
-        raise typer.BadParameter("start_date must be YYYY-MM-DD") from exc
+        raise typer.BadParameter(f"{label} must be YYYY-MM-DD") from exc
+
+
+def _validate_date_window(*, start_date: date, end_date: date | None) -> None:
+    if end_date is not None and end_date < start_date:
+        raise typer.BadParameter("end_date must be on or after start_date")
 
 
 def _selected_routes(route: RouteName | None) -> tuple[RouteName, ...]:
@@ -198,18 +223,22 @@ def _build_runtime_run_manifest(
     mode: str,
     selected_routes: tuple[RouteName, ...],
     start_date: date,
+    end_date: date | None,
     ignore_existing_watermarks: bool,
     tickers: tuple[str, ...],
     ciks: tuple[str, ...],
     limit: int | None,
     securities: list[Any],
+    artifacts_base_dir: Path,
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "mode": mode,
         "routes": list(selected_routes),
         "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat() if end_date is not None else None,
         "ignore_existing_watermarks": ignore_existing_watermarks,
+        "artifacts_base_dir": str(artifacts_base_dir),
         "filters": {
             "tickers": list(tickers),
             "ciks": list(ciks),
@@ -227,69 +256,84 @@ def _build_runtime_run_manifest(
     }
 
 
+def _build_routers(*, processor: RouteProcessor, selected_routes: tuple[RouteName, ...]) -> list[object]:
+    router_map = {
+        "issuer": IssuerRouter(processor),
+        "owner": OwnerRouter(processor),
+        "holding": HoldingRouter(processor),
+    }
+    return ordered_routers({route_name: router_map[route_name] for route_name in selected_routes})
+
+
 def _run_pipeline(
     *,
     mode: str,
     route: RouteName | None = None,
     start_date_override: date | None = None,
+    end_date_override: date | None = None,
     tickers: tuple[str, ...] = (),
     ciks: tuple[str, ...] = (),
     limit: int | None = None,
     ignore_existing_watermarks: bool = False,
+    artifacts_dir: Path | None = None,
 ) -> str:
     settings = Settings()
     session_factory = get_session_factory(settings)
     selected_routes = _selected_routes(route)
     effective_start_date = start_date_override or settings.start_date
+    effective_end_date = end_date_override
+    _validate_date_window(start_date=effective_start_date, end_date=effective_end_date)
+    effective_artifacts_dir = artifacts_dir or getattr(settings, "offline_artifacts_dir", Path("artifacts"))
 
     run_id = make_run_id()
 
     with session_factory() as session:
-        repo = PipelineRepository(session)
-        persistence_service = PersistenceService(session)
         securities = _filter_pipeline_securities(
             securities=_load_run_once_securities(session, settings),
             tickers=tickers,
             ciks=ciks,
             limit=limit,
         )
-        processor = RouteProcessor(
-            repo=repo,
-            persistence_service=persistence_service,
-            start_date=effective_start_date,
-            provider_bundle_builder=partial(_build_bundles_from_provider, settings=settings),
-            ignore_existing_watermarks=ignore_existing_watermarks,
-        )
-        router_map = {
-            "issuer": IssuerRouter(processor),
-            "owner": OwnerRouter(processor),
-            "holding": HoldingRouter(processor),
-        }
-        routers = ordered_routers({route_name: router_map[route_name] for route_name in selected_routes})
-        typer.echo(f"runtime run_id: {run_id}")
-        typer.echo("route order: " + " -> ".join(router.name for router in routers))
-        typer.echo(f"security cohort: count={len(securities)}")
-        if mode == "backfill":
-            typer.echo(
-                "backfill mode: "
-                + f"start_date={effective_start_date.isoformat()} "
-                + f"ignore_existing_watermarks={ignore_existing_watermarks}"
+    typer.echo(f"runtime run_id: {run_id}")
+    typer.echo("route order: " + " -> ".join(selected_routes))
+    typer.echo(f"security cohort: count={len(securities)}")
+    if mode == "backfill":
+        backfill_mode_tokens = [f"start_date={effective_start_date.isoformat()}"]
+        if effective_end_date is not None:
+            backfill_mode_tokens.append(f"end_date={effective_end_date.isoformat()}")
+        backfill_mode_tokens.append(f"ignore_existing_watermarks={ignore_existing_watermarks}")
+        typer.echo("backfill mode: " + " ".join(backfill_mode_tokens))
+
+    for index, security in enumerate(securities, start=1):
+        with session_factory() as session:
+            repo = PipelineRepository(session)
+            persistence_service = PersistenceService(session)
+            processor = RouteProcessor(
+                repo=repo,
+                persistence_service=persistence_service,
+                start_date=effective_start_date,
+                end_date=effective_end_date,
+                provider_bundle_builder=partial(_build_bundles_from_provider, settings=settings),
+                ignore_existing_watermarks=ignore_existing_watermarks,
             )
+            routers = _build_routers(processor=processor, selected_routes=selected_routes)
+            run_single_tick(
+                run_id=run_id,
+                securities=[security],
+                routers=routers,
+                repo=repo,
+            )
+        if mode == "backfill" and (index == len(securities) or index % 100 == 0):
+            typer.echo(f"progress: securities={index}/{len(securities)}")
 
-        run_single_tick(
-            run_id=run_id,
-            securities=securities,
-            routers=routers,
-            repo=repo,
-        )
-
-        if settings.write_offline_artifacts:
+    if settings.write_offline_artifacts:
+        with session_factory() as session:
             summary_payload, sample_payload, diff_markdown = _build_run_artifact_payloads(
                 session=session,
                 run_id=run_id,
             )
             write_run_artifacts(
-                base_dir=settings.offline_artifacts_dir,
+                base_dir=effective_artifacts_dir,
                 run_id=run_id,
                 summary=summary_payload,
                 by_field={},
@@ -301,37 +345,43 @@ def _run_pipeline(
                     mode=mode,
                     selected_routes=selected_routes,
                     start_date=effective_start_date,
+                    end_date=effective_end_date,
                     ignore_existing_watermarks=ignore_existing_watermarks,
                     tickers=tickers,
                     ciks=ciks,
                     limit=limit,
                     securities=securities,
+                    artifacts_base_dir=effective_artifacts_dir,
                 ),
             )
     return run_id
 
 
-def _run_once_pipeline(*, route: RouteName | None = None) -> None:
-    _run_pipeline(mode="run_once", route=route)
+def _run_once_pipeline(*, route: RouteName | None = None, artifacts_dir: Path | None = None) -> None:
+    _run_pipeline(mode="run_once", route=route, artifacts_dir=artifacts_dir)
 
 
 def _run_backfill_pipeline(
     *,
     route: RouteName | None = None,
     start_date: date | None = None,
+    end_date: date | None = None,
     tickers: tuple[str, ...] = (),
     ciks: tuple[str, ...] = (),
     limit: int | None = None,
     ignore_existing_watermarks: bool = True,
+    artifacts_dir: Path | None = None,
 ) -> str:
     return _run_pipeline(
         mode="backfill",
         route=route,
         start_date_override=start_date,
+        end_date_override=end_date,
         tickers=tickers,
         ciks=ciks,
         limit=limit,
         ignore_existing_watermarks=ignore_existing_watermarks,
+        artifacts_dir=artifacts_dir,
     )
 
 
@@ -342,6 +392,7 @@ def _write_backfill_cohort_manifest(
     description: str | None,
     selected_routes: tuple[RouteName, ...],
     start_date: date | None,
+    end_date: date | None,
     tickers: tuple[str, ...],
     ciks: tuple[str, ...],
     limit: int | None,
@@ -359,6 +410,7 @@ def _write_backfill_cohort_manifest(
                 "description": description,
                 "routes": list(selected_routes),
                 "start_date": start_date.isoformat() if start_date is not None else None,
+                "end_date": end_date.isoformat() if end_date is not None else None,
                 "tickers": list(tickers),
                 "ciks": list(ciks),
                 "limit": limit,
@@ -376,44 +428,54 @@ def _write_backfill_cohort_manifest(
 @app.command("run-once")
 def run_once(
     route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run the phase-1 pipeline once."""
-    _run_once_pipeline(route=_parse_route_name(route))
+    _run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts)
 
 
 @app.command("run-route")
 def run_route(
     route: str = typer.Argument(..., help="Route name: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run a single pipeline route once."""
-    _run_once_pipeline(route=_parse_route_name(route))
+    _run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts)
 
 
 @app.command("run-issuer")
-def run_issuer() -> None:
+def run_issuer(
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
     """Run the issuer route once."""
-    _run_once_pipeline(route="issuer")
+    _run_once_pipeline(route="issuer", artifacts_dir=artifacts)
 
 
 @app.command("run-owner")
-def run_owner() -> None:
+def run_owner(
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
     """Run the owner route once."""
-    _run_once_pipeline(route="owner")
+    _run_once_pipeline(route="owner", artifacts_dir=artifacts)
 
 
 @app.command("run-holding")
-def run_holding() -> None:
+def run_holding(
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
     """Run the holding route once."""
-    _run_once_pipeline(route="holding")
+    _run_once_pipeline(route="holding", artifacts_dir=artifacts)
 
 
 @app.command("backfill")
 def backfill(
     route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
     start_date: str | None = typer.Option(None, "--start-date", help="Override historical backfill start date (YYYY-MM-DD)"),
+    end_date: str | None = typer.Option(None, "--end-date", help="Optional inclusive historical backfill end date (YYYY-MM-DD)"),
     ticker: list[str] | None = typer.Option(None, "--ticker", help="Optional ticker filter; repeatable"),
     cik: list[str] | None = typer.Option(None, "--cik", help="Optional CIK filter; repeatable"),
     limit: int | None = typer.Option(None, "--limit", min=1, help="Optional max securities after filtering"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
     ignore_existing_watermarks: bool = typer.Option(
         True,
         "--ignore-existing-watermarks/--respect-watermarks",
@@ -424,10 +486,12 @@ def backfill(
     _run_backfill_pipeline(
         route=_parse_route_name(route),
         start_date=_parse_start_date_value(start_date),
+        end_date=_parse_end_date_value(end_date),
         tickers=_normalize_security_filters(ticker, upper=True),
         ciks=_normalize_security_filters(cik),
         limit=limit,
         ignore_existing_watermarks=ignore_existing_watermarks,
+        artifacts_dir=artifacts,
     )
 
 
@@ -436,7 +500,9 @@ def backfill_cohort(
     cohort: str = typer.Option(..., "--cohort", help="Named backfill cohort from configs/runtime/backfill_cohorts.yaml"),
     route: str | None = typer.Option(None, "--route", help="Optional single route override: issuer, owner, holding"),
     start_date: str | None = typer.Option(None, "--start-date", help="Override historical backfill start date (YYYY-MM-DD)"),
+    end_date: str | None = typer.Option(None, "--end-date", help="Optional inclusive historical backfill end date (YYYY-MM-DD)"),
     limit: int | None = typer.Option(None, "--limit", min=1, help="Optional max securities after cohort filtering"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
     ignore_existing_watermarks: bool = typer.Option(
         True,
         "--ignore-existing-watermarks/--respect-watermarks",
@@ -454,6 +520,8 @@ def backfill_cohort(
     parsed_route = _parse_route_name(route)
     selected_routes = (parsed_route,) if parsed_route is not None else cast(tuple[RouteName, ...], selected.routes or ROUTE_ORDER)
     parsed_start_date = _parse_start_date_value(start_date)
+    parsed_end_date = _parse_end_date_value(end_date)
+    effective_artifacts_dir = artifacts or settings.offline_artifacts_dir
     typer.echo(
         "backfill cohort: "
         + f"{selected.name} "
@@ -465,19 +533,22 @@ def backfill_cohort(
         route_run_id = _run_backfill_pipeline(
             route=route_name,
             start_date=parsed_start_date,
+            end_date=parsed_end_date,
             tickers=selected.tickers,
             ciks=selected.ciks,
             limit=limit,
             ignore_existing_watermarks=ignore_existing_watermarks,
+            artifacts_dir=effective_artifacts_dir,
         )
         route_run_ids.append({"route": route_name, "run_id": route_run_id})
     if getattr(settings, "write_offline_artifacts", False):
         manifest_path = _write_backfill_cohort_manifest(
-            base_dir=settings.offline_artifacts_dir,
+            base_dir=effective_artifacts_dir,
             cohort_name=selected.name,
             description=selected.description,
             selected_routes=selected_routes,
             start_date=parsed_start_date,
+            end_date=parsed_end_date,
             tickers=selected.tickers,
             ciks=selected.ciks,
             limit=limit,
@@ -970,7 +1041,12 @@ def truth_select(
 @app.command("verify-runtime-run")
 def verify_runtime_run(
     run_id: str = typer.Option(..., "--run-id", help="Runtime run id to verify against DB state"),
-    artifacts_dir: Path | None = typer.Option(None, "--artifacts-dir", help="Runtime artifacts base directory; defaults to OFFLINE_ARTIFACTS_DIR"),
+    artifacts_dir: Path | None = typer.Option(
+        None,
+        "--artifacts",
+        "--artifacts-dir",
+        help="Runtime artifacts base directory; defaults to OFFLINE_ARTIFACTS_DIR",
+    ),
 ) -> None:
     """Verify runtime run artifacts against filing_attempt and pipeline_log DB state."""
     settings = Settings()
@@ -998,13 +1074,14 @@ def runtime_preflight() -> None:
 @app.command("schedule")
 def schedule(
     route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run the phase-1 scheduler loop."""
     settings = Settings()
     parsed_route = _parse_route_name(route)
     scheduler = build_blocking_scheduler(
         interval_minutes=settings.scheduler_interval_minutes,
-        tick_callable=partial(_run_once_pipeline, route=parsed_route),
+        tick_callable=partial(_run_once_pipeline, route=parsed_route, artifacts_dir=artifacts),
     )
     scheduler.start()
 

@@ -15,8 +15,10 @@ class FakeFiling:
     def __init__(self, *, form: str, records: list[dict[str, object]]):
         self.form = form
         self._xbrl = FakeXBRL(records)
+        self.xbrl_calls = 0
 
     def xbrl(self) -> FakeXBRL:
+        self.xbrl_calls += 1
         return self._xbrl
 
 
@@ -80,6 +82,41 @@ def test_extract_field_prefers_best_xbrl_fact() -> None:
     assert outcome["source_xpath"] == "rev-best"
     assert "duration_days=91" in outcome["source_span"]
     assert '"selected_candidate_key": "rev-best"' in outcome["selection_trace_json"]
+    assert filing.xbrl_calls == 1
+
+
+def test_extract_field_reuses_cached_xbrl_for_same_filing() -> None:
+    engine = NumericExtractionEngine()
+    filing = FakeFiling(
+        form="10-Q",
+        records=[
+            {
+                "fact_key": "rev-best",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-03-31",
+                "value": 1000.0,
+            },
+            {
+                "fact_key": "opinc-best",
+                "concept": "us-gaap:OperatingIncomeLoss",
+                "statement_type": "IncomeStatement",
+                "dimensioned": False,
+                "period_start": "2024-01-01",
+                "period_end": "2024-03-31",
+                "value": 125.0,
+            },
+        ],
+    )
+
+    revenue = engine.extract_field(filing=filing, field_spec=_issuer_spec("total_revenue"))
+    operating_income = engine.extract_field(filing=filing, field_spec=_issuer_spec("operating_income"))
+
+    assert revenue["status"] == "ok"
+    assert operating_income["status"] == "ok"
+    assert filing.xbrl_calls == 1
 
 
 def test_extract_field_rejects_dimensioned_and_wrong_duration_candidates() -> None:

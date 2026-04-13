@@ -41,6 +41,10 @@ def _as_utc_start_of_day(start_date: date) -> datetime:
     return datetime.combine(start_date, time.min, tzinfo=timezone.utc)
 
 
+def _as_utc_end_of_day(end_date: date) -> datetime:
+    return datetime.combine(end_date, time.max, tzinfo=timezone.utc)
+
+
 def _bundle_sort_key(bundle: FilingBundle) -> tuple[datetime, str]:
     return (_normalize_to_utc(bundle.filing.accepted_at), bundle.filing.accession_no)
 
@@ -72,6 +76,7 @@ def _load_route_filing_bundles(
     security: Any,
     route: RouteName,
     start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
 ) -> list[FilingBundle]:
     del start_accepted_at
     bundles_by_route = getattr(security, "filing_bundles_by_route", None)
@@ -82,10 +87,16 @@ def _load_route_filing_bundles(
     if not isinstance(bundles, list):
         return []
 
-    return sorted(
-        [bundle for bundle in bundles if isinstance(bundle, FilingBundle)],
-        key=_bundle_sort_key,
-    )
+    normalized_end = _normalize_to_utc(end_accepted_at) if end_accepted_at is not None else None
+    filtered_bundles = [bundle for bundle in bundles if isinstance(bundle, FilingBundle)]
+    if normalized_end is not None:
+        filtered_bundles = [
+            bundle
+            for bundle in filtered_bundles
+            if _normalize_to_utc(bundle.filing.accepted_at) <= normalized_end
+        ]
+
+    return sorted(filtered_bundles, key=_bundle_sort_key)
 
 
 def _safe_write_log(
@@ -205,6 +216,7 @@ class RouteProcessor:
     persistence_service: PersistenceService
     start_date: date
     provider_bundle_builder: Callable[..., list[FilingBundle]]
+    end_date: date | None = None
     ignore_existing_watermarks: bool = False
 
     def run(self, *, security: Any, route: RouteName, run_id: str) -> None:
@@ -284,12 +296,14 @@ class RouteProcessor:
 
         watermark = self.repo.get_route_watermark(cik, route)
         configured_start_accepted_at = _as_utc_start_of_day(self.start_date)
+        configured_end_accepted_at = _as_utc_end_of_day(self.end_date) if self.end_date is not None else None
         start_accepted_at = configured_start_accepted_at if self.ignore_existing_watermarks else (watermark or configured_start_accepted_at)
 
         bundles = _load_route_filing_bundles(
             security=security,
             route=route,
             start_accepted_at=start_accepted_at,
+            end_accepted_at=configured_end_accepted_at,
         )
         if not bundles:
             try:
@@ -297,6 +311,7 @@ class RouteProcessor:
                     security=security,
                     route=route,
                     start_accepted_at=start_accepted_at,
+                    end_accepted_at=configured_end_accepted_at,
                     repo=self.repo,
                     run_id=run_id,
                 )
@@ -322,6 +337,8 @@ class RouteProcessor:
             accepted_at = _normalize_to_utc(bundle.filing.accepted_at)
             if accepted_at <= normalized_start:
                 skipped_before_watermark += 1
+                continue
+            if configured_end_accepted_at is not None and accepted_at > configured_end_accepted_at:
                 continue
             if not is_filing_eligible(active=active, delisted_utc=delisted_utc, accepted_at=accepted_at):
                 skipped_ineligible += 1

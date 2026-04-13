@@ -46,31 +46,31 @@ def _filing(accession_no: str, accepted_at: datetime) -> FilingRecord:
 
 
 def test_run_once_route_option_dispatches_selected_route(monkeypatch) -> None:
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, Path | None]] = []
 
-    def fake_run_once_pipeline(*, route: str | None = None) -> None:
-        calls.append(route)
+    def fake_run_once_pipeline(*, route: str | None = None, artifacts_dir: Path | None = None) -> None:
+        calls.append((route, artifacts_dir))
 
     monkeypatch.setattr(cli_module, "_run_once_pipeline", fake_run_once_pipeline)
 
     result = runner.invoke(cli_module.app, ["run-once", "--route", "owner"])
 
     assert result.exit_code == 0
-    assert calls == ["owner"]
+    assert calls == [("owner", None)]
 
 
 def test_run_owner_command_dispatches_owner_route(monkeypatch) -> None:
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, Path | None]] = []
 
-    def fake_run_once_pipeline(*, route: str | None = None) -> None:
-        calls.append(route)
+    def fake_run_once_pipeline(*, route: str | None = None, artifacts_dir: Path | None = None) -> None:
+        calls.append((route, artifacts_dir))
 
     monkeypatch.setattr(cli_module, "_run_once_pipeline", fake_run_once_pipeline)
 
     result = runner.invoke(cli_module.app, ["run-owner"])
 
     assert result.exit_code == 0
-    assert calls == ["owner"]
+    assert calls == [("owner", None)]
 
 
 def test_run_once_rejects_unknown_route() -> None:
@@ -87,19 +87,23 @@ def test_backfill_command_dispatches_selected_options(monkeypatch) -> None:
         *,
         route: str | None = None,
         start_date: date | None = None,
+        end_date: date | None = None,
         tickers: tuple[str, ...] = (),
         ciks: tuple[str, ...] = (),
         limit: int | None = None,
         ignore_existing_watermarks: bool = True,
+        artifacts_dir: Path | None = None,
     ) -> None:
         captured.update(
             {
                 "route": route,
                 "start_date": start_date,
+                "end_date": end_date,
                 "tickers": tickers,
                 "ciks": ciks,
                 "limit": limit,
                 "ignore_existing_watermarks": ignore_existing_watermarks,
+                "artifacts_dir": artifacts_dir,
             }
         )
 
@@ -113,6 +117,8 @@ def test_backfill_command_dispatches_selected_options(monkeypatch) -> None:
             "issuer",
             "--start-date",
             "2024-01-15",
+            "--end-date",
+            "2024-12-31",
             "--ticker",
             "msft",
             "--ticker",
@@ -121,6 +127,8 @@ def test_backfill_command_dispatches_selected_options(monkeypatch) -> None:
             "0000789019",
             "--limit",
             "2",
+            "--artifacts",
+            "/tmp/runtime-artifacts",
             "--respect-watermarks",
         ],
     )
@@ -129,10 +137,12 @@ def test_backfill_command_dispatches_selected_options(monkeypatch) -> None:
     assert captured == {
         "route": "issuer",
         "start_date": date(2024, 1, 15),
+        "end_date": date(2024, 12, 31),
         "tickers": ("MSFT", "AAPL"),
         "ciks": ("0000789019",),
         "limit": 2,
         "ignore_existing_watermarks": False,
+        "artifacts_dir": Path("/tmp/runtime-artifacts"),
     }
 
 
@@ -143,19 +153,23 @@ def test_backfill_cohort_dispatches_named_seed_routes(monkeypatch) -> None:
         *,
         route: str | None = None,
         start_date: date | None = None,
+        end_date: date | None = None,
         tickers: tuple[str, ...] = (),
         ciks: tuple[str, ...] = (),
         limit: int | None = None,
         ignore_existing_watermarks: bool = True,
+        artifacts_dir: Path | None = None,
     ) -> str:
         calls.append(
             {
                 "route": route,
                 "start_date": start_date,
+                "end_date": end_date,
                 "tickers": tickers,
                 "ciks": ciks,
                 "limit": limit,
                 "ignore_existing_watermarks": ignore_existing_watermarks,
+                "artifacts_dir": artifacts_dir,
             }
         )
         return f"{route}-run-id"
@@ -176,8 +190,12 @@ def test_backfill_cohort_dispatches_named_seed_routes(monkeypatch) -> None:
             "phase1_deterministic",
             "--start-date",
             "2024-01-15",
+            "--end-date",
+            "2024-12-31",
             "--limit",
             "3",
+            "--artifacts",
+            "/tmp/cohorts",
         ],
     )
 
@@ -186,8 +204,10 @@ def test_backfill_cohort_dispatches_named_seed_routes(monkeypatch) -> None:
     assert "cohort manifest: /tmp/cohorts/manifest.json" in result.stdout
     assert [call["route"] for call in calls] == ["issuer", "owner", "holding"]
     assert all(call["start_date"] == date(2024, 1, 15) for call in calls)
+    assert all(call["end_date"] == date(2024, 12, 31) for call in calls)
     assert all(call["tickers"] == ("MSFT", "AAPL", "AMZN", "NVDA", "TSLA") for call in calls)
     assert all(call["limit"] == 3 for call in calls)
+    assert all(call["artifacts_dir"] == Path("/tmp/cohorts") for call in calls)
 
 
 def test_backfill_cohort_accepts_route_override(monkeypatch) -> None:
@@ -197,12 +217,14 @@ def test_backfill_cohort_accepts_route_override(monkeypatch) -> None:
         *,
         route: str | None = None,
         start_date: date | None = None,
+        end_date: date | None = None,
         tickers: tuple[str, ...] = (),
         ciks: tuple[str, ...] = (),
         limit: int | None = None,
         ignore_existing_watermarks: bool = True,
+        artifacts_dir: Path | None = None,
     ) -> str:
-        calls.append({"route": route, "tickers": tickers})
+        calls.append({"route": route, "tickers": tickers, "end_date": end_date, "artifacts_dir": artifacts_dir})
         return "issuer-run-id"
 
     monkeypatch.setattr(cli_module, "_run_backfill_pipeline", fake_run_backfill_pipeline)
@@ -228,20 +250,22 @@ def test_backfill_cohort_accepts_route_override(monkeypatch) -> None:
         {
             "route": "issuer",
             "tickers": ("JPM", "BAC", "WFC", "GS", "MS", "C", "JEF", "LAZ"),
+            "end_date": None,
+            "artifacts_dir": Path("/tmp/cohorts"),
         }
     ]
 
 
 def test_schedule_route_option_builds_filtered_tick(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, Path | None]] = []
 
     class FakeScheduler:
         def start(self) -> None:
             captured["started"] = True
 
-    def fake_run_once_pipeline(*, route: str | None = None) -> None:
-        calls.append(route)
+    def fake_run_once_pipeline(*, route: str | None = None, artifacts_dir: Path | None = None) -> None:
+        calls.append((route, artifacts_dir))
 
     def fake_build_blocking_scheduler(*, interval_minutes: int, tick_callable: object) -> FakeScheduler:
         captured["interval_minutes"] = interval_minutes
@@ -265,7 +289,21 @@ def test_schedule_route_option_builds_filtered_tick(monkeypatch) -> None:
     tick_callable = captured["tick_callable"]
     assert callable(tick_callable)
     tick_callable()
-    assert calls == ["holding"]
+    assert calls == [("holding", None)]
+
+
+def test_cli_no_args_defaults_to_schedule_loop(monkeypatch) -> None:
+    calls: list[tuple[str | None, Path | None]] = []
+
+    def fake_schedule(route: str | None = None, artifacts: Path | None = None) -> None:
+        calls.append((route, artifacts))
+
+    monkeypatch.setattr(cli_module, "schedule", fake_schedule)
+
+    result = runner.invoke(cli_module.app, [])
+
+    assert result.exit_code == 0
+    assert calls == [(None, None)]
 
 
 def test_schedule_command_tick_runs_db_backed_pipeline_and_writes_artifacts(tmp_path, monkeypatch) -> None:
