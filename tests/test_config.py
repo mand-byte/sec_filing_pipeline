@@ -101,3 +101,14 @@ def test_settings_loads_edgar_identity(monkeypatch) -> None:
     settings = Settings()
 
     assert settings.edgar_identity == "Example Ops ops@example.test"
+
+
+def test_settings_loads_edgar_local_download_switch(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("EDGAR_DOWNLOAD_FILINGS_TO_LOCAL", "true")
+    monkeypatch.setenv("EDGAR_LOCAL_DATA_DIR", str(tmp_path / "edgar_local"))
+
+    settings = Settings()
+
+    assert settings.edgar_download_filings_to_local is True
+    assert settings.edgar_local_data_dir == (tmp_path / "edgar_local")

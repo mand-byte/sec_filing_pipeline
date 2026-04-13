@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     scheduler_interval_minutes: int = Field(default=60, alias="SCHEDULER_INTERVAL_MINUTES", gt=0)
     offline_artifacts_dir: Path = Field(default=Path("artifacts"), alias="OFFLINE_ARTIFACTS_DIR")
     write_offline_artifacts: bool = Field(default=True, alias="WRITE_OFFLINE_ARTIFACTS")
+    edgar_download_filings_to_local: bool = Field(default=False, alias="EDGAR_DOWNLOAD_FILINGS_TO_LOCAL")
+    edgar_local_data_dir: Path = Field(default=Path.home() / ".edgar", alias="EDGAR_LOCAL_DATA_DIR")
     text_normalizer_mode: str = Field(default="unavailable", alias="TEXT_NORMALIZER_MODE")
     text_normalizer_base_url: str | None = Field(default=None, alias="TEXT_NORMALIZER_BASE_URL")
     text_normalizer_api_key: str | None = Field(default=None, alias="TEXT_NORMALIZER_API_KEY")

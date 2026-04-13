@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 import os
+from pathlib import Path
+import shutil
+import tempfile
 from typing import Any
 
 from src.pipeline.extraction.registry import all_numeric_field_specs
@@ -126,6 +129,79 @@ def _first_int_attribute(target: object, *names: str) -> int | None:
     return None
 
 
+def _filing_storage_day(*, filed_at: datetime | None, accepted_at: datetime) -> str:
+    effective_filing_date = filed_at or accepted_at
+    return _normalize_to_utc(effective_filing_date).strftime("%Y%m%d")
+
+
+def _local_filing_exists(*, local_data_dir: Path, filing_day: str, accession_no: str) -> bool:
+    final_dir = local_data_dir / "filings" / filing_day
+    if (final_dir / f"{accession_no}.nc").exists():
+        return True
+    if (final_dir / f"{accession_no}.nc.gz").exists():
+        return True
+    return False
+
+
+def _store_filtered_filings_locally(
+    *,
+    filings: Any,
+    envelopes: list[FilingEnvelope],
+    local_data_dir: Path,
+) -> None:
+    target_accession_to_day = {
+        envelope.accession_no: _filing_storage_day(
+            filed_at=envelope.filed_at,
+            accepted_at=envelope.accepted_at,
+        )
+        for envelope in envelopes
+        if not _local_filing_exists(
+            local_data_dir=local_data_dir,
+            filing_day=_filing_storage_day(
+                filed_at=envelope.filed_at,
+                accepted_at=envelope.accepted_at,
+            ),
+            accession_no=envelope.accession_no,
+        )
+    }
+    if not target_accession_to_day:
+        return
+
+    filtered_filings = filings
+    filter_method = getattr(filings, "filter", None)
+    if callable(filter_method):
+        try:
+            filtered_filings = filter_method(accession_number=list(target_accession_to_day))
+        except Exception:
+            filtered_filings = filings
+
+    from edgar.storage import download_filings as download_filings_to_storage
+
+    with tempfile.TemporaryDirectory(dir=str(local_data_dir), prefix="filing_stage_") as tmp_dir:
+        staging_root = Path(tmp_dir)
+        download_filings_to_storage(
+            filings=filtered_filings,
+            data_directory=staging_root,
+            overwrite_existing=False,
+            disable_progress=True,
+        )
+        for accession_no, filing_day in target_accession_to_day.items():
+            staged_dir = staging_root / filing_day
+            if not staged_dir.exists():
+                continue
+            final_dir = local_data_dir / "filings" / filing_day
+            final_dir.mkdir(parents=True, exist_ok=True)
+            for suffix in (".nc.gz", ".nc"):
+                staged_path = staged_dir / f"{accession_no}{suffix}"
+                if not staged_path.exists():
+                    continue
+                final_path = final_dir / staged_path.name
+                if final_path.exists():
+                    break
+                shutil.move(str(staged_path), str(final_path))
+                break
+
+
 def fetch_filings_for_security(
     *,
     security: Any,
@@ -133,6 +209,8 @@ def fetch_filings_for_security(
     start_accepted_at: datetime,
     end_accepted_at: datetime | None = None,
     identity: str | None = None,
+    download_filings_to_local: bool = False,
+    local_data_dir: str | Path | None = None,
 ) -> list[FilingEnvelope]:
     forms = _route_forms(route)
     if not forms:
@@ -154,6 +232,15 @@ def fetch_filings_for_security(
     effective_identity = (identity or os.environ.get("EDGAR_IDENTITY") or "").strip()
     if effective_identity and callable(set_identity):
         set_identity(effective_identity)
+
+    if download_filings_to_local:
+        resolved_local_data_dir = Path(local_data_dir or Path.home() / ".edgar").expanduser().resolve()
+        resolved_local_data_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["EDGAR_USE_LOCAL_DATA"] = "1"
+        os.environ["EDGAR_LOCAL_DATA_DIR"] = str(resolved_local_data_dir)
+        use_local_storage = getattr(edgar, "use_local_storage", None)
+        if callable(use_local_storage):
+            use_local_storage(str(resolved_local_data_dir))
 
     try:
         company = Company(str(cik))
@@ -221,4 +308,15 @@ def fetch_filings_for_security(
         )
 
     envelopes.sort(key=lambda envelope: envelope.accepted_at)
+
+    if download_filings_to_local and envelopes:
+        try:
+            _store_filtered_filings_locally(
+                filings=filings,
+                envelopes=envelopes,
+                local_data_dir=resolved_local_data_dir,
+            )
+        except Exception:
+            pass
+
     return envelopes

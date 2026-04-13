@@ -119,9 +119,18 @@ def _build_bundles_from_provider(
 ) -> list[FilingBundle]:
     fetch_callable = fetch_filings_for_security
     if settings is not None:
+        fetch_kwargs: dict[str, object] = {}
         edgar_identity = getattr(settings, "edgar_identity", None)
         if isinstance(edgar_identity, str) and edgar_identity.strip():
-            fetch_callable = partial(fetch_filings_for_security, identity=edgar_identity)
+            fetch_kwargs["identity"] = edgar_identity
+        download_filings_to_local = bool(getattr(settings, "edgar_download_filings_to_local", False))
+        if download_filings_to_local:
+            fetch_kwargs["download_filings_to_local"] = True
+            edgar_local_data_dir = getattr(settings, "edgar_local_data_dir", None)
+            if isinstance(edgar_local_data_dir, Path):
+                fetch_kwargs["local_data_dir"] = edgar_local_data_dir
+        if fetch_kwargs:
+            fetch_callable = partial(fetch_filings_for_security, **fetch_kwargs)
     return build_bundles_from_provider(
         security=security,
         route=route,
