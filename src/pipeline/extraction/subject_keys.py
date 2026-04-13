@@ -14,6 +14,7 @@ class SubjectKeyRule:
     subject_key_prefixes: tuple[str, ...]
 
     def matches(self, subject_key: str) -> bool:
+        """Check whether one subject key belongs to this configured rule."""
         normalized_subject_key = subject_key.strip()
         if not normalized_subject_key:
             return False
@@ -33,6 +34,7 @@ class SubjectKeyRule:
 
 @lru_cache(maxsize=None)
 def load_subject_type_lookup() -> dict[tuple[str, str], str]:
+    """Load the default subject type for each `(route, granularity)` pair."""
     payload = load_extraction_config("subject_mappings.yaml")
     mappings = payload.get("mappings", {})
     lookup: dict[tuple[str, str], str] = {}
@@ -53,6 +55,7 @@ def load_subject_type_lookup() -> dict[tuple[str, str], str]:
 
 @lru_cache(maxsize=None)
 def load_subject_key_rules() -> tuple[SubjectKeyRule, ...]:
+    """Load subject-key prefix matching rules from the extraction config."""
     payload = load_extraction_config("subject_mappings.yaml")
     mappings = payload.get("mappings", {})
     rules: list[SubjectKeyRule] = []
@@ -90,6 +93,7 @@ def load_subject_key_rules() -> tuple[SubjectKeyRule, ...]:
 
 
 def _fallback_subject_type(*, route: str, subject_key: str) -> str:
+    """Provide a conservative subject type when no config rule matches."""
     normalized_subject_key = subject_key.strip()
     if normalized_subject_key == "document":
         return "filing"
@@ -99,6 +103,7 @@ def _fallback_subject_type(*, route: str, subject_key: str) -> str:
 
 
 def subject_type_for_key(*, route: str, subject_key: str) -> str:
+    """Resolve the configured subject type for one subject key."""
     normalized_route = route.strip()
     normalized_subject_key = subject_key.strip()
     if not normalized_subject_key:
@@ -114,10 +119,12 @@ def subject_type_for_key(*, route: str, subject_key: str) -> str:
 
 
 def subject_key_has_type(*, route: str, subject_key: str, subject_type: str) -> bool:
+    """Check whether one subject key resolves to the expected subject type."""
     return subject_type_for_key(route=route, subject_key=subject_key) == subject_type.strip()
 
 
 def subject_key_matches_granularity(*, route: str, granularity: str, subject_key: str) -> bool:
+    """Check whether one subject key matches a configured granularity rule."""
     normalized_route = route.strip()
     normalized_granularity = granularity.strip()
     normalized_subject_key = subject_key.strip()

@@ -9,6 +9,7 @@ from src.pipeline.extraction.subject_keys import load_subject_type_lookup
 
 @lru_cache(maxsize=None)
 def _numeric_catalog_tuple() -> tuple[NumericFieldCatalogEntry, ...]:
+    """Load the checked-in numeric field catalog as immutable entries."""
     payload = load_extraction_config("catalog_numeric_fields.yaml")
     fields = payload.get("fields", [])
     entries: list[NumericFieldCatalogEntry] = []
@@ -31,16 +32,19 @@ def _numeric_catalog_tuple() -> tuple[NumericFieldCatalogEntry, ...]:
 
 
 def load_numeric_field_catalog() -> list[NumericFieldCatalogEntry]:
+    """Return the numeric field catalog as a mutable list copy."""
     return list(_numeric_catalog_tuple())
 
 
 @lru_cache(maxsize=None)
 def _numeric_catalog_lookup() -> dict[tuple[str, str], NumericFieldCatalogEntry]:
+    """Index catalog entries by `(route, field_name)`."""
     return {(entry.route, entry.field_name): entry for entry in _numeric_catalog_tuple()}
 
 
 @lru_cache(maxsize=None)
 def _numeric_field_specs_tuple() -> tuple[NumericFieldSpec, ...]:
+    """Load runtime numeric specs enriched with catalog and subject metadata."""
     payload = load_extraction_config("runtime_numeric_fields.yaml")
     fields = payload.get("fields", [])
     if not isinstance(fields, list):
@@ -80,4 +84,5 @@ def _numeric_field_specs_tuple() -> tuple[NumericFieldSpec, ...]:
 
 
 def all_numeric_field_specs() -> list[NumericFieldSpec]:
+    """Return all runtime numeric field specs as a mutable list copy."""
     return list(_numeric_field_specs_tuple())

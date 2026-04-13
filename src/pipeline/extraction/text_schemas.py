@@ -32,6 +32,7 @@ class TextSchemaNode:
     max_items: int | None = None
 
     def __post_init__(self) -> None:
+        """Normalize and validate one schema node after dataclass construction."""
         normalized_type = self.type.strip()
         if normalized_type not in _SCHEMA_TYPES:
             raise ValueError(f"Unsupported text schema type: {self.type}")
@@ -70,6 +71,7 @@ class SchemaValidationResult:
 
 
 def _schema_path(schema_ref: str) -> Path:
+    """Resolve a versioned schema ref to its YAML file path."""
     normalized_ref = schema_ref.strip()
     if not normalized_ref:
         raise ValueError("schema_ref must be non-empty")
@@ -88,6 +90,7 @@ def _schema_path(schema_ref: str) -> Path:
 
 
 def _load_schema_mapping(schema_ref: str) -> dict[str, Any]:
+    """Load the raw YAML mapping for one versioned text schema."""
     path = _schema_path(schema_ref)
     if not path.exists():
         raise ValueError(f"text schema file not found for {schema_ref}: {path}")
@@ -101,6 +104,7 @@ def _load_schema_mapping(schema_ref: str) -> dict[str, Any]:
 
 
 def _sequence_to_tuple(value: object, *, key: str) -> tuple[Any, ...]:
+    """Normalize optional sequence config fields into tuples."""
     if value is None:
         return ()
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
@@ -109,6 +113,7 @@ def _sequence_to_tuple(value: object, *, key: str) -> tuple[Any, ...]:
 
 
 def _parse_schema_node(payload: Mapping[str, Any]) -> TextSchemaNode:
+    """Recursively parse one raw schema mapping into typed nodes."""
     node_type_raw = payload.get("type")
     if not isinstance(node_type_raw, str) or not node_type_raw.strip():
         raise ValueError("schema node must define a non-empty type")
@@ -153,6 +158,7 @@ def _parse_schema_node(payload: Mapping[str, Any]) -> TextSchemaNode:
 
 @lru_cache(maxsize=None)
 def load_text_schema(schema_ref: str) -> TextSchemaDefinition:
+    """Load and validate one versioned text schema definition."""
     payload = _load_schema_mapping(schema_ref)
     normalized_ref = schema_ref.strip()
     version, schema_id = normalized_ref.split("/", 1)
@@ -181,10 +187,12 @@ def load_text_schema(schema_ref: str) -> TextSchemaDefinition:
 
 
 def _is_numeric(value: object) -> bool:
+    """Check whether a value is a finite numeric scalar."""
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
 def _validate_node(*, node: TextSchemaNode, value: Any, path: str, errors: list[str]) -> None:
+    """Validate a value recursively against one schema node."""
     if value is None:
         if node.nullable:
             return
@@ -262,6 +270,7 @@ def _validate_node(*, node: TextSchemaNode, value: Any, path: str, errors: list[
 
 
 def validate_text_schema_value(*, schema_ref: str, value: Any) -> SchemaValidationResult:
+    """Validate one payload against a named text schema."""
     schema = load_text_schema(schema_ref)
     errors: list[str] = []
     _validate_node(node=schema.root, value=value, path="$", errors=errors)

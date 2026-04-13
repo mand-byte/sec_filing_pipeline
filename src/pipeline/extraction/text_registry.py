@@ -9,6 +9,7 @@ from src.pipeline.extraction.text_schemas import load_text_schema
 
 @lru_cache(maxsize=None)
 def _text_catalog_tuple() -> tuple[TextFieldCatalogEntry, ...]:
+    """Load the checked-in text field catalog as immutable entries."""
     payload = load_extraction_config("catalog_text_fields.yaml")
     fields = payload.get("fields", [])
     entries: list[TextFieldCatalogEntry] = []
@@ -30,11 +31,13 @@ def _text_catalog_tuple() -> tuple[TextFieldCatalogEntry, ...]:
 
 
 def load_text_field_catalog() -> list[TextFieldCatalogEntry]:
+    """Return the text field catalog as a mutable list copy."""
     return list(_text_catalog_tuple())
 
 
 @lru_cache(maxsize=None)
 def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
+    """Load implemented runtime text specs and validate referenced schemas."""
     payload = load_extraction_config("runtime_text_fields.yaml")
     fields = payload.get("fields", [])
     specs: list[TextFieldSpec] = []
@@ -83,4 +86,5 @@ def _text_field_specs_tuple() -> tuple[TextFieldSpec, ...]:
 
 
 def all_text_field_specs() -> list[TextFieldSpec]:
+    """Return all implemented runtime text specs as a mutable list copy."""
     return list(_text_field_specs_tuple())
