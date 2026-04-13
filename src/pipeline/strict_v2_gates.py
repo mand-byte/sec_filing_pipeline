@@ -5,10 +5,12 @@ from typing import Any
 
 
 def selector_active(selector_context: Mapping[str, Any]) -> bool:
+    """Check whether any strict-v2 selector is actively filtering the run."""
     return any(selector_context.values())
 
 
 def selector_matches_expected(actual: str | None, expected: object) -> bool:
+    """Match one selector value against a scalar or sequence expectation."""
     if expected is None:
         return True
     if isinstance(expected, Sequence) and not isinstance(expected, (str, bytes)):
@@ -17,6 +19,7 @@ def selector_matches_expected(actual: str | None, expected: object) -> bool:
 
 
 def gate_applies_to_selectors(gate: Mapping[str, Any], selector_context: Mapping[str, Any]) -> bool:
+    """Decide whether a phase gate applies to the current selector slice."""
     applies_when = gate.get("applies_when")
     if not isinstance(applies_when, Mapping):
         return not selector_active(selector_context)
@@ -31,6 +34,7 @@ def gate_applies_to_selectors(gate: Mapping[str, Any], selector_context: Mapping
 
 
 def compare_gate_scalar(*, actual: object, expected: object, comparator: str) -> bool:
+    """Compare one scalar gate rule using equality, min, or max semantics."""
     if comparator in {"min", "max"}:
         if not isinstance(actual, (int, float)) or isinstance(actual, bool):
             return False
@@ -47,6 +51,7 @@ def gate_scalar_violation(
     expected: object,
     actual_values: Mapping[str, Any],
 ) -> dict[str, Any] | None:
+    """Return one scalar gate violation payload when a rule fails."""
     comparator = "eq"
     actual_key = key
     if key.startswith("min_"):
@@ -76,6 +81,7 @@ def required_set_violation(
     required_values: object,
     actual_values: set[str],
 ) -> dict[str, Any] | None:
+    """Return one set-membership gate violation when required values are missing."""
     if not isinstance(required_values, Sequence) or isinstance(required_values, (str, bytes)):
         return {
             "namespace": namespace,
@@ -106,6 +112,7 @@ def evaluate_phase_gates(
     set_values: Mapping[str, set[str]],
     selector_context: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    """Evaluate strict-v2 phase gates against coverage and metric payloads."""
     if not isinstance(gates_raw, list):
         return []
 

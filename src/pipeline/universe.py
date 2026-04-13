@@ -28,6 +28,7 @@ class SecurityUniverseRow:
 
 
 def _dedupe_security_rows(rows: list[SecurityUniverseRow]) -> list[SecurityUniverseRow]:
+    """Deduplicate universe rows by CIK/FIGI, preferring active records."""
     deduped: dict[tuple[str, str], SecurityUniverseRow] = {}
     for row in rows:
         key = (row.cik, row.composite_figi)
@@ -41,6 +42,7 @@ def _dedupe_security_rows(rows: list[SecurityUniverseRow]) -> list[SecurityUnive
 
 
 def _normalize_to_utc(value: object) -> datetime | None:
+    """Normalize mixed datetime inputs into UTC-aware datetimes."""
     if value is None:
         return None
     if isinstance(value, str):
@@ -59,6 +61,7 @@ def _normalize_to_utc(value: object) -> datetime | None:
 
 
 def _coerce_bool(value: object) -> bool:
+    """Coerce mixed DB/ClickHouse boolean-like values into `bool`."""
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -73,12 +76,14 @@ def _coerce_bool(value: object) -> bool:
 
 
 def _coerce_text(value: object) -> str:
+    """Coerce text-ish DB values, including fixed-string bytes, into strings."""
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="ignore").rstrip("\x00")
     return str(value)
 
 
 def _load_from_security_master(session: Session) -> list[SecurityUniverseRow]:
+    """Load the universe from the relational fallback table."""
     rows = (
         session.query(SecurityMaster)
         .order_by(SecurityMaster.cik.asc(), SecurityMaster.composite_figi.asc())
@@ -97,6 +102,7 @@ def _load_from_security_master(session: Session) -> list[SecurityUniverseRow]:
 
 
 def _rows_from_clickhouse_result(result: Any) -> list[dict[str, Any]]:
+    """Normalize ClickHouse client results into row dictionaries."""
     if result is None:
         return []
 
@@ -124,6 +130,7 @@ def _rows_from_clickhouse_result(result: Any) -> list[dict[str, Any]]:
 
 
 def _load_from_clickhouse(settings: Settings) -> list[SecurityUniverseRow] | None:
+    """Load the universe directly from ClickHouse when configured."""
     ch_dsn = getattr(settings, "ch_dsn", None)
     if ch_dsn is None:
         return None
@@ -161,6 +168,7 @@ def _load_from_clickhouse(settings: Settings) -> list[SecurityUniverseRow] | Non
 
 
 def load_security_universe(*, session: Session, settings: Settings) -> list[SecurityUniverseRow]:
+    """Load the best available security universe, with DB fallbacks when needed."""
     clickhouse_rows = _load_from_clickhouse(settings)
     if clickhouse_rows is not None:
         return clickhouse_rows

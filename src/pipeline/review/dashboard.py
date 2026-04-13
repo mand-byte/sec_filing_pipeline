@@ -13,6 +13,7 @@ _NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _safe_name(value: object, *, fallback: str) -> str:
+    """Sanitize values before using them in dashboard artifact filenames."""
     text = str(value).strip()
     if not text:
         return fallback
@@ -21,6 +22,7 @@ def _safe_name(value: object, *, fallback: str) -> str:
 
 
 def _json_pretty(value: Any) -> str:
+    """Pretty-print a value for embedding in HTML `<pre>` blocks."""
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
@@ -31,6 +33,7 @@ def build_review_dashboard_packets(
     route: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
+    """Collect fully-expanded review task packets for dashboard rendering."""
     packets: list[dict[str, Any]] = []
     for task in service.list_tasks(status=status, route=route, limit=limit):
         packets.append(review_task_detail_asdict(service.get_task_detail(task_id=task.task_id)))
@@ -38,6 +41,7 @@ def build_review_dashboard_packets(
 
 
 def _render_task_card(packet: dict[str, Any]) -> str:
+    """Render one review task packet into a dashboard HTML section."""
     task = packet["task"]
     filing = packet.get("filing") or {}
     fact = packet.get("fact") or {}
@@ -126,6 +130,7 @@ def _render_task_card(packet: dict[str, Any]) -> str:
 
 
 def render_review_dashboard_html(*, packets: list[dict[str, Any]]) -> str:
+    """Render the complete static review dashboard HTML document."""
     nav_links = "\n".join(
         f'<a href="#task-{escape(str(packet["task"]["task_id"]))}">{escape(packet["task"]["field_name"])} · {escape(packet["task"]["subject_key"])}</a>'
         for packet in packets
@@ -376,6 +381,7 @@ def write_review_dashboard(
     output_dir: Path,
     packets: list[dict[str, Any]],
 ) -> Path:
+    """Write the static dashboard HTML and packet JSON bundle to disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "packets.json").write_text(
         json.dumps(packets, ensure_ascii=False, indent=2),

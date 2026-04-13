@@ -21,11 +21,13 @@ LocatorHandler = Callable[[object], LocatorResult | None]
 
 
 def _call_quietly(method: Callable[[], object]) -> object:
+    """Call a provider method without leaking stdout or stderr noise."""
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         return method()
 
 
 def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | None:
+    """Return a bound zero-argument method when the target exposes one safely."""
     candidate = getattr(target, name, None)
     if not callable(candidate):
         return None
@@ -41,6 +43,7 @@ def _get_zero_arg_method(target: object, name: str) -> Callable[[], object] | No
 
 
 def _try_obj(filing: object) -> LocatorResult | None:
+    """Resolve the filing's object-backed extraction surface."""
     obj = _get_zero_arg_method(filing, "obj")
     if obj is None:
         return None
@@ -53,6 +56,7 @@ def _try_obj(filing: object) -> LocatorResult | None:
 
 
 def _try_xbrl_xml(filing: object) -> LocatorResult | None:
+    """Resolve the filing's XBRL extraction surface."""
     xbrl = _get_zero_arg_method(filing, "xbrl")
     if xbrl is None:
         return None
@@ -65,6 +69,7 @@ def _try_xbrl_xml(filing: object) -> LocatorResult | None:
 
 
 def _try_sections_search(filing: object) -> LocatorResult | None:
+    """Resolve the filing's section-search extraction surface."""
     sections = _get_zero_arg_method(filing, "sections")
     if sections is None:
         return None
@@ -81,6 +86,7 @@ def _try_sections_search(filing: object) -> LocatorResult | None:
 
 
 def _try_parse_text(filing: object) -> LocatorResult | None:
+    """Resolve parsed or plain-text extraction content from the filing."""
     parsed: object | None = None
     parse = _get_zero_arg_method(filing, "parse")
     if parse is not None:
@@ -102,6 +108,7 @@ def _try_parse_text(filing: object) -> LocatorResult | None:
 
 
 def run_locator_chain(*, filing: object, locators: Sequence[str]) -> LocatorResult | None:
+    """Try locator strategies in order and return the first available result."""
     handlers: dict[str, LocatorHandler] = {
         "obj": _try_obj,
         "xbrl_xml": _try_xbrl_xml,
