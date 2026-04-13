@@ -61,6 +61,8 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
+_SCHEMA_READY_DSNS: set[str] = set()
+
 
 @app.callback(invoke_without_command=True)
 def _default_entrypoint(ctx: typer.Context) -> None:
@@ -99,6 +101,26 @@ def _coerce_numeric_value(value: object) -> float | None:
     return coerce_numeric_value(value)
 
 
+def _ensure_runtime_schema_ready(settings: Any | None = None) -> None:
+    effective_settings = settings or Settings()
+    pg_dsn = getattr(effective_settings, "pg_dsn", None)
+    if pg_dsn is None:
+        return
+
+    normalized_dsn = str(pg_dsn)
+    if not normalized_dsn:
+        return
+
+    if normalized_dsn in _SCHEMA_READY_DSNS:
+        return
+
+    engine = build_engine(effective_settings)
+    init_database_schema(engine=engine)
+    if getattr(getattr(engine, "dialect", None), "name", None) == "postgresql":
+        apply_rollout_assets(engine=engine, dry_run=False)
+    _SCHEMA_READY_DSNS.add(normalized_dsn)
+
+
 def _load_run_once_securities(session: Any, settings: Settings) -> list[SecurityUniverseRow]:
     return load_security_universe(session=session, settings=settings)
 
@@ -123,12 +145,26 @@ def _build_bundles_from_provider(
         edgar_identity = getattr(settings, "edgar_identity", None)
         if isinstance(edgar_identity, str) and edgar_identity.strip():
             fetch_kwargs["identity"] = edgar_identity
-        download_filings_to_local = bool(getattr(settings, "edgar_download_filings_to_local", False))
+        download_filings_to_local = bool(getattr(settings, "edgar_download_filings", False))
         if download_filings_to_local:
             fetch_kwargs["download_filings_to_local"] = True
             edgar_local_data_dir = getattr(settings, "edgar_local_data_dir", None)
             if isinstance(edgar_local_data_dir, Path):
                 fetch_kwargs["local_data_dir"] = edgar_local_data_dir
+            if bool(getattr(settings, "edgar_use_cloud_storage", False)):
+                fetch_kwargs["use_cloud_storage"] = True
+                edgar_cloud_uri = getattr(settings, "edgar_cloud_uri", None)
+                if isinstance(edgar_cloud_uri, str) and edgar_cloud_uri.strip():
+                    fetch_kwargs["cloud_uri"] = edgar_cloud_uri
+                edgar_cloud_endpoint_url = getattr(settings, "edgar_cloud_endpoint_url", None)
+                if isinstance(edgar_cloud_endpoint_url, str) and edgar_cloud_endpoint_url.strip():
+                    fetch_kwargs["cloud_endpoint_url"] = edgar_cloud_endpoint_url
+                edgar_cloud_access_id = getattr(settings, "edgar_cloud_access_id", None)
+                if isinstance(edgar_cloud_access_id, str) and edgar_cloud_access_id.strip():
+                    fetch_kwargs["cloud_access_id"] = edgar_cloud_access_id
+                edgar_cloud_access_key = getattr(settings, "edgar_cloud_access_key", None)
+                if isinstance(edgar_cloud_access_key, str) and edgar_cloud_access_key.strip():
+                    fetch_kwargs["cloud_access_key"] = edgar_cloud_access_key
         if fetch_kwargs:
             fetch_callable = partial(fetch_filings_for_security, **fetch_kwargs)
     return build_bundles_from_provider(
@@ -287,6 +323,7 @@ def _run_pipeline(
     artifacts_dir: Path | None = None,
 ) -> str:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     session_factory = get_session_factory(settings)
     selected_routes = _selected_routes(route)
     effective_start_date = start_date_override or settings.start_date
@@ -846,6 +883,7 @@ def review_list(
     limit: int = typer.Option(100, "--limit", min=1, max=1000, help="Maximum tasks to return"),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         service = ReviewWorkflowService(session)
         payload = [
@@ -863,6 +901,7 @@ def review_show(
     task_id: int = typer.Argument(..., help="Review task id"),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         service = ReviewWorkflowService(session)
         try:
@@ -878,6 +917,7 @@ def review_assign(
     assignee: str = typer.Argument(..., help="Assignee name"),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         service = ReviewWorkflowService(session)
         try:
@@ -907,6 +947,7 @@ def review_resolve(
     corrected_json: str | None = typer.Option(None, "--corrected-json", help="JSON payload for corrected decisions"),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         service = ReviewWorkflowService(session)
         try:
@@ -945,6 +986,7 @@ def review_dashboard(
     ),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         service = ReviewWorkflowService(session)
         packets = build_review_dashboard_packets(
@@ -966,6 +1008,7 @@ def review_serve(
     port: int = typer.Option(8765, "--port", min=1, max=65535, help="Port to bind"),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     session_factory = get_session_factory(settings)
     typer.echo(f"http://{host}:{port}")
     run_review_server(
@@ -1009,6 +1052,7 @@ def release_gate(
     ),
 ) -> None:
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         result = evaluate_fix_once_release_gate(
             session=session,
@@ -1034,6 +1078,7 @@ def truth_select(
 ) -> None:
     """Resolve the preferred downstream truth with ground-truth-over-parsed precedence."""
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     with get_session_factory(settings)() as session:
         preferred_truth = select_preferred_truth(
             session=session,
@@ -1059,6 +1104,7 @@ def verify_runtime_run(
 ) -> None:
     """Verify runtime run artifacts against filing_attempt and pipeline_log DB state."""
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     base_dir = artifacts_dir or settings.offline_artifacts_dir
 
     with get_session_factory(settings)() as session:
@@ -1074,6 +1120,7 @@ def verify_runtime_run(
 def runtime_preflight() -> None:
     """Check whether the current environment is ready for real runtime/backfill evidence collection."""
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     result = run_runtime_preflight(settings=settings)
     typer.echo(json.dumps(result.asdict(), ensure_ascii=False, indent=2))
     if not result.passed:
@@ -1087,6 +1134,7 @@ def schedule(
 ) -> None:
     """Run the phase-1 scheduler loop."""
     settings = Settings()
+    _ensure_runtime_schema_ready(settings)
     parsed_route = _parse_route_name(route)
     scheduler = build_blocking_scheduler(
         interval_minutes=settings.scheduler_interval_minutes,

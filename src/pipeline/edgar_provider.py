@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 import os
 from pathlib import Path
-import shutil
-import tempfile
 from typing import Any
 
 from src.pipeline.extraction.registry import all_numeric_field_specs
@@ -99,7 +97,10 @@ def _coerce_datetime(value: object) -> datetime | None:
 
 def _first_datetime_attribute(target: object, *names: str) -> datetime | None:
     for name in names:
-        value = getattr(target, name, None)
+        try:
+            value = getattr(target, name, None)
+        except Exception:
+            continue
         coerced = _coerce_datetime(value)
         if coerced is not None:
             return coerced
@@ -122,7 +123,10 @@ def _coerce_int(value: object) -> int | None:
 
 def _first_int_attribute(target: object, *names: str) -> int | None:
     for name in names:
-        value = getattr(target, name, None)
+        try:
+            value = getattr(target, name, None)
+        except Exception:
+            continue
         coerced = _coerce_int(value)
         if coerced is not None:
             return coerced
@@ -143,63 +147,90 @@ def _local_filing_exists(*, local_data_dir: Path, filing_day: str, accession_no:
     return False
 
 
+def _filing_exists_via_edgar_storage(*, edgar_module: object, filing_day: str, accession_no: str) -> bool:
+    try:
+        from edgar.filesystem import EdgarPath
+    except Exception:
+        return False
+    return bool(EdgarPath("filings", filing_day, f"{accession_no}.nc").exists()) or bool(
+        EdgarPath("filings", filing_day, f"{accession_no}.nc.gz").exists()
+    )
+
+
+def _download_full_submission_text(filing: object) -> str | None:
+    full_text_method = getattr(filing, "full_text_submission", None)
+    if callable(full_text_method):
+        try:
+            content = full_text_method()
+        except Exception:
+            content = None
+        if isinstance(content, str) and content:
+            return content
+
+    text_url = getattr(filing, "text_url", None)
+    if not isinstance(text_url, str) or not text_url:
+        return None
+
+    try:
+        from edgar.httprequests import download_file
+
+        downloaded = download_file(text_url, as_text=True)
+    except Exception:
+        return None
+
+    if isinstance(downloaded, str) and downloaded:
+        return downloaded
+    return None
+
+
 def _store_filtered_filings_locally(
     *,
-    filings: Any,
+    edgar_module: object,
     envelopes: list[FilingEnvelope],
     local_data_dir: Path,
+    use_cloud_storage: bool = False,
 ) -> None:
-    target_accession_to_day = {
-        envelope.accession_no: _filing_storage_day(
+    for envelope in envelopes:
+        filing_day = _filing_storage_day(
             filed_at=envelope.filed_at,
             accepted_at=envelope.accepted_at,
         )
-        for envelope in envelopes
-        if not _local_filing_exists(
-            local_data_dir=local_data_dir,
-            filing_day=_filing_storage_day(
-                filed_at=envelope.filed_at,
-                accepted_at=envelope.accepted_at,
-            ),
-            accession_no=envelope.accession_no,
+        exists = (
+            _filing_exists_via_edgar_storage(
+                edgar_module=edgar_module,
+                filing_day=filing_day,
+                accession_no=envelope.accession_no,
+            )
+            if use_cloud_storage
+            else _local_filing_exists(
+                local_data_dir=local_data_dir,
+                filing_day=filing_day,
+                accession_no=envelope.accession_no,
+            )
         )
-    }
-    if not target_accession_to_day:
-        return
+        if exists:
+            continue
 
-    filtered_filings = filings
-    filter_method = getattr(filings, "filter", None)
-    if callable(filter_method):
-        try:
-            filtered_filings = filter_method(accession_number=list(target_accession_to_day))
-        except Exception:
-            filtered_filings = filings
+        content = _download_full_submission_text(envelope.filing)
+        if not isinstance(content, str) or not content:
+            continue
 
-    from edgar.storage import download_filings as download_filings_to_storage
-
-    with tempfile.TemporaryDirectory(dir=str(local_data_dir), prefix="filing_stage_") as tmp_dir:
-        staging_root = Path(tmp_dir)
-        download_filings_to_storage(
-            filings=filtered_filings,
-            data_directory=staging_root,
-            overwrite_existing=False,
-            disable_progress=True,
-        )
-        for accession_no, filing_day in target_accession_to_day.items():
-            staged_dir = staging_root / filing_day
-            if not staged_dir.exists():
+        if use_cloud_storage:
+            try:
+                from edgar.filesystem import EdgarPath
+            except Exception:
                 continue
+            final_path = EdgarPath("filings", filing_day, f"{envelope.accession_no}.nc")
+            if final_path.exists():
+                continue
+            final_path.write_text(content, encoding="utf-8")
+        else:
             final_dir = local_data_dir / "filings" / filing_day
             final_dir.mkdir(parents=True, exist_ok=True)
-            for suffix in (".nc.gz", ".nc"):
-                staged_path = staged_dir / f"{accession_no}{suffix}"
-                if not staged_path.exists():
-                    continue
-                final_path = final_dir / staged_path.name
-                if final_path.exists():
-                    break
-                shutil.move(str(staged_path), str(final_path))
-                break
+            final_path = final_dir / f"{envelope.accession_no}.nc"
+            if final_path.exists():
+                continue
+            final_path.write_text(content, encoding="utf-8")
 
 
 def fetch_filings_for_security(
@@ -211,6 +242,11 @@ def fetch_filings_for_security(
     identity: str | None = None,
     download_filings_to_local: bool = False,
     local_data_dir: str | Path | None = None,
+    use_cloud_storage: bool = False,
+    cloud_uri: str | None = None,
+    cloud_endpoint_url: str | None = None,
+    cloud_access_id: str | None = None,
+    cloud_access_key: str | None = None,
 ) -> list[FilingEnvelope]:
     forms = _route_forms(route)
     if not forms:
@@ -241,6 +277,21 @@ def fetch_filings_for_security(
         use_local_storage = getattr(edgar, "use_local_storage", None)
         if callable(use_local_storage):
             use_local_storage(str(resolved_local_data_dir))
+        if use_cloud_storage:
+            use_cloud_storage_fn = getattr(edgar, "use_cloud_storage", None)
+            if callable(use_cloud_storage_fn) and isinstance(cloud_uri, str) and cloud_uri.strip():
+                client_kwargs: dict[str, str] = {}
+                if isinstance(cloud_endpoint_url, str) and cloud_endpoint_url.strip():
+                    client_kwargs["endpoint_url"] = cloud_endpoint_url.strip()
+                if isinstance(cloud_access_id, str) and cloud_access_id.strip():
+                    client_kwargs["aws_access_key_id"] = cloud_access_id.strip()
+                if isinstance(cloud_access_key, str) and cloud_access_key.strip():
+                    client_kwargs["aws_secret_access_key"] = cloud_access_key.strip()
+                use_cloud_storage_fn(
+                    cloud_uri.strip(),
+                    client_kwargs=client_kwargs or None,
+                    verify=False,
+                )
 
     try:
         company = Company(str(cik))
@@ -312,9 +363,10 @@ def fetch_filings_for_security(
     if download_filings_to_local and envelopes:
         try:
             _store_filtered_filings_locally(
-                filings=filings,
+                edgar_module=edgar,
                 envelopes=envelopes,
                 local_data_dir=resolved_local_data_dir,
+                use_cloud_storage=use_cloud_storage,
             )
         except Exception:
             pass

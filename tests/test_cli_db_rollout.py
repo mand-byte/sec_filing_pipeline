@@ -99,3 +99,47 @@ def test_cli_db_init_bootstraps_base_schema(monkeypatch) -> None:
     assert captured["engine"] is engine
     assert payload["applied"] is True
     assert payload["table_count"] == 3
+
+
+def test_ensure_runtime_schema_ready_bootstraps_and_applies_rollout_once(monkeypatch) -> None:
+    cli_module._SCHEMA_READY_DSNS.clear()
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    settings = SimpleNamespace(pg_dsn="postgresql+psycopg://user:pass@db/sec_filing")
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(cli_module, "build_engine", lambda provided_settings: engine)
+    monkeypatch.setattr(
+        cli_module,
+        "init_database_schema",
+        lambda *, engine: calls.append(("init", engine)) or DbInitResult(
+            applied=True,
+            dialect="postgresql",
+            table_count=18,
+            tables=[],
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "apply_rollout_assets",
+        lambda *, engine, dry_run: calls.append(("rollout", engine)) or RolloutApplyResult(
+            applied=True,
+            dry_run=False,
+            dialect="postgresql",
+            migration_count=1,
+            statement_count=10,
+            migrations=[],
+        ),
+    )
+
+    cli_module._ensure_runtime_schema_ready(settings)
+    cli_module._ensure_runtime_schema_ready(settings)
+
+    assert calls == [("init", engine), ("rollout", engine)]
+
+
+def test_ensure_runtime_schema_ready_noops_without_pg_dsn(monkeypatch) -> None:
+    cli_module._SCHEMA_READY_DSNS.clear()
+    settings = SimpleNamespace()
+    monkeypatch.setattr(cli_module, "build_engine", lambda provided_settings: (_ for _ in ()).throw(AssertionError("should not build engine")))
+
+    cli_module._ensure_runtime_schema_ready(settings)
