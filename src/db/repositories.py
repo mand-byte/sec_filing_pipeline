@@ -279,3 +279,15 @@ class PipelineRepository:
             row.updated_at = now
 
         self._commit_with_rollback()
+
+    def is_filing_completed(self, *, route: RouteName, accession_no: str) -> bool:
+        """Return True when the latest DB attempt for this route/accession is completed."""
+        row = self.session.scalar(
+            select(FilingAttempt).where(
+                FilingAttempt.route == route,
+                FilingAttempt.accession_no == accession_no,
+            ).order_by(FilingAttempt.updated_at.desc(), FilingAttempt.id.desc())
+        )
+        if row is None:
+            return False
+        return row.status == "completed"

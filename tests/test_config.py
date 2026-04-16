@@ -5,7 +5,12 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from src.config import Settings
+from src.config import (
+    EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
+    Settings,
+)
 
 
 def test_settings_loads_clickhouse_and_universe_env_aliases(monkeypatch) -> None:
@@ -13,7 +18,7 @@ def test_settings_loads_clickhouse_and_universe_env_aliases(monkeypatch) -> None
     monkeypatch.setenv("CH_DSN", "clickhouse://default@localhost/default")
     monkeypatch.setenv("SEC_UNIVERSE_TABLE", "data_quant.custom_universe")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.pg_dsn == "sqlite+pysqlite:///:memory:"
     assert settings.ch_dsn == "clickhouse://default@localhost/default"
@@ -34,7 +39,7 @@ def test_settings_builds_legacy_postgres_and_clickhouse_dsns(monkeypatch) -> Non
     monkeypatch.setenv("CLICKHOUSE_USER", "analytics")
     monkeypatch.setenv("CLICKHOUSE_PASSWORD", "secret")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.pg_dsn == "postgresql+psycopg://hubber:secret@db.internal:5433/sec_filing"
     assert settings.ch_dsn == "clickhouse://analytics:secret@ch.internal:9000/quant_data"
@@ -44,7 +49,7 @@ def test_settings_loads_start_date_alias(monkeypatch) -> None:
     monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("START_DATE", "2024-05-06")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.start_date == date(2024, 5, 6)
 
@@ -54,7 +59,7 @@ def test_settings_rejects_invalid_start_date_shape(monkeypatch) -> None:
     monkeypatch.setenv("START_DATE", "2024/05/06")
 
     with pytest.raises(ValidationError) as exc_info:
-        Settings()
+        Settings(_env_file=None)
 
     assert "START_DATE" in str(exc_info.value)
 
@@ -70,7 +75,7 @@ def test_settings_builds_text_normalizer_from_legacy_llm_envs(monkeypatch) -> No
     monkeypatch.setenv("LLM_AUTH_KEY", "secret")
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "12")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.text_normalizer_mode == "http_json"
     assert settings.text_normalizer_base_url == "https://example.test/v1"
@@ -87,7 +92,7 @@ def test_explicit_text_normalizer_env_overrides_legacy_llm_envs(monkeypatch) -> 
     monkeypatch.setenv("LLM_BASE_URL", "https://legacy.example/v1")
     monkeypatch.setenv("LLM_MODEL_NAME", "legacy-model")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.text_normalizer_mode == "unavailable"
     assert settings.text_normalizer_base_url == "https://normalizer.example/v1"
@@ -98,27 +103,47 @@ def test_settings_loads_edgar_identity(monkeypatch) -> None:
     monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("EDGAR_IDENTITY", "Example Ops ops@example.test")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.edgar_identity == "Example Ops ops@example.test"
 
 
-def test_settings_loads_edgar_local_download_switch(monkeypatch, tmp_path) -> None:
+def test_settings_loads_edgar_local_download_flag(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
-    monkeypatch.setenv("EDGAR_DOWNLOAD_FILINGS", "true")
+    monkeypatch.setenv("EDGAR_DOWNLOAD_FILINGS_FLAG", "1")
     monkeypatch.setenv("EDGAR_LOCAL_DATA_DIR", str(tmp_path / "edgar_local"))
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
-    assert settings.edgar_download_filings is True
+    assert settings.edgar_download_filings_flag == EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL
     assert settings.edgar_local_data_dir == (tmp_path / "edgar_local")
 
 
-def test_settings_maps_edgar_download_filings_alias(monkeypatch) -> None:
+def test_settings_loads_edgar_cloud_download_flag(monkeypatch) -> None:
     monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
-    monkeypatch.delenv("EDGAR_DOWNLOAD_FILINGS", raising=False)
-    monkeypatch.setenv("EDGAR_DOWNLOAD_FILINGS_TO_LOCAL", "true")
+    monkeypatch.setenv("EDGAR_DOWNLOAD_FILINGS_FLAG", "2")
+    monkeypatch.setenv("EDGAR_CLOUD_URI", "s3://sec-filing/")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
-    assert settings.edgar_download_filings is True
+    assert settings.edgar_download_filings_flag == EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD
+
+
+def test_settings_defaults_edgar_download_flag_to_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.delenv("EDGAR_DOWNLOAD_FILINGS_FLAG", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.edgar_download_filings_flag == EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED
+
+
+def test_settings_requires_cloud_uri_for_cloud_storage_flag(monkeypatch) -> None:
+    monkeypatch.setenv("PG_DSN", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("EDGAR_DOWNLOAD_FILINGS_FLAG", "2")
+    monkeypatch.delenv("EDGAR_CLOUD_URI", raising=False)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)
+
+    assert "EDGAR_CLOUD_URI is required when EDGAR_DOWNLOAD_FILINGS_FLAG=2" in str(exc_info.value)

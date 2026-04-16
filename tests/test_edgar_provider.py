@@ -6,6 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 
+from src.config import (
+    EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
+)
 from src.pipeline.edgar_provider import fetch_filings_for_security
 
 
@@ -148,7 +152,7 @@ def test_fetch_filings_for_security_tolerates_expensive_period_metadata(monkeypa
     assert envelopes[0].amendment_no == 2
 
 
-def test_fetch_filings_for_security_can_enable_local_filing_download(monkeypatch, tmp_path) -> None:
+def test_fetch_filings_for_security_can_persist_filings_locally(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
 
     class LocalDownloadCompany:
@@ -193,7 +197,7 @@ def test_fetch_filings_for_security_can_enable_local_filing_download(monkeypatch
         security=SimpleNamespace(cik="0000789019"),
         route="issuer",
         start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
-        download_filings_to_local=True,
+        filing_storage_mode=EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
         local_data_dir=local_dir,
     )
 
@@ -206,9 +210,68 @@ def test_fetch_filings_for_security_can_enable_local_filing_download(monkeypatch
     assert not (local_dir / "filings" / "19950915" / "0000000000-95-000999.corr01").exists()
 
 
+def test_fetch_filings_for_security_reuses_existing_local_filing_without_redownload(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class CachedFiling(SimpleNamespace):
+        def full_text_submission(self_nonlocal) -> str:
+            captured.setdefault("loaded_accessions", []).append(self_nonlocal.accession_no)
+            return "CACHED 0000000000-24-000002"
+
+    class CachedCompany:
+        def __init__(self, cik: str):
+            self.cik = cik
+
+        def get_filings(self, *, form: list[str]) -> object:
+            assert "10-Q" in form
+            return [
+                CachedFiling(
+                    accession_no="0000000000-24-000002",
+                    form="10-Q",
+                    acceptance_datetime="2024-05-02T10:00:00Z",
+                    filing_date="2024-05-01",
+                    text_url="https://example.test/0000000000-24-000002.nc",
+                )
+            ]
+
+    def fake_use_local_storage(path: str) -> None:
+        captured["use_local_storage"] = path
+
+    def fake_download_file(url: str, *, as_text: bool = False) -> str:
+        captured.setdefault("download_file_calls", []).append({"url": url, "as_text": as_text})
+        return "SHOULD NOT REDOWNLOAD"
+
+    fake_edgar_module = SimpleNamespace(
+        Company=CachedCompany,
+        use_local_storage=fake_use_local_storage,
+    )
+    monkeypatch.setitem(sys.modules, "edgar", fake_edgar_module)
+    monkeypatch.setitem(sys.modules, "edgar.httprequests", SimpleNamespace(download_file=fake_download_file))
+
+    local_dir = tmp_path / "edgar_local"
+    final_path = local_dir / "filings" / "20240501" / "0000000000-24-000002.nc"
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path.write_text("CACHED 0000000000-24-000002", encoding="utf-8")
+
+    envelopes = fetch_filings_for_security(
+        security=SimpleNamespace(cik="0000789019"),
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        filing_storage_mode=EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
+        local_data_dir=local_dir,
+    )
+
+    assert len(envelopes) == 1
+    assert captured["loaded_accessions"] == ["0000000000-24-000002"]
+    assert "download_file_calls" not in captured
+    assert final_path.read_text(encoding="utf-8") == "CACHED 0000000000-24-000002"
+
+
 def test_fetch_filings_for_security_can_write_via_cloud_storage(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
     remote_store: dict[str, str] = {}
+    original_use_local_data = os.environ.get("EDGAR_USE_LOCAL_DATA")
+    original_local_data_dir = os.environ.get("EDGAR_LOCAL_DATA_DIR")
 
     class CloudFiling(SimpleNamespace):
         def full_text_submission(self_nonlocal) -> str:
@@ -265,9 +328,8 @@ def test_fetch_filings_for_security_can_write_via_cloud_storage(monkeypatch, tmp
         security=SimpleNamespace(cik="0000789019"),
         route="issuer",
         start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
-        download_filings_to_local=True,
+        filing_storage_mode=EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
         local_data_dir=local_dir,
-        use_cloud_storage=True,
         cloud_uri="s3://sec-filing/",
         cloud_endpoint_url="http://192.168.1.2:10017",
         cloud_access_id="hubber",
@@ -276,6 +338,7 @@ def test_fetch_filings_for_security_can_write_via_cloud_storage(monkeypatch, tmp
 
     assert len(envelopes) == 1
     assert captured["downloaded_accessions"] == ["0000000000-24-000030"]
+    assert "use_local_storage" not in captured
     assert captured["use_cloud_storage"] == {
         "uri": "s3://sec-filing/",
         "client_kwargs": {
@@ -286,3 +349,133 @@ def test_fetch_filings_for_security_can_write_via_cloud_storage(monkeypatch, tmp
         "verify": False,
     }
     assert remote_store["filings/20240503/0000000000-24-000030.nc"] == "REMOTE 0000000000-24-000030"
+    assert os.environ.get("EDGAR_USE_LOCAL_DATA") == original_use_local_data
+    assert os.environ.get("EDGAR_LOCAL_DATA_DIR") == original_local_data_dir
+
+
+def test_fetch_filings_for_security_repairs_existing_cloud_filing_when_cached_read_fails(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    remote_store: dict[str, str] = {
+        "filings/20240503/0000000000-24-000031.nc": "BROKEN",
+    }
+
+    class BrokenCloudFiling(SimpleNamespace):
+        def full_text_submission(self_nonlocal) -> str:
+            captured.setdefault("full_text_attempts", []).append(self_nonlocal.accession_no)
+            raise RuntimeError("corrupt cached filing")
+
+    class CloudCompany:
+        def __init__(self, cik: str):
+            self.cik = cik
+
+        def get_filings(self, *, form: list[str]) -> object:
+            assert "10-Q" in form
+            return [
+                BrokenCloudFiling(
+                    accession_no="0000000000-24-000031",
+                    form="10-Q",
+                    acceptance_datetime="2024-05-04T10:00:00Z",
+                    filing_date="2024-05-03",
+                    text_url="https://example.test/0000000000-24-000031.nc",
+                )
+            ]
+
+    class FakeCloudPath:
+        def __init__(self, *parts: str):
+            self.key = "/".join(str(part).strip("/") for part in parts if str(part).strip("/"))
+
+        def exists(self) -> bool:
+            return self.key in remote_store
+
+        def write_text(self, data: str, encoding: str = "utf-8") -> int:
+            del encoding
+            remote_store[self.key] = data
+            return len(data)
+
+    def fake_use_cloud_storage(uri: str, *, client_kwargs=None, verify=True) -> None:
+        captured["use_cloud_storage"] = {
+            "uri": uri,
+            "client_kwargs": client_kwargs,
+            "verify": verify,
+        }
+
+    def fake_download_file(url: str, *, as_text: bool = False) -> str:
+        captured.setdefault("download_file_calls", []).append({"url": url, "as_text": as_text})
+        return "REPAIRED 0000000000-24-000031"
+
+    fake_edgar_module = SimpleNamespace(
+        Company=CloudCompany,
+        use_cloud_storage=fake_use_cloud_storage,
+    )
+    monkeypatch.setitem(sys.modules, "edgar", fake_edgar_module)
+    monkeypatch.setitem(sys.modules, "edgar.filesystem", SimpleNamespace(EdgarPath=FakeCloudPath))
+    monkeypatch.setitem(sys.modules, "edgar.httprequests", SimpleNamespace(download_file=fake_download_file))
+
+    envelopes = fetch_filings_for_security(
+        security=SimpleNamespace(cik="0000789019"),
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        filing_storage_mode=EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
+        cloud_uri="s3://sec-filing/",
+        cloud_endpoint_url="http://192.168.1.2:10017",
+        cloud_access_id="hubber",
+        cloud_access_key="by1t7grk",
+    )
+
+    assert len(envelopes) == 1
+    assert captured["full_text_attempts"] == ["0000000000-24-000031"]
+    assert captured["download_file_calls"] == [
+        {"url": "https://example.test/0000000000-24-000031.nc", "as_text": True}
+    ]
+    assert remote_store["filings/20240503/0000000000-24-000031.nc"] == "REPAIRED 0000000000-24-000031"
+
+
+def test_fetch_filings_for_security_skips_download_when_db_marks_completed(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class CompletedFiling(SimpleNamespace):
+        def full_text_submission(self_nonlocal) -> str:
+            captured.setdefault("downloaded_accessions", []).append(self_nonlocal.accession_no)
+            return f"REMOTE {self_nonlocal.accession_no}"
+
+    class CompletedCompany:
+        def __init__(self, cik: str):
+            self.cik = cik
+
+        def get_filings(self, *, form: list[str]) -> object:
+            assert "10-Q" in form
+            return [
+                CompletedFiling(
+                    accession_no="0000000000-24-000040",
+                    form="10-Q",
+                    acceptance_datetime="2024-05-04T10:00:00Z",
+                    filing_date="2024-05-03",
+                )
+            ]
+
+    class FakeRepo:
+        def is_filing_completed(self, *, route: str, accession_no: str) -> bool:
+            captured["completion_lookup"] = {"route": route, "accession_no": accession_no}
+            return True
+
+    def fake_use_local_storage(path: str) -> None:
+        captured["use_local_storage"] = path
+
+    fake_edgar_module = SimpleNamespace(
+        Company=CompletedCompany,
+        use_local_storage=fake_use_local_storage,
+    )
+    monkeypatch.setitem(sys.modules, "edgar", fake_edgar_module)
+
+    envelopes = fetch_filings_for_security(
+        security=SimpleNamespace(cik="0000789019"),
+        route="issuer",
+        start_accepted_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+        filing_storage_mode=EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
+        local_data_dir=tmp_path / "edgar_local",
+        repo=FakeRepo(),
+    )
+
+    assert len(envelopes) == 1
+    assert captured["completion_lookup"] == {"route": "issuer", "accession_no": "0000000000-24-000040"}
+    assert "downloaded_accessions" not in captured

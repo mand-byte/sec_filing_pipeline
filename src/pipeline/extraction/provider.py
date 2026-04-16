@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 import re
-from typing import Any
+from typing import Any, Callable, Iterable
 
 from src.db.repositories import PipelineRepository
-from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
+from src.pipeline.edgar_provider import FilingEnvelope, classify_form_family, fetch_filings_for_security
 from src.pipeline.extraction.bundles import (
     build_holding_13f_bundle,
     build_issuer_8k_vote_bundle,
@@ -118,19 +118,99 @@ def _append_partial_bundle_if_any(
     facts: list[FactInput],
     evidences: list[EvidenceInput],
     bundles: list[FilingBundle],
+    on_bundle: Callable[[FilingBundle], None] | None = None,
 ) -> bool:
     """Persist any text-only facts that were recovered before a structured extraction failure."""
     if not facts:
         return False
 
-    bundles.append(
-        FilingBundle(
-            filing=filing,
-            facts=list(facts),
-            evidences=list(evidences),
-        )
+    partial_bundle = FilingBundle(
+        filing=filing,
+        facts=list(facts),
+        evidences=list(evidences),
     )
+    bundles.append(partial_bundle)
+    if on_bundle is not None:
+        on_bundle(partial_bundle)
     return True
+
+
+def _record_built_bundle(
+    *,
+    bundle: FilingBundle,
+    bundles: list[FilingBundle],
+    on_bundle: Callable[[FilingBundle], None] | None = None,
+) -> None:
+    """Record one newly built bundle and optionally emit it immediately."""
+    bundles.append(bundle)
+    if on_bundle is not None:
+        on_bundle(bundle)
+
+
+def _iter_provider_envelopes(
+    *,
+    security: Any,
+    route: RouteName,
+    start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
+    repo: PipelineRepository,
+    fetch_filings: Callable[..., Iterable[FilingEnvelope]],
+) -> Iterable[FilingEnvelope]:
+    """Fetch provider envelopes with compatibility fallbacks for older fake callables."""
+    base_kwargs = {
+        "security": security,
+        "route": route,
+        "start_accepted_at": start_accepted_at,
+    }
+    optional_kwargs = {"repo": repo}
+    if end_accepted_at is not None:
+        optional_kwargs["end_accepted_at"] = end_accepted_at
+
+    try:
+        envelopes = fetch_filings(**base_kwargs, **optional_kwargs)
+    except TypeError as exc:
+        message = str(exc)
+        if "end_accepted_at" in message:
+            optional_kwargs.pop("end_accepted_at", None)
+            try:
+                envelopes = fetch_filings(**base_kwargs, **optional_kwargs)
+            except TypeError as exc_inner:
+                message = str(exc_inner)
+                if "repo" not in message:
+                    raise
+                optional_kwargs.pop("repo", None)
+                envelopes = fetch_filings(**base_kwargs, **optional_kwargs)
+        elif "repo" in message:
+            optional_kwargs.pop("repo", None)
+            envelopes = fetch_filings(**base_kwargs, **optional_kwargs)
+        else:
+            raise
+
+    if isinstance(envelopes, (list, tuple)):
+        sorted_envelopes = sorted(
+            envelopes,
+            key=lambda env: (_normalize_to_utc(env.accepted_at), env.accession_no),
+        )
+        if end_accepted_at is None:
+            return sorted_envelopes
+        normalized_end = _normalize_to_utc(end_accepted_at)
+        return [
+            envelope
+            for envelope in sorted_envelopes
+            if _normalize_to_utc(envelope.accepted_at) <= normalized_end
+        ]
+
+    if end_accepted_at is None:
+        return envelopes
+
+    normalized_end = _normalize_to_utc(end_accepted_at)
+
+    def _filtered_envelopes() -> Iterable[FilingEnvelope]:
+        for envelope in envelopes:
+            if _normalize_to_utc(envelope.accepted_at) <= normalized_end:
+                yield envelope
+
+    return _filtered_envelopes()
 
 
 def _supports_text_extraction_surface(filing: object) -> bool:
@@ -487,42 +567,17 @@ def build_bundles_from_provider(
     run_id: str,
     fetch_filings=fetch_filings_for_security,
     text_normalizer: SpanNormalizer | None = None,
+    on_bundle: Callable[[FilingBundle], None] | None = None,
 ) -> list[FilingBundle]:
     """Build filing bundles for one security/route using provider-backed filings."""
-    if end_accepted_at is None:
-        envelopes = fetch_filings(
-            security=security,
-            route=route,
-            start_accepted_at=start_accepted_at,
-        )
-    else:
-        try:
-            envelopes = fetch_filings(
-                security=security,
-                route=route,
-                start_accepted_at=start_accepted_at,
-                end_accepted_at=end_accepted_at,
-            )
-        except TypeError as exc:
-            if "end_accepted_at" not in str(exc):
-                raise
-            envelopes = fetch_filings(
-                security=security,
-                route=route,
-                start_accepted_at=start_accepted_at,
-            )
-    if not envelopes:
-        return []
-
-    if end_accepted_at is not None:
-        normalized_end = _normalize_to_utc(end_accepted_at)
-        envelopes = [
-            envelope
-            for envelope in envelopes
-            if _normalize_to_utc(envelope.accepted_at) <= normalized_end
-        ]
-        if not envelopes:
-            return []
+    envelopes = _iter_provider_envelopes(
+        security=security,
+        route=route,
+        start_accepted_at=start_accepted_at,
+        end_accepted_at=end_accepted_at,
+        repo=repo,
+        fetch_filings=fetch_filings,
+    )
 
     numeric_engine = NumericExtractionEngine()
     text_engine = TextExtractionEngine(normalizer=text_normalizer)
@@ -544,10 +599,7 @@ def build_bundles_from_provider(
     )
 
     bundles: list[FilingBundle] = []
-    for envelope in sorted(
-        envelopes,
-        key=lambda env: (_normalize_to_utc(env.accepted_at), env.accession_no),
-    ):
+    for envelope in envelopes:
         filing = FilingRecord(
             accession_no=envelope.accession_no,
             cik=envelope.cik,
@@ -634,6 +686,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             if not owner_bundle.facts:
@@ -653,6 +706,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             owner_facts: list[FactInput] = []
@@ -674,6 +728,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -681,7 +736,7 @@ def build_bundles_from_provider(
                 facts=[*owner_facts, *facts],
                 evidences=[*owner_evidences, *evidences],
             )
-            bundles.append(merged_bundle)
+            _record_built_bundle(bundle=merged_bundle, bundles=bundles, on_bundle=on_bundle)
             continue
 
         if route == "owner" and form_family in {"13D", "13G"}:
@@ -759,6 +814,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             has_owner_rows = any(
@@ -786,6 +842,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             if not has_owner_rows:
@@ -805,6 +862,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -812,7 +870,7 @@ def build_bundles_from_provider(
                 facts=list(facts),
                 evidences=list(evidences),
             )
-            bundles.append(merged_bundle)
+            _record_built_bundle(bundle=merged_bundle, bundles=bundles, on_bundle=on_bundle)
             continue
         if route == "owner" and form_family == "144":
             if _supports_text_extraction_surface(envelope.filing):
@@ -885,6 +943,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             has_sale_rows = any(
@@ -914,6 +973,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             if not has_sale_rows:
@@ -933,6 +993,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -940,7 +1001,7 @@ def build_bundles_from_provider(
                 facts=[*form144_facts, *facts],
                 evidences=[*form144_evidences, *evidences],
             )
-            bundles.append(merged_bundle)
+            _record_built_bundle(bundle=merged_bundle, bundles=bundles, on_bundle=on_bundle)
             continue
 
         if route == "issuer" and form_family == "8-K":
@@ -1061,6 +1122,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             has_position_rows = any(
@@ -1090,6 +1152,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             if not has_position_rows:
@@ -1109,6 +1172,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -1116,7 +1180,7 @@ def build_bundles_from_provider(
                 facts=[*holding_facts, *facts],
                 evidences=[*holding_evidences, *evidences],
             )
-            bundles.append(merged_bundle)
+            _record_built_bundle(bundle=merged_bundle, bundles=bundles, on_bundle=on_bundle)
             continue
 
         if route == "holding" and form_family == "13F-HR":
@@ -1189,6 +1253,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             has_position_rows = any(
@@ -1218,6 +1283,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             if not has_position_rows:
@@ -1237,6 +1303,7 @@ def build_bundles_from_provider(
                     facts=facts,
                     evidences=evidences,
                     bundles=bundles,
+                    on_bundle=on_bundle,
                 )
                 continue
             merged_bundle = FilingBundle(
@@ -1244,7 +1311,7 @@ def build_bundles_from_provider(
                 facts=[*holding_facts, *facts],
                 evidences=[*holding_evidences, *evidences],
             )
-            bundles.append(merged_bundle)
+            _record_built_bundle(bundle=merged_bundle, bundles=bundles, on_bundle=on_bundle)
             continue
 
         filing_numeric_specs = route_numeric_specs
@@ -1501,21 +1568,25 @@ def build_bundles_from_provider(
                 )
                 continue
 
-            bundles.append(
-                FilingBundle(
+            _record_built_bundle(
+                bundle=FilingBundle(
                     filing=filing,
                     facts=[],
                     evidences=[],
-                )
+                ),
+                bundles=bundles,
+                on_bundle=on_bundle,
             )
             continue
 
-        bundles.append(
-            FilingBundle(
+        _record_built_bundle(
+            bundle=FilingBundle(
                 filing=filing,
                 facts=facts,
                 evidences=evidences,
-            )
+            ),
+            bundles=bundles,
+            on_bundle=on_bundle,
         )
 
     return bundles

@@ -30,6 +30,10 @@ class BundleBuildOutcome:
     item_present: bool = False
 
 
+class _AtomicRouteStop(RuntimeError):
+    """Sentinel exception used to stop a route after a hard filing failure."""
+
+
 def _normalize_to_utc(value: datetime) -> datetime:
     """Normalize datetimes to UTC before routing comparisons."""
     if value.tzinfo is None:
@@ -311,135 +315,78 @@ class RouteProcessor:
         configured_end_accepted_at = _as_utc_end_of_day(self.end_date) if self.end_date is not None else None
         start_accepted_at = configured_start_accepted_at if self.ignore_existing_watermarks else (watermark or configured_start_accepted_at)
 
-        bundles = _load_route_filing_bundles(
+        prebuilt_bundles = _load_route_filing_bundles(
             security=security,
             route=route,
             start_accepted_at=start_accepted_at,
             end_accepted_at=configured_end_accepted_at,
         )
-        if not bundles:
+        normalized_start = _normalize_to_utc(start_accepted_at)
+        skipped_before_watermark = 0
+        skipped_ineligible = 0
+        eligible_bundles = 0
+        persisted_bundles = 0
+        failed_bundles = 0
+        last_seen_accepted_at = watermark
+        review_stats = SqlAlchemyReviewStats(self.repo.session)
+
+        def _process_bundle(bundle: FilingBundle) -> bool:
+            nonlocal skipped_before_watermark
+            nonlocal skipped_ineligible
+            nonlocal eligible_bundles
+            nonlocal persisted_bundles
+            nonlocal failed_bundles
+            nonlocal last_seen_accepted_at
+
+            accepted_at = _normalize_to_utc(bundle.filing.accepted_at)
+            if accepted_at <= normalized_start:
+                skipped_before_watermark += 1
+                return True
+            if configured_end_accepted_at is not None and accepted_at > configured_end_accepted_at:
+                return True
+            if not is_filing_eligible(active=active, delisted_utc=delisted_utc, accepted_at=accepted_at):
+                skipped_ineligible += 1
+                return True
+
+            eligible_bundles += 1
             try:
-                bundles = self.provider_bundle_builder(
-                    security=security,
-                    route=route,
-                    start_accepted_at=start_accepted_at,
-                    end_accepted_at=configured_end_accepted_at,
-                    repo=self.repo,
+                self.repo.upsert_filing_attempt(
                     run_id=run_id,
+                    route=route,
+                    accession_no=bundle.filing.accession_no,
+                    cik=cik,
+                    accepted_at=bundle.filing.accepted_at,
+                    status="in_progress",
                 )
-            except Exception as exc:
+                _apply_review_gate_to_bundle(bundle=bundle, route=route, stats=review_stats)
+                self.persistence_service.persist_filing_bundle(
+                    filing=bundle.filing,
+                    route=route,
+                    facts=bundle.facts,
+                    evidences=bundle.evidences,
+                )
+                self.repo.upsert_filing_attempt(
+                    run_id=run_id,
+                    route=route,
+                    accession_no=bundle.filing.accession_no,
+                    cik=cik,
+                    accepted_at=bundle.filing.accepted_at,
+                    status="completed",
+                )
+                persisted_bundles += 1
                 _safe_write_log(
                     self.repo,
                     run_id=run_id,
                     route=route,
                     cik=cik,
-                    stage="extract",
-                    level="ERROR",
-                    message="provider bundle build failed",
-                    error_type=exc.__class__.__name__,
-                    error_detail=_format_exception_detail(exc),
-                )
-                bundles = []
-
-        eligible_bundles: list[FilingBundle] = []
-        normalized_start = _normalize_to_utc(start_accepted_at)
-        skipped_before_watermark = 0
-        skipped_ineligible = 0
-        for bundle in bundles:
-            accepted_at = _normalize_to_utc(bundle.filing.accepted_at)
-            if accepted_at <= normalized_start:
-                skipped_before_watermark += 1
-                continue
-            if configured_end_accepted_at is not None and accepted_at > configured_end_accepted_at:
-                continue
-            if not is_filing_eligible(active=active, delisted_utc=delisted_utc, accepted_at=accepted_at):
-                skipped_ineligible += 1
-                continue
-            eligible_bundles.append(bundle)
-
-        eligible_bundles.sort(key=_bundle_sort_key)
-
-        last_seen_accepted_at = watermark
-        failed_bundles = 0
-        if eligible_bundles:
-            review_stats = SqlAlchemyReviewStats(self.repo.session)
-            processed_bundles: list[FilingBundle] = []
-            for bundle in eligible_bundles:
-                try:
-                    self.repo.upsert_filing_attempt(
-                        run_id=run_id,
-                        route=route,
-                        accession_no=bundle.filing.accession_no,
-                        cik=cik,
-                        accepted_at=bundle.filing.accepted_at,
-                        status="in_progress",
-                    )
-                    _apply_review_gate_to_bundle(bundle=bundle, route=route, stats=review_stats)
-                    self.persistence_service.persist_filing_bundle(
-                        filing=bundle.filing,
-                        route=route,
-                        facts=bundle.facts,
-                        evidences=bundle.evidences,
-                    )
-                    self.repo.upsert_filing_attempt(
-                        run_id=run_id,
-                        route=route,
-                        accession_no=bundle.filing.accession_no,
-                        cik=cik,
-                        accepted_at=bundle.filing.accepted_at,
-                        status="completed",
-                    )
-                    processed_bundles.append(bundle)
-                    _safe_write_log(
-                        self.repo,
-                        run_id=run_id,
-                        route=route,
-                        cik=cik,
-                        accession_no=bundle.filing.accession_no,
-                        stage="persist",
-                        level="INFO",
-                        message="filing persisted",
-                    )
-                except Exception as exc:
-                    failed_bundles += 1
-                    try:
-                        self.repo.session.rollback()
-                    except Exception:
-                        pass
-                    try:
-                        self.repo.upsert_filing_attempt(
-                            run_id=run_id,
-                            route=route,
-                            accession_no=bundle.filing.accession_no,
-                            cik=cik,
-                            accepted_at=bundle.filing.accepted_at,
-                            status="failed",
-                            error_type=exc.__class__.__name__,
-                            error_detail=_format_exception_detail(exc),
-                        )
-                    except Exception:
-                        pass
-                    _safe_write_log(
-                        self.repo,
-                        run_id=run_id,
-                        route=route,
-                        cik=cik,
-                        accession_no=bundle.filing.accession_no,
-                        stage="persist",
-                        level="ERROR",
-                        message="filing persistence failed",
-                        error_type=exc.__class__.__name__,
-                        error_detail=_format_exception_detail(exc),
-                    )
-
-            if processed_bundles:
-                max_accepted_at = max(
-                    (_normalize_to_utc(bundle.filing.accepted_at) for bundle in processed_bundles),
-                    key=lambda value: value,
+                    accession_no=bundle.filing.accession_no,
+                    stage="persist",
+                    level="INFO",
+                    message="filing persisted",
                 )
                 try:
-                    self.repo.upsert_route_watermark(cik=cik, route=route, accepted_at=max_accepted_at)
-                    last_seen_accepted_at = max_accepted_at
+                    self.repo.upsert_route_watermark(cik=cik, route=route, accepted_at=accepted_at)
+                    last_seen_accepted_at = accepted_at
                 except Exception as exc:
                     _safe_write_log(
                         self.repo,
@@ -452,6 +399,120 @@ class RouteProcessor:
                         error_type=exc.__class__.__name__,
                         error_detail=_format_exception_detail(exc),
                     )
+                return True
+            except Exception as exc:
+                failed_bundles += 1
+                try:
+                    self.repo.session.rollback()
+                except Exception:
+                    pass
+                try:
+                    self.repo.upsert_filing_attempt(
+                        run_id=run_id,
+                        route=route,
+                        accession_no=bundle.filing.accession_no,
+                        cik=cik,
+                        accepted_at=bundle.filing.accepted_at,
+                        status="failed",
+                        error_type=exc.__class__.__name__,
+                        error_detail=_format_exception_detail(exc),
+                    )
+                except Exception:
+                    pass
+                _safe_write_log(
+                    self.repo,
+                    run_id=run_id,
+                    route=route,
+                    cik=cik,
+                    accession_no=bundle.filing.accession_no,
+                    stage="persist",
+                    level="ERROR",
+                    message="filing persistence failed",
+                    error_type=exc.__class__.__name__,
+                    error_detail=_format_exception_detail(exc),
+                )
+                return False
+
+        if prebuilt_bundles:
+            for bundle in sorted(prebuilt_bundles, key=_bundle_sort_key):
+                if not _process_bundle(bundle):
+                    break
+        else:
+            streamed_bundle_count = 0
+
+            def _stream_bundle(bundle: FilingBundle) -> None:
+                nonlocal streamed_bundle_count
+                streamed_bundle_count += 1
+                if not _process_bundle(bundle):
+                    raise _AtomicRouteStop()
+
+            try:
+                streamed_result = self.provider_bundle_builder(
+                    security=security,
+                    route=route,
+                    start_accepted_at=start_accepted_at,
+                    end_accepted_at=configured_end_accepted_at,
+                    repo=self.repo,
+                    run_id=run_id,
+                    on_bundle=_stream_bundle,
+                )
+                if streamed_bundle_count == 0 and isinstance(streamed_result, list):
+                    for bundle in sorted(streamed_result, key=_bundle_sort_key):
+                        if not _process_bundle(bundle):
+                            break
+            except TypeError as exc:
+                if "on_bundle" not in str(exc):
+                    _safe_write_log(
+                        self.repo,
+                        run_id=run_id,
+                        route=route,
+                        cik=cik,
+                        stage="extract",
+                        level="ERROR",
+                        message="provider bundle build failed",
+                        error_type=exc.__class__.__name__,
+                        error_detail=_format_exception_detail(exc),
+                    )
+                else:
+                    try:
+                        fallback_bundles = self.provider_bundle_builder(
+                            security=security,
+                            route=route,
+                            start_accepted_at=start_accepted_at,
+                            end_accepted_at=configured_end_accepted_at,
+                            repo=self.repo,
+                            run_id=run_id,
+                        )
+                    except Exception as inner_exc:
+                        _safe_write_log(
+                            self.repo,
+                            run_id=run_id,
+                            route=route,
+                            cik=cik,
+                            stage="extract",
+                            level="ERROR",
+                            message="provider bundle build failed",
+                            error_type=inner_exc.__class__.__name__,
+                            error_detail=_format_exception_detail(inner_exc),
+                        )
+                        fallback_bundles = []
+                    for bundle in sorted(fallback_bundles, key=_bundle_sort_key):
+                        if not _process_bundle(bundle):
+                            break
+            except _AtomicRouteStop:
+                pass
+            except Exception as exc:
+                _safe_write_log(
+                    self.repo,
+                    run_id=run_id,
+                    route=route,
+                    cik=cik,
+                    stage="extract",
+                    level="ERROR",
+                    message="provider bundle build failed",
+                    error_type=exc.__class__.__name__,
+                    error_detail=_format_exception_detail(exc),
+                )
 
         _safe_write_log(
             self.repo,
@@ -461,8 +522,8 @@ class RouteProcessor:
             stage="route",
             level="INFO",
             message=_route_summary_message(
-                eligible_count=len(eligible_bundles),
-                persisted_count=(len(processed_bundles) if eligible_bundles else 0),
+                eligible_count=eligible_bundles,
+                persisted_count=persisted_bundles,
                 failed_count=failed_bundles,
                 skipped_before_watermark=skipped_before_watermark,
                 skipped_ineligible=skipped_ineligible,

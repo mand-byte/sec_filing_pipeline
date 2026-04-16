@@ -4,8 +4,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from src.config import (
+    EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
+)
 from src.pipeline.extraction.registry import all_numeric_field_specs
 from src.pipeline.extraction.text_registry import all_text_field_specs
 
@@ -146,29 +151,8 @@ def _filing_storage_day(*, filed_at: datetime | None, accepted_at: datetime) -> 
     return _normalize_to_utc(effective_filing_date).strftime("%Y%m%d")
 
 
-def _local_filing_exists(*, local_data_dir: Path, filing_day: str, accession_no: str) -> bool:
-    """Check whether a filing artifact already exists in local EDGAR storage."""
-    final_dir = local_data_dir / "filings" / filing_day
-    if (final_dir / f"{accession_no}.nc").exists():
-        return True
-    if (final_dir / f"{accession_no}.nc.gz").exists():
-        return True
-    return False
-
-
-def _filing_exists_via_edgar_storage(*, edgar_module: object, filing_day: str, accession_no: str) -> bool:
-    """Check whether a filing artifact already exists via EdgarPath storage."""
-    try:
-        from edgar.filesystem import EdgarPath
-    except Exception:
-        return False
-    return bool(EdgarPath("filings", filing_day, f"{accession_no}.nc").exists()) or bool(
-        EdgarPath("filings", filing_day, f"{accession_no}.nc.gz").exists()
-    )
-
-
-def _download_full_submission_text(filing: object) -> str | None:
-    """Download or read the full submission text for one filing object."""
+def _load_full_submission_text(filing: object) -> tuple[str | None, bool]:
+    """Read the full submission text, falling back to a fresh download when cached access fails."""
     full_text_method = getattr(filing, "full_text_submission", None)
     if callable(full_text_method):
         try:
@@ -176,54 +160,49 @@ def _download_full_submission_text(filing: object) -> str | None:
         except Exception:
             content = None
         if isinstance(content, str) and content:
-            return content
+            return content, False
 
     text_url = getattr(filing, "text_url", None)
     if not isinstance(text_url, str) or not text_url:
-        return None
+        return None, False
 
     try:
         from edgar.httprequests import download_file
 
         downloaded = download_file(text_url, as_text=True)
     except Exception:
-        return None
+        return None, False
 
     if isinstance(downloaded, str) and downloaded:
-        return downloaded
-    return None
+        return downloaded, True
+    return None, False
 
 
-def _store_filtered_filings_locally(
+def _store_filtered_filings(
     *,
-    edgar_module: object,
     envelopes: list[FilingEnvelope],
     local_data_dir: Path,
+    route: str | None = None,
+    repo: object | None = None,
     use_cloud_storage: bool = False,
 ) -> None:
-    """Persist newly fetched filing text into local or cloud-backed EDGAR storage."""
+    """Persist newly fetched filing text into the configured local or cloud EDGAR storage."""
     for envelope in envelopes:
+        if route is not None and repo is not None:
+            is_completed = getattr(repo, "is_filing_completed", None)
+            if callable(is_completed):
+                try:
+                    if is_completed(route=route, accession_no=envelope.accession_no):
+                        continue
+                except Exception:
+                    pass
+
         filing_day = _filing_storage_day(
             filed_at=envelope.filed_at,
             accepted_at=envelope.accepted_at,
         )
-        exists = (
-            _filing_exists_via_edgar_storage(
-                edgar_module=edgar_module,
-                filing_day=filing_day,
-                accession_no=envelope.accession_no,
-            )
-            if use_cloud_storage
-            else _local_filing_exists(
-                local_data_dir=local_data_dir,
-                filing_day=filing_day,
-                accession_no=envelope.accession_no,
-            )
-        )
-        if exists:
-            continue
 
-        content = _download_full_submission_text(envelope.filing)
+        content, downloaded_via_fallback = _load_full_submission_text(envelope.filing)
         if not isinstance(content, str) or not content:
             continue
 
@@ -233,85 +212,77 @@ def _store_filtered_filings_locally(
             except Exception:
                 continue
             final_path = EdgarPath("filings", filing_day, f"{envelope.accession_no}.nc")
-            if final_path.exists():
+            if final_path.exists() and not downloaded_via_fallback:
                 continue
             final_path.write_text(content, encoding="utf-8")
         else:
             final_dir = local_data_dir / "filings" / filing_day
             final_dir.mkdir(parents=True, exist_ok=True)
             final_path = final_dir / f"{envelope.accession_no}.nc"
-            if final_path.exists():
+            if final_path.exists() and not downloaded_via_fallback:
                 continue
             final_path.write_text(content, encoding="utf-8")
 
 
-def fetch_filings_for_security(
+def _configure_edgar_storage(
     *,
-    security: Any,
-    route: str,
-    start_accepted_at: datetime,
-    end_accepted_at: datetime | None = None,
-    identity: str | None = None,
-    download_filings_to_local: bool = False,
-    local_data_dir: str | Path | None = None,
-    use_cloud_storage: bool = False,
-    cloud_uri: str | None = None,
-    cloud_endpoint_url: str | None = None,
-    cloud_access_id: str | None = None,
-    cloud_access_key: str | None = None,
-) -> list[FilingEnvelope]:
-    """Fetch and normalize filings for one security and route from edgartools."""
-    forms = _route_forms(route)
-    if not forms:
-        return []
+    edgar_module: object,
+    filing_storage_mode: int,
+    local_data_dir: str | Path | None,
+    cloud_uri: str | None,
+    cloud_endpoint_url: str | None,
+    cloud_access_id: str | None,
+    cloud_access_key: str | None,
+) -> tuple[bool, bool, Path]:
+    """Configure edgartools storage backends and report effective persistence settings."""
+    should_persist_filings = filing_storage_mode != EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED
+    persist_to_cloud = filing_storage_mode == EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD
+    resolved_local_data_dir = Path(local_data_dir or Path.home() / ".edgar").expanduser().resolve()
 
-    cik = getattr(security, "cik", None)
-    if cik is None:
-        return []
+    if not should_persist_filings:
+        return False, False, resolved_local_data_dir
 
-    try:
-        import edgar
-    except Exception:
-        return []
-    Company = getattr(edgar, "Company", None)
-    if Company is None:
-        return []
-    set_identity = getattr(edgar, "set_identity", None)
+    if persist_to_cloud:
+        if not isinstance(cloud_uri, str) or not cloud_uri.strip():
+            raise RuntimeError("cloud filing persistence requires cloud_uri")
+        use_cloud_storage_fn = getattr(edgar_module, "use_cloud_storage", None)
+        if callable(use_cloud_storage_fn):
+            client_kwargs: dict[str, str] = {}
+            if isinstance(cloud_endpoint_url, str) and cloud_endpoint_url.strip():
+                client_kwargs["endpoint_url"] = cloud_endpoint_url.strip()
+            if isinstance(cloud_access_id, str) and cloud_access_id.strip():
+                client_kwargs["aws_access_key_id"] = cloud_access_id.strip()
+            if isinstance(cloud_access_key, str) and cloud_access_key.strip():
+                client_kwargs["aws_secret_access_key"] = cloud_access_key.strip()
+            use_cloud_storage_fn(
+                cloud_uri.strip(),
+                client_kwargs=client_kwargs or None,
+                verify=False,
+            )
+        return True, True, resolved_local_data_dir
 
-    effective_identity = (identity or os.environ.get("EDGAR_IDENTITY") or "").strip()
-    if effective_identity and callable(set_identity):
-        set_identity(effective_identity)
-
-    if download_filings_to_local:
-        resolved_local_data_dir = Path(local_data_dir or Path.home() / ".edgar").expanduser().resolve()
+    if filing_storage_mode == EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL:
         resolved_local_data_dir.mkdir(parents=True, exist_ok=True)
         os.environ["EDGAR_USE_LOCAL_DATA"] = "1"
         os.environ["EDGAR_LOCAL_DATA_DIR"] = str(resolved_local_data_dir)
-        use_local_storage = getattr(edgar, "use_local_storage", None)
+        use_local_storage = getattr(edgar_module, "use_local_storage", None)
         if callable(use_local_storage):
             use_local_storage(str(resolved_local_data_dir))
-        if use_cloud_storage:
-            use_cloud_storage_fn = getattr(edgar, "use_cloud_storage", None)
-            if callable(use_cloud_storage_fn) and isinstance(cloud_uri, str) and cloud_uri.strip():
-                client_kwargs: dict[str, str] = {}
-                if isinstance(cloud_endpoint_url, str) and cloud_endpoint_url.strip():
-                    client_kwargs["endpoint_url"] = cloud_endpoint_url.strip()
-                if isinstance(cloud_access_id, str) and cloud_access_id.strip():
-                    client_kwargs["aws_access_key_id"] = cloud_access_id.strip()
-                if isinstance(cloud_access_key, str) and cloud_access_key.strip():
-                    client_kwargs["aws_secret_access_key"] = cloud_access_key.strip()
-                use_cloud_storage_fn(
-                    cloud_uri.strip(),
-                    client_kwargs=client_kwargs or None,
-                    verify=False,
-                )
+        return True, False, resolved_local_data_dir
 
-    try:
-        company = Company(str(cik))
-        filings = company.get_filings(form=list(forms))
-    except Exception as exc:
-        raise RuntimeError(f"edgar fetch failed for cik={cik} route={route}: {exc}") from exc
+    raise RuntimeError(f"unsupported filing_storage_mode={filing_storage_mode}")
 
+
+def _collect_filing_envelopes(
+    *,
+    company: object,
+    cik: object,
+    forms: tuple[str, ...],
+    start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
+) -> list[FilingEnvelope]:
+    """Fetch and normalize filing envelopes for one company/route window."""
+    filings = company.get_filings(form=list(forms))
     start_utc = _normalize_to_utc(start_accepted_at)
     end_utc = _normalize_to_utc(end_accepted_at) if end_accepted_at is not None else None
     envelopes: list[FilingEnvelope] = []
@@ -372,16 +343,112 @@ def fetch_filings_for_security(
         )
 
     envelopes.sort(key=lambda envelope: envelope.accepted_at)
-
-    if download_filings_to_local and envelopes:
-        try:
-            _store_filtered_filings_locally(
-                edgar_module=edgar,
-                envelopes=envelopes,
-                local_data_dir=resolved_local_data_dir,
-                use_cloud_storage=use_cloud_storage,
-            )
-        except Exception:
-            pass
-
     return envelopes
+
+
+def iter_filings_for_security(
+    *,
+    security: Any,
+    route: str,
+    start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
+    identity: str | None = None,
+    filing_storage_mode: int = EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+    local_data_dir: str | Path | None = None,
+    repo: object | None = None,
+    cloud_uri: str | None = None,
+    cloud_endpoint_url: str | None = None,
+    cloud_access_id: str | None = None,
+    cloud_access_key: str | None = None,
+) -> Iterator[FilingEnvelope]:
+    """Yield filing envelopes in accepted-time order, preparing durable storage per filing."""
+    forms = _route_forms(route)
+    if not forms:
+        return
+
+    cik = getattr(security, "cik", None)
+    if cik is None:
+        return
+
+    try:
+        import edgar
+    except Exception:
+        return
+    Company = getattr(edgar, "Company", None)
+    if Company is None:
+        return
+    set_identity = getattr(edgar, "set_identity", None)
+
+    effective_identity = (identity or os.environ.get("EDGAR_IDENTITY") or "").strip()
+    if effective_identity and callable(set_identity):
+        set_identity(effective_identity)
+
+    should_persist_filings, persist_to_cloud, resolved_local_data_dir = _configure_edgar_storage(
+        edgar_module=edgar,
+        filing_storage_mode=filing_storage_mode,
+        local_data_dir=local_data_dir,
+        cloud_uri=cloud_uri,
+        cloud_endpoint_url=cloud_endpoint_url,
+        cloud_access_id=cloud_access_id,
+        cloud_access_key=cloud_access_key,
+    )
+
+    try:
+        company = Company(str(cik))
+        envelopes = _collect_filing_envelopes(
+            company=company,
+            cik=cik,
+            forms=forms,
+            start_accepted_at=start_accepted_at,
+            end_accepted_at=end_accepted_at,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"edgar fetch failed for cik={cik} route={route}: {exc}") from exc
+
+    for envelope in envelopes:
+        if should_persist_filings:
+            try:
+                _store_filtered_filings(
+                    envelopes=[envelope],
+                    local_data_dir=resolved_local_data_dir,
+                    route=route,
+                    repo=repo,
+                    use_cloud_storage=persist_to_cloud,
+                )
+            except Exception:
+                pass
+        yield envelope
+
+
+def fetch_filings_for_security(
+    *,
+    security: Any,
+    route: str,
+    start_accepted_at: datetime,
+    end_accepted_at: datetime | None = None,
+    identity: str | None = None,
+    filing_storage_mode: int = EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+    local_data_dir: str | Path | None = None,
+    repo: object | None = None,
+    cloud_uri: str | None = None,
+    cloud_endpoint_url: str | None = None,
+    cloud_access_id: str | None = None,
+    cloud_access_key: str | None = None,
+) -> list[FilingEnvelope]:
+    """Fetch and normalize filings for one security and route from edgartools."""
+    return list(
+        iter_filings_for_security(
+            security=security,
+            route=route,
+            start_accepted_at=start_accepted_at,
+            end_accepted_at=end_accepted_at,
+            identity=identity,
+            filing_storage_mode=filing_storage_mode,
+            local_data_dir=local_data_dir,
+            repo=repo,
+            cloud_uri=cloud_uri,
+            cloud_endpoint_url=cloud_endpoint_url,
+            cloud_access_id=cloud_access_id,
+            cloud_access_key=cloud_access_key,
+        )
+    )

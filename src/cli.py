@@ -3,15 +3,20 @@ from datetime import date, datetime, timezone
 from functools import partial
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import typer
 
-from src.config import Settings
+from src.config import (
+    EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+    EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL,
+    Settings,
+)
 from src.db.rollout import apply_rollout_assets, describe_rollout_assets, dry_run_rollout_result, init_database_schema
 from src.db.repositories import PipelineRepository
 from src.db.session import build_engine, get_session_factory
-from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security
+from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security, iter_filings_for_security
 from src.pipeline.extraction._config import tier2_path
 from src.pipeline.extraction.provider import build_bundles_from_provider
 from src.pipeline.extraction.text_normalization import normalizer_from_settings
@@ -129,22 +134,27 @@ def _build_bundles_from_provider(
     repo: PipelineRepository,
     run_id: str,
     settings: Settings | None = None,
+    on_bundle: Callable[[FilingBundle], None] | None = None,
 ) -> list[FilingBundle]:
     """Apply settings-backed EDGAR fetch options before bundle extraction."""
-    fetch_callable = fetch_filings_for_security
+    fetch_callable = iter_filings_for_security if on_bundle is not None else fetch_filings_for_security
     if settings is not None:
         fetch_kwargs: dict[str, object] = {}
         edgar_identity = getattr(settings, "edgar_identity", None)
         if isinstance(edgar_identity, str) and edgar_identity.strip():
             fetch_kwargs["identity"] = edgar_identity
-        download_filings_to_local = bool(getattr(settings, "edgar_download_filings", False))
-        if download_filings_to_local:
-            fetch_kwargs["download_filings_to_local"] = True
+        filing_storage_mode = int(
+            getattr(settings, "edgar_download_filings_flag", EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED)
+        )
+        if filing_storage_mode != EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED:
+            fetch_kwargs["filing_storage_mode"] = filing_storage_mode
             edgar_local_data_dir = getattr(settings, "edgar_local_data_dir", None)
-            if isinstance(edgar_local_data_dir, Path):
+            if (
+                filing_storage_mode == EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL
+                and isinstance(edgar_local_data_dir, Path)
+            ):
                 fetch_kwargs["local_data_dir"] = edgar_local_data_dir
-            if bool(getattr(settings, "edgar_use_cloud_storage", False)):
-                fetch_kwargs["use_cloud_storage"] = True
+            if filing_storage_mode == EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD:
                 edgar_cloud_uri = getattr(settings, "edgar_cloud_uri", None)
                 if isinstance(edgar_cloud_uri, str) and edgar_cloud_uri.strip():
                     fetch_kwargs["cloud_uri"] = edgar_cloud_uri
@@ -168,6 +178,7 @@ def _build_bundles_from_provider(
         run_id=run_id,
         fetch_filings=fetch_callable,
         text_normalizer=normalizer_from_settings(settings) if settings is not None else None,
+        on_bundle=on_bundle,
     )
 
 

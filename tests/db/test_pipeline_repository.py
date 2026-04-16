@@ -99,6 +99,32 @@ def test_upsert_filing_attempt_preserves_started_at_and_bumps_updated_at() -> No
     assert updated.status == "completed"
 
 
+def test_is_filing_completed_uses_latest_attempt_status() -> None:
+    session = _session()
+    repo = PipelineRepository(session)
+
+    repo.upsert_filing_attempt(
+        run_id="run-001",
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        cik="0000789019",
+        accepted_at=None,
+        status="completed",
+    )
+    repo.upsert_filing_attempt(
+        run_id="run-002",
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        cik="0000789019",
+        accepted_at=None,
+        status="failed",
+        error_type="RuntimeError",
+        error_detail="boom",
+    )
+
+    assert repo.is_filing_completed(route="issuer", accession_no="0000000000-24-000001") is False
+
+
 def test_upsert_route_watermark_only_moves_forward() -> None:
     session = _session()
     repo = PipelineRepository(session)

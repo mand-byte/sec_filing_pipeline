@@ -8,6 +8,11 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED = 0
+EDGAR_DOWNLOAD_FILINGS_FLAG_LOCAL = 1
+EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD = 2
+
+
 class Settings(BaseSettings):
     pg_dsn: str = Field(alias="PG_DSN")
     ch_dsn: str | None = Field(default=None, alias="CH_DSN")
@@ -34,9 +39,13 @@ class Settings(BaseSettings):
     scheduler_interval_minutes: int = Field(default=60, alias="SCHEDULER_INTERVAL_MINUTES", gt=0)
     offline_artifacts_dir: Path = Field(default=Path("artifacts"), alias="OFFLINE_ARTIFACTS_DIR")
     write_offline_artifacts: bool = Field(default=True, alias="WRITE_OFFLINE_ARTIFACTS")
-    edgar_download_filings: bool = Field(default=False, alias="EDGAR_DOWNLOAD_FILINGS")
+    edgar_download_filings_flag: int = Field(
+        default=EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+        alias="EDGAR_DOWNLOAD_FILINGS_FLAG",
+        ge=EDGAR_DOWNLOAD_FILINGS_FLAG_DISABLED,
+        le=EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD,
+    )
     edgar_local_data_dir: Path = Field(default=Path.home() / ".edgar", alias="EDGAR_LOCAL_DATA_DIR")
-    edgar_use_cloud_storage: bool = Field(default=False, alias="EDGAR_USE_CLOUD_STORAGE")
     edgar_cloud_uri: str | None = Field(default=None, alias="EDGAR_CLOUD_URI")
     edgar_cloud_endpoint_url: str | None = Field(default=None, alias="EDGAR_CLOUD_ENDPOINT_URL")
     edgar_cloud_access_id: str | None = Field(default=None, alias="EDGAR_CLOUD_ACCESS_ID")
@@ -146,11 +155,9 @@ class Settings(BaseSettings):
         if table_name is not None:
             values["SEC_UNIVERSE_TABLE"] = table_name
 
-        explicit_download_filings = cls._clean_text(os.environ.get("EDGAR_DOWNLOAD_FILINGS"))
-        configured_download_filings = cls._clean_text(values.get("EDGAR_DOWNLOAD_FILINGS"))
-        legacy_download_filings_to_local = cls._clean_text(os.environ.get("EDGAR_DOWNLOAD_FILINGS_TO_LOCAL")) or cls._clean_text(values.get("EDGAR_DOWNLOAD_FILINGS_TO_LOCAL"))
-        if configured_download_filings is None and (explicit_download_filings is not None or legacy_download_filings_to_local is not None):
-            values["EDGAR_DOWNLOAD_FILINGS"] = explicit_download_filings or legacy_download_filings_to_local
+        configured_download_filings_flag = cls._clean_text(values.get("EDGAR_DOWNLOAD_FILINGS_FLAG"))
+        if configured_download_filings_flag is not None:
+            values["EDGAR_DOWNLOAD_FILINGS_FLAG"] = configured_download_filings_flag
 
         cloud_uri = cls._clean_text(values.get("EDGAR_CLOUD_URI"))
         if cloud_uri is not None:
@@ -195,3 +202,13 @@ class Settings(BaseSettings):
                 values.setdefault("TEXT_NORMALIZER_TIMEOUT_SECONDS", legacy_llm_timeout_seconds)
 
         return values
+
+    @model_validator(mode="after")
+    def _validate_edgar_filing_storage_mode(self) -> "Settings":
+        """Validate that cloud persistence mode has the required cloud destination."""
+        if (
+            self.edgar_download_filings_flag == EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD
+            and self.edgar_cloud_uri is None
+        ):
+            raise ValueError("EDGAR_CLOUD_URI is required when EDGAR_DOWNLOAD_FILINGS_FLAG=2")
+        return self

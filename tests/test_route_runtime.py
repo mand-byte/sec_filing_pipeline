@@ -191,6 +191,120 @@ def test_route_processor_continues_after_bundle_failure_and_advances_watermark_b
     assert "persist exploded" in str(failed_attempt["error_detail"])
 
 
+def test_route_processor_streams_provider_bundles_atomically_when_builder_supports_on_bundle() -> None:
+    first_accepted_at = datetime(2024, 5, 1, tzinfo=timezone.utc)
+    second_accepted_at = datetime(2024, 5, 2, tzinfo=timezone.utc)
+    bundles = [
+        FilingBundle(filing=_filing("0000000000-24-000101", first_accepted_at)),
+        FilingBundle(filing=_filing("0000000000-24-000102", second_accepted_at)),
+    ]
+    events: list[str] = []
+
+    class RecordingPersistenceService(FakePersistenceService):
+        def persist_filing_bundle(self, *, filing: FilingRecord, route: str, facts: list[object], evidences: list[object]) -> None:
+            events.append(f"persist:{filing.accession_no}")
+            super().persist_filing_bundle(filing=filing, route=route, facts=facts, evidences=evidences)
+
+    def streaming_builder(**kwargs):
+        on_bundle = kwargs["on_bundle"]
+        for bundle in bundles:
+            events.append(f"build:{bundle.filing.accession_no}")
+            on_bundle(bundle)
+        return []
+
+    repo = FakeRepo()
+    persistence_service = RecordingPersistenceService()
+    processor = RouteProcessor(
+        repo=repo,
+        persistence_service=persistence_service,
+        start_date=date(2024, 1, 1),
+        provider_bundle_builder=streaming_builder,
+    )
+
+    processor.run(
+        security=SimpleNamespace(
+            cik="0000789019",
+            active=True,
+            composite_figi="FIGI1",
+            delisted_utc=None,
+        ),
+        route="owner",
+        run_id="run-stream-001",
+    )
+
+    assert events == [
+        "build:0000000000-24-000101",
+        "persist:0000000000-24-000101",
+        "build:0000000000-24-000102",
+        "persist:0000000000-24-000102",
+    ]
+    assert persistence_service.persisted_accessions == [
+        "0000000000-24-000101",
+        "0000000000-24-000102",
+    ]
+    assert repo.upserted_watermarks == [
+        ("0000789019", "owner", first_accepted_at),
+        ("0000789019", "owner", second_accepted_at),
+    ]
+
+
+def test_route_processor_stops_atomic_stream_after_first_failure() -> None:
+    first_accepted_at = datetime(2024, 5, 1, tzinfo=timezone.utc)
+    second_accepted_at = datetime(2024, 5, 2, tzinfo=timezone.utc)
+    third_accepted_at = datetime(2024, 5, 3, tzinfo=timezone.utc)
+    bundles = [
+        FilingBundle(filing=_filing("0000000000-24-000201", first_accepted_at)),
+        FilingBundle(filing=_filing("0000000000-24-000202", second_accepted_at)),
+        FilingBundle(filing=_filing("0000000000-24-000203", third_accepted_at)),
+    ]
+    events: list[str] = []
+
+    def streaming_builder(**kwargs):
+        on_bundle = kwargs["on_bundle"]
+        for bundle in bundles:
+            events.append(f"build:{bundle.filing.accession_no}")
+            on_bundle(bundle)
+        return []
+
+    repo = FakeRepo()
+    persistence_service = FakePersistenceService(failing_accession_no="0000000000-24-000202")
+    processor = RouteProcessor(
+        repo=repo,
+        persistence_service=persistence_service,
+        start_date=date(2024, 1, 1),
+        provider_bundle_builder=streaming_builder,
+    )
+
+    processor.run(
+        security=SimpleNamespace(
+            cik="0000789019",
+            active=True,
+            composite_figi="FIGI1",
+            delisted_utc=None,
+        ),
+        route="owner",
+        run_id="run-stream-002",
+    )
+
+    assert events == [
+        "build:0000000000-24-000201",
+        "build:0000000000-24-000202",
+    ]
+    assert persistence_service.persisted_accessions == ["0000000000-24-000201"]
+    assert repo.upserted_watermarks == [("0000789019", "owner", first_accepted_at)]
+    assert [log["message"] for log in repo.logs] == [
+        "filing persisted",
+        "filing persistence failed",
+        "route processed: eligible=2 persisted=1 failed=1 skipped_before_watermark=0 skipped_ineligible=0",
+    ]
+    assert [attempt["accession_no"] for attempt in repo.filing_attempts] == [
+        "0000000000-24-000201",
+        "0000000000-24-000201",
+        "0000000000-24-000202",
+        "0000000000-24-000202",
+    ]
+
+
 def test_route_processor_marks_delisted_route_completion_with_latest_success() -> None:
     accepted_at = datetime(2024, 5, 3, tzinfo=timezone.utc)
     delisted_utc = datetime(2024, 5, 4, tzinfo=timezone.utc)
