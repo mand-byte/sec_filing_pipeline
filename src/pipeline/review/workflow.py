@@ -10,8 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db.models import (
-    ExtractedFact,
-    ExtractionEvidence,
     FilingDocument,
     GoldenCase,
     GoldenEvalRun,
@@ -23,6 +21,7 @@ from src.db.models import (
 )
 from src.pipeline.review.error_codes import normalize_review_error_code
 from src.pipeline.extraction.subject_keys import subject_type_for_key
+from src.pipeline.result_store import clear_parsed_value, load_parsed_value, update_parsed_value
 
 
 REVIEW_DECISIONS = {
@@ -180,17 +179,13 @@ class ReviewWorkflowService:
         filing = self.session.scalar(
             select(FilingDocument).where(FilingDocument.accession_no == task.accession_no)
         )
-        fact = self.session.scalar(
-            select(ExtractedFact).where(
-                ExtractedFact.accession_no == task.accession_no,
-                ExtractedFact.route == task.route,
-                ExtractedFact.field_name == task.field_name,
-                ExtractedFact.subject_key == task.subject_key,
-            )
+        parsed = load_parsed_value(
+            session=self.session,
+            accession_no=task.accession_no,
+            route=task.route,
+            field_name=task.field_name,
+            subject_key=task.subject_key,
         )
-        evidence = None
-        if task.primary_evidence_id is not None:
-            evidence = self.session.get(ExtractionEvidence, task.primary_evidence_id)
 
         filing_payload = None
         if filing is not None:
@@ -207,35 +202,18 @@ class ReviewWorkflowService:
             }
 
         fact_payload = None
-        if fact is not None:
+        if parsed is not None:
             fact_payload = {
-                "id": fact.id,
-                "value_numeric": fact.value_numeric,
-                "value_text": fact.value_text,
-                "value_json": fact.value_json,
-                "value_unit": fact.value_unit,
-                "confidence": fact.confidence,
+                "value_numeric": parsed.value_numeric,
+                "value_text": parsed.value_text,
+                "value_json": parsed.value_json,
+                "value_unit": parsed.value_unit,
+                "confidence": parsed.confidence,
             }
 
         evidence_payload = None
-        if evidence is not None:
-            evidence_payload = {
-                "id": evidence.id,
-                "locator_kind": evidence.locator_kind,
-                "source_section": evidence.source_section,
-                "source_item_no": evidence.source_item_no,
-                "source_xpath": evidence.source_xpath,
-                "xbrl_concept": evidence.xbrl_concept,
-                "source_span": evidence.source_span,
-                "source_locator_json": evidence.source_locator_json,
-                "source_heading_path_json": evidence.source_heading_path_json,
-                "source_block_offsets_json": evidence.source_block_offsets_json,
-                "adequacy_signals_json": evidence.adequacy_signals_json,
-                "retry_history_json": evidence.retry_history_json,
-                "selection_trace_json": evidence.selection_trace_json,
-                "raw_value": evidence.raw_value,
-                "normalized_value": evidence.normalized_value,
-            }
+        if parsed is not None and parsed.evidence_payload is not None:
+            evidence_payload = dict(parsed.evidence_payload)
 
         return ReviewTaskDetail(
             task=_task_summary(task),
@@ -281,40 +259,45 @@ class ReviewWorkflowService:
         if normalized_decision != "accept" and normalized_error_code is None:
             raise ReviewWorkflowError("non-accept decisions require --error-code")
         corrected_payload = _normalize_corrected_payload(corrected_json)
-        fact = self.session.scalar(
-            select(ExtractedFact).where(
-                ExtractedFact.accession_no == task.accession_no,
-                ExtractedFact.route == task.route,
-                ExtractedFact.field_name == task.field_name,
-                ExtractedFact.subject_key == task.subject_key,
-            )
+        parsed = load_parsed_value(
+            session=self.session,
+            accession_no=task.accession_no,
+            route=task.route,
+            field_name=task.field_name,
+            subject_key=task.subject_key,
         )
         now = datetime.now(timezone.utc)
 
         if normalized_decision == "corrected":
-            if fact is None:
+            if parsed is None:
                 raise ReviewWorkflowError("cannot correct a missing fact row")
             if corrected_payload is None:
                 raise ReviewWorkflowError("corrected decision requires --corrected-json")
             if "value_numeric" in corrected_payload:
-                fact.value_numeric = _coerce_numeric(corrected_payload.get("value_numeric"))
-            if "value_text" in corrected_payload:
-                fact.value_text = corrected_payload.get("value_text")
-            if "value_json" in corrected_payload:
-                value_json = corrected_payload.get("value_json")
-                fact.value_json = value_json if isinstance(value_json, str) or value_json is None else json.dumps(value_json)
-            if "value_unit" in corrected_payload:
-                fact.value_unit = corrected_payload.get("value_unit")
-            fact.confidence = 1.0
-            fact.extracted_at = now
+                corrected_payload["value_numeric"] = _coerce_numeric(corrected_payload.get("value_numeric"))
+            corrected_payload["confidence"] = 1.0
+            update_parsed_value(
+                session=self.session,
+                accession_no=task.accession_no,
+                route=task.route,
+                field_name=task.field_name,
+                subject_key=task.subject_key,
+                corrected_payload=corrected_payload,
+            )
         elif normalized_decision in {"reject", "not_applicable"}:
-            if fact is not None:
-                self.session.delete(fact)
+            if parsed is not None:
+                clear_parsed_value(
+                    session=self.session,
+                    accession_no=task.accession_no,
+                    route=task.route,
+                    field_name=task.field_name,
+                    subject_key=task.subject_key,
+                )
 
         if normalized_decision != "accept":
             self._capture_golden_regression_seed(
                 task=task,
-                fact=fact,
+                parsed=parsed,
                 corrected_payload=corrected_payload,
                 comment=comment,
                 reviewer=normalized_reviewer,
@@ -345,7 +328,7 @@ class ReviewWorkflowService:
         self,
         *,
         task: ReviewTask,
-        fact: ExtractedFact | None,
+        parsed: Any | None,
         corrected_payload: dict[str, Any] | None,
         comment: str | None,
         reviewer: str,
@@ -357,7 +340,6 @@ class ReviewWorkflowService:
         filing = self.session.scalar(
             select(FilingDocument).where(FilingDocument.accession_no == task.accession_no)
         )
-        evidence = self.session.get(ExtractionEvidence, task.primary_evidence_id) if task.primary_evidence_id is not None else None
 
         case_id = f"manual-review::{task.accession_no}"
         case = self.session.get(GoldenCase, case_id)
@@ -417,12 +399,12 @@ class ReviewWorkflowService:
                 source_payload = corrected_payload or {}
                 if "value_numeric" in source_payload:
                     truth_numeric = _decimal_or_none(source_payload.get("value_numeric"))
-                elif fact is not None:
-                    truth_numeric = _decimal_or_none(fact.value_numeric)
-                truth_text = source_payload.get("value_text", fact.value_text if fact is not None else None)
-                value_json = source_payload.get("value_json", fact.value_json if fact is not None else None)
+                elif parsed is not None:
+                    truth_numeric = _decimal_or_none(parsed.value_numeric)
+                truth_text = source_payload.get("value_text", parsed.value_text if parsed is not None else None)
+                value_json = source_payload.get("value_json", parsed.value_json if parsed is not None else None)
                 truth_json = value_json if isinstance(value_json, str) or value_json is None else json.dumps(value_json, ensure_ascii=False)
-                truth_unit = source_payload.get("value_unit", fact.value_unit if fact is not None else None)
+                truth_unit = source_payload.get("value_unit", parsed.value_unit if parsed is not None else None)
 
             if truth is None:
                 truth = GoldenTruth(
@@ -480,28 +462,13 @@ class ReviewWorkflowService:
                 "subject_key": task.subject_key,
             },
             "fact": {
-                "value_numeric": fact.value_numeric if fact is not None else None,
-                "value_text": fact.value_text if fact is not None else None,
-                "value_json": fact.value_json if fact is not None else None,
-                "value_unit": fact.value_unit if fact is not None else None,
+                "value_numeric": parsed.value_numeric if parsed is not None else None,
+                "value_text": parsed.value_text if parsed is not None else None,
+                "value_json": parsed.value_json if parsed is not None else None,
+                "value_unit": parsed.value_unit if parsed is not None else None,
             },
             "corrected_payload": corrected_payload,
-            "primary_evidence": {
-                "id": evidence.id if evidence is not None else None,
-                "locator_kind": evidence.locator_kind if evidence is not None else None,
-                "source_section": evidence.source_section if evidence is not None else None,
-                "source_item_no": evidence.source_item_no if evidence is not None else None,
-                "source_xpath": evidence.source_xpath if evidence is not None else None,
-                "source_span": evidence.source_span if evidence is not None else None,
-                "source_locator_json": evidence.source_locator_json if evidence is not None else None,
-                "source_heading_path_json": evidence.source_heading_path_json if evidence is not None else None,
-                "source_block_offsets_json": evidence.source_block_offsets_json if evidence is not None else None,
-                "adequacy_signals_json": evidence.adequacy_signals_json if evidence is not None else None,
-                "retry_history_json": evidence.retry_history_json if evidence is not None else None,
-                "selection_trace_json": evidence.selection_trace_json if evidence is not None else None,
-                "raw_value": evidence.raw_value if evidence is not None else None,
-                "normalized_value": evidence.normalized_value if evidence is not None else None,
-            },
+            "primary_evidence": parsed.evidence_payload if parsed is not None else None,
         }
         packet_json = json.dumps(packet_payload, ensure_ascii=False)
         if packet is None:

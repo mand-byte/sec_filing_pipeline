@@ -136,15 +136,13 @@ def test_persist_filing_bundle_supports_multiple_subject_keys() -> None:
         ],
     )
 
-    facts = session.query(ExtractedFact).order_by(ExtractedFact.subject_key).all()
-    assert len(facts) == 2
-    assert [fact.subject_key for fact in facts] == ["txn:1", "txn:2"]
-
-    evidences = session.query(ExtractionEvidence).order_by(ExtractionEvidence.subject_key).all()
-    assert len(evidences) == 2
-    assert [evidence.subject_key for evidence in evidences] == ["txn:1", "txn:2"]
-    assert evidences[0].source_locator_json == '{"kind":"obj","path":"transactions[0].shares"}'
-    assert evidences[1].source_locator_json == '{"kind":"obj","path":"transactions[1].shares"}'
+    txns = session.query(Owner345Transaction).order_by(Owner345Transaction.subject_key).all()
+    assert len(txns) == 2
+    assert [txn.subject_key for txn in txns] == ["txn:1", "txn:2"]
+    assert '"source_locator_json": "{\\"kind\\":\\"obj\\",\\"path\\":\\"transactions[0].shares\\"}"' in txns[0].evidence_map_json
+    assert '"source_locator_json": "{\\"kind\\":\\"obj\\",\\"path\\":\\"transactions[1].shares\\"}"' in txns[1].evidence_map_json
+    assert session.query(ExtractedFact).all() == []
+    assert session.query(ExtractionEvidence).all() == []
 
 
 def test_persist_filing_bundle_derives_source_locator_json_when_missing() -> None:
@@ -168,12 +166,10 @@ def test_persist_filing_bundle_derives_source_locator_json_when_missing() -> Non
         ],
     )
 
-    evidence = session.query(ExtractionEvidence).one()
-    assert evidence.source_locator_json == (
-        '{"locator_kind": "xbrl_xml", "source_item_no": null, "source_section": null, '
-        '"source_span": "instant=2024-03-31", "source_xpath": "rev-best", '
-        '"xbrl_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"}'
-    )
+    summary = session.query(IssuerPeriodicSummary).one()
+    assert '"locator_kind": "xbrl_xml"' in summary.evidence_map_json
+    assert '"source_xpath": "rev-best"' in summary.evidence_map_json
+    assert '"xbrl_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"' in summary.evidence_map_json
 
 
 def test_persist_filing_bundle_preserves_rich_text_evidence_metadata() -> None:
@@ -202,12 +198,12 @@ def test_persist_filing_bundle_preserves_rich_text_evidence_metadata() -> None:
         ],
     )
 
-    evidence = session.query(ExtractionEvidence).one()
-    assert evidence.source_heading_path_json == '["Current report"]'
-    assert evidence.source_block_offsets_json == '{"source_start":12,"source_end":17}'
-    assert evidence.adequacy_signals_json == '{"window_found":true}'
-    assert evidence.retry_history_json == "[]"
-    assert evidence.selection_trace_json == '{"selected_value":"event"}'
+    summary = session.query(IssuerEventSummary).one()
+    assert '"source_heading_path_json": "[\\"Current report\\"]"' in summary.evidence_map_json
+    assert '"source_block_offsets_json": "{\\"source_start\\":12,\\"source_end\\":17}"' in summary.evidence_map_json
+    assert '"adequacy_signals_json": "{\\"window_found\\":true}"' in summary.evidence_map_json
+    assert '"retry_history_json": "[]"' in summary.evidence_map_json
+    assert '"selection_trace_json": "{\\"selected_value\\":\\"event\\"}"' in summary.evidence_map_json
 
 
 def test_persist_filing_bundle_truncates_bounded_evidence_metadata() -> None:
@@ -236,10 +232,10 @@ def test_persist_filing_bundle_truncates_bounded_evidence_metadata() -> None:
         ],
     )
 
-    evidence = session.query(ExtractionEvidence).one()
-    assert evidence.source_section == long_section[:128]
-    assert evidence.source_item_no == long_item[:32]
-    assert evidence.xbrl_concept == long_concept[:128]
+    summary = session.query(IssuerEventSummary).one()
+    assert long_section[:128] in summary.evidence_map_json
+    assert long_item[:32] in summary.evidence_map_json
+    assert long_concept[:128] in summary.evidence_map_json
 
 
 def test_persist_filing_bundle_flushes_filing_document_before_evidence_rows() -> None:
@@ -271,7 +267,6 @@ def test_persist_filing_bundle_flushes_filing_document_before_evidence_rows() ->
     )
 
     assert flush_snapshots[0] == ["FilingDocument"]
-    assert "ExtractionEvidence" in flush_snapshots[1]
 
 
 def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:
@@ -310,10 +305,10 @@ def test_persist_filing_bundle_updates_existing_subject_key_row() -> None:
         ],
     )
 
-    facts = session.query(ExtractedFact).all()
-    assert len(facts) == 1
-    assert facts[0].subject_key == "txn:1"
-    assert facts[0].value_numeric == 11.0
+    txns = session.query(Owner345Transaction).all()
+    assert len(txns) == 1
+    assert txns[0].subject_key == "txn:1"
+    assert txns[0].transaction_price_per_share == 11.0
 
 
 def test_persist_filing_bundle_supports_holding_position_rows() -> None:
@@ -435,7 +430,7 @@ def test_persist_filing_bundle_populates_owner_345_specialized_tables() -> None:
     assert pos.subject_key == "nhold:1"
     assert pos.position_kind == "non_derivative"
     assert pos.non_derivative_shares_owned == 500.0
-    assert session.query(ExtractedFact).count() == 6
+    assert session.query(ExtractedFact).count() == 0
 
 
 def test_persist_filing_bundle_populates_owner_13dg_and_144_specialized_tables() -> None:
@@ -576,12 +571,7 @@ def test_persist_filing_bundle_creates_row_level_review_tasks_with_primary_evide
     review_tasks = session.query(ReviewTask).order_by(ReviewTask.subject_key).all()
     assert len(review_tasks) == 2
     assert [task.subject_key for task in review_tasks] == ["txn:1", "txn:2"]
-    assert all(task.primary_evidence_id is not None for task in review_tasks)
-
-    evidences = session.query(ExtractionEvidence).order_by(ExtractionEvidence.subject_key).all()
-    evidence_ids_by_subject = {evidence.subject_key: evidence.id for evidence in evidences}
-    assert review_tasks[0].primary_evidence_id == evidence_ids_by_subject["txn:1"]
-    assert review_tasks[1].primary_evidence_id == evidence_ids_by_subject["txn:2"]
+    assert all(task.primary_evidence_id is None for task in review_tasks)
 
 
 def test_persist_filing_bundle_deduplicates_open_review_tasks_by_subject_key() -> None:

@@ -394,6 +394,7 @@ class PersistenceService:
         self,
         *,
         filing: FilingRecord,
+        route: RouteName | str,
         facts: list[FactInput],
         evidences: list[EvidenceInput],
         now: datetime,
@@ -410,6 +411,16 @@ class PersistenceService:
         self.session.query(Owner13DGReportingPerson).filter(Owner13DGReportingPerson.accession_no == filing.accession_no).delete(synchronize_session=False)
         self.session.query(Owner144Summary).filter(Owner144Summary.accession_no == filing.accession_no).delete(synchronize_session=False)
         self.session.query(Owner144Notice).filter(Owner144Notice.accession_no == filing.accession_no).delete(synchronize_session=False)
+
+        for fact in facts:
+            if fact.confidence is not None and fact.confidence < 0.5:
+                self._upsert_open_review_task(
+                    filing=filing,
+                    route=route,
+                    fact=fact,
+                    now=now,
+                    primary_evidence_id=None,
+                )
 
         if any(field in summary_facts for field in _OWNER_345_SUMMARY_FIELDS):
             self.session.add(
@@ -546,11 +557,13 @@ class PersistenceService:
                     extracted_at=now,
                 )
             )
+        self.session.commit()
 
     def _persist_issuer_specialized_bundle(
         self,
         *,
         filing: FilingRecord,
+        route: RouteName | str,
         facts: list[FactInput],
         evidences: list[EvidenceInput],
         now: datetime,
@@ -568,6 +581,16 @@ class PersistenceService:
         self.session.query(IssuerProposalVote).filter(IssuerProposalVote.accession_no == filing.accession_no).delete(synchronize_session=False)
         self.session.query(IssuerExecComp).filter(IssuerExecComp.accession_no == filing.accession_no).delete(synchronize_session=False)
         self.session.query(IssuerHolderOwnership).filter(IssuerHolderOwnership.accession_no == filing.accession_no).delete(synchronize_session=False)
+
+        for fact in facts:
+            if fact.confidence is not None and fact.confidence < 0.5:
+                self._upsert_open_review_task(
+                    filing=filing,
+                    route=route,
+                    fact=fact,
+                    now=now,
+                    primary_evidence_id=None,
+                )
 
         if any(field in summary_facts for field in (_ISSUER_PERIODIC_NUMERIC_FIELDS | _ISSUER_PERIODIC_TEXT_FIELDS)):
             self.session.add(
@@ -729,6 +752,7 @@ class PersistenceService:
                     extracted_at=now,
                 )
             )
+        self.session.commit()
 
     def _persist_generic_bundle(
         self,
@@ -877,17 +901,21 @@ class PersistenceService:
         if str(route) == "owner":
             self._persist_owner_specialized_bundle(
                 filing=filing,
+                route=route,
                 facts=facts,
                 evidences=evidences,
                 now=now,
             )
+            return
         elif str(route) == "issuer":
             self._persist_issuer_specialized_bundle(
                 filing=filing,
+                route=route,
                 facts=facts,
                 evidences=evidences,
                 now=now,
             )
+            return
 
         self._persist_generic_bundle(
             filing=filing,

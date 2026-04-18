@@ -7,8 +7,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.base import Base
-from src.db.models import ExtractedFact, FilingAttempt, PipelineLog, ReviewTask, RouteWatermark
+from src.db.models import FilingAttempt, PipelineLog, ReviewTask, RouteWatermark
 from src.db.repositories import PipelineRepository
+from src.pipeline.result_store import load_parsed_value
 from src.pipeline.services import PersistenceService
 from src.pipeline.route_runtime import FilingBundle, RouteProcessor
 from src.pipeline.services import EvidenceInput, FactInput
@@ -732,10 +733,15 @@ def test_route_processor_marks_provider_uncertain_text_fact_for_review_even_when
         run_id="run-db-provider-uncertain",
     )
 
-    facts = session.query(ExtractedFact).filter(ExtractedFact.accession_no == "0000000000-24-000021").all()
+    fact = load_parsed_value(
+        session=session,
+        accession_no="0000000000-24-000021",
+        route="owner",
+        field_name="beneficial_ownership_intent_quant",
+        subject_key="document",
+    )
     review_tasks = session.query(ReviewTask).filter(ReviewTask.accession_no == "0000000000-24-000021").all()
 
-    assert len(facts) == 1
-    assert facts[0].confidence == 0.49
+    assert fact is not None
     assert len(review_tasks) == 1
     assert review_tasks[0].reason == "provider_low_confidence"

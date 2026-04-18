@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import math
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.db.models import ExtractedFact, ExtractionEvidence, FilingDocument
+from src.pipeline.result_store import issuer_field_count, numeric_history_values, template_field_count
 
 
 class SqlAlchemyReviewStats:
@@ -15,37 +14,29 @@ class SqlAlchemyReviewStats:
 
     def issuer_field_count(self, cik: str, route: str, field_name: str) -> int:
         """Count historical facts for one issuer/route/field combination."""
-        count = self.session.scalar(
-            select(func.count())
-            .select_from(ExtractedFact)
-            .join(FilingDocument, FilingDocument.accession_no == ExtractedFact.accession_no)
-            .where(
-                FilingDocument.cik == cik,
-                ExtractedFact.route == route,
-                ExtractedFact.field_name == field_name,
-            )
+        return issuer_field_count(
+            session=self.session,
+            cik=cik,
+            route=route,
+            field_name=field_name,
         )
-        return int(count or 0)
 
     def template_field_count(self, template_hash: str, route: str, field_name: str) -> int:
         """Count how often one extraction template produced this field."""
-        count = self.session.scalar(
-            select(func.count()).select_from(ExtractionEvidence).where(
-                ExtractionEvidence.source_xpath == template_hash,
-                ExtractionEvidence.route == route,
-                ExtractionEvidence.field_name == field_name,
-            )
+        return template_field_count(
+            session=self.session,
+            template_hash=template_hash,
+            route=route,
+            field_name=field_name,
         )
-        return int(count or 0)
 
     def zscore(self, value_numeric: float, route: str, field_name: str) -> float | None:
         """Measure how extreme a numeric value is relative to past facts."""
-        rows = self.session.execute(
-            select(ExtractedFact.value_numeric, ExtractedFact.value_text).where(
-                ExtractedFact.route == route,
-                ExtractedFact.field_name == field_name,
-            )
-        ).all()
+        rows = numeric_history_values(
+            session=self.session,
+            route=route,
+            field_name=field_name,
+        )
 
         numeric_values: list[float] = []
         for row in rows:

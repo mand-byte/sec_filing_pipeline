@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.db.models import ExtractedFact, GoldenCase, GoldenSubject, GoldenTruth
+from sqlalchemy import select
+
+from src.db.models import GoldenCase, GoldenSubject, GoldenTruth
+from src.pipeline.result_store import load_parsed_value
 
 
 @dataclass(frozen=True)
@@ -73,15 +75,14 @@ def select_preferred_truth(
             value_unit=truth.value_unit,
         )
 
-    fact = session.scalar(
-        select(ExtractedFact).where(
-            ExtractedFact.accession_no == accession_no,
-            ExtractedFact.route == route,
-            ExtractedFact.field_name == field_name,
-            ExtractedFact.subject_key == subject_key,
-        )
+    parsed = load_parsed_value(
+        session=session,
+        accession_no=accession_no,
+        route=route,
+        field_name=field_name,
+        subject_key=subject_key,
     )
-    if fact is None:
+    if parsed is None:
         return None
 
     return PreferredTruth(
@@ -92,8 +93,8 @@ def select_preferred_truth(
         source="parsed",
         truth_tier=None,
         truth_source=None,
-        value_numeric=fact.value_numeric,
-        value_text=fact.value_text,
-        value_json=fact.value_json,
-        value_unit=fact.value_unit,
+        value_numeric=parsed.value_numeric,
+        value_text=parsed.value_text,
+        value_json=parsed.value_json,
+        value_unit=parsed.value_unit,
     )

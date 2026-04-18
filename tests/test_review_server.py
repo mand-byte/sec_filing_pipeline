@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import src.cli as cli_module
 from src.db.base import Base
-from src.db.models import ExtractedFact
+from src.pipeline.result_store import load_parsed_value
 from src.pipeline.review.server import ReviewApi, ReviewServerConfig, build_review_server_html, create_review_http_handler, run_review_server
 from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
 from src.pipeline.types import FilingRecord
@@ -154,7 +154,14 @@ def test_review_server_http_flow_lists_and_resolves_tasks(tmp_path: Path) -> Non
         assert payload["status"] == "corrected"
 
         with factory() as session:
-            fact = session.query(ExtractedFact).one()
+            fact = load_parsed_value(
+                session=session,
+                accession_no="0000000000-24-000040",
+                route="owner",
+                field_name="shares_acquired_or_disposed",
+                subject_key="txn:1",
+            )
+            assert fact is not None
             assert fact.value_numeric == 140.0
     finally:
         server.shutdown()

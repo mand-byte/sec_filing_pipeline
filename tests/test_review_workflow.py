@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, sessionmaker
 import src.cli as cli_module
 from src.db.base import Base
 from src.db.models import (
-    ExtractedFact,
     GoldenCase,
     GoldenEvalRun,
     GoldenReviewPacket,
@@ -19,6 +18,7 @@ from src.db.models import (
     ReviewDecision,
     ReviewTask,
 )
+from src.pipeline.result_store import load_parsed_value
 from src.pipeline.review.workflow import ReviewWorkflowService
 from src.pipeline.review.error_codes import normalize_review_error_code
 from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
@@ -196,7 +196,13 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         assert updated.status == "corrected"
 
     with factory() as session:
-        fact = session.query(ExtractedFact).one()
+        fact = load_parsed_value(
+            session=session,
+            accession_no="0000000000-24-000020",
+            route="owner",
+            field_name="shares_acquired_or_disposed",
+            subject_key="txn:1",
+        )
         decision = session.query(ReviewDecision).one()
         task = session.query(ReviewTask).one()
         golden_case = session.query(GoldenCase).one()
@@ -204,9 +210,10 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         golden_truth = session.query(GoldenTruth).one()
         golden_run = session.query(GoldenEvalRun).one()
         golden_packet = session.query(GoldenReviewPacket).one()
+        assert fact is not None
         assert fact.value_numeric == 125.5
-        assert fact.value_unit == "shares"
-        assert fact.confidence == 1.0
+        assert fact.value_unit is None
+        assert fact.confidence is None
         assert decision.decision == "CORRECTED"
         assert decision.reviewer == "alice"
         assert decision.error_code == "unit_scaling"
@@ -243,7 +250,13 @@ def test_review_workflow_service_reject_removes_fact() -> None:
         assert updated.status == "reject"
 
     with factory() as session:
-        assert session.query(ExtractedFact).all() == []
+        assert load_parsed_value(
+            session=session,
+            accession_no="0000000000-24-000020",
+            route="owner",
+            field_name="shares_acquired_or_disposed",
+            subject_key="txn:1",
+        ) is None
         decision = session.query(ReviewDecision).one()
         golden_case = session.query(GoldenCase).one()
         golden_subject = session.query(GoldenSubject).one()
@@ -276,7 +289,13 @@ def test_review_workflow_service_not_applicable_captures_fix_once_regression_see
         assert updated.status == "not_applicable"
 
     with factory() as session:
-        assert session.query(ExtractedFact).all() == []
+        assert load_parsed_value(
+            session=session,
+            accession_no="0000000000-24-000020",
+            route="owner",
+            field_name="shares_acquired_or_disposed",
+            subject_key="txn:1",
+        ) is None
         decision = session.query(ReviewDecision).one()
         golden_truth = session.query(GoldenTruth).one()
         golden_packet = session.query(GoldenReviewPacket).one()
@@ -431,9 +450,16 @@ def test_cli_review_commands_operate_on_seeded_queue(monkeypatch) -> None:
     assert resolve_result.exit_code == 0
 
     with factory() as session:
-        fact = session.query(ExtractedFact).one()
+        fact = load_parsed_value(
+            session=session,
+            accession_no="0000000000-24-000020",
+            route="owner",
+            field_name="shares_acquired_or_disposed",
+            subject_key="txn:1",
+        )
         decision = session.query(ReviewDecision).one()
         golden_truth = session.query(GoldenTruth).one()
+        assert fact is not None
         assert fact.value_numeric == 130.0
         assert decision.error_code == "row_match_error"
         assert float(golden_truth.value_numeric) == 130.0
