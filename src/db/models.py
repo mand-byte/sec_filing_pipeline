@@ -18,6 +18,7 @@ from src.db.base import Base
 
 
 class SecurityMaster(Base):
+    """证券主数据表：存储 ticker、CIK、FIGI、上市状态及退市时间等基础主数据。"""
     __tablename__ = "security_master"
 
     composite_figi: Mapped[str] = mapped_column(String(12), primary_key=True)
@@ -29,6 +30,7 @@ class SecurityMaster(Base):
 
 
 class RouteWatermark(Base):
+    """路由增量游标表：记录每个 CIK 在 issuer/owner/holding 路线上的最近 accepted_at 水位。"""
     __tablename__ = "route_watermark"
     __table_args__ = (
         UniqueConstraint("cik", "route", name="uq_route_watermark_cik_route"),
@@ -42,6 +44,7 @@ class RouteWatermark(Base):
 
 
 class DelistedRouteCompletion(Base):
+    """退市路由完成表：标记退市证券在某条路线上是否已经完成历史回填。"""
     __tablename__ = "delisted_route_completion"
     __table_args__ = (
         UniqueConstraint("composite_figi", "cik", "route", name="uq_delisted_completion_key"),
@@ -59,6 +62,7 @@ class DelistedRouteCompletion(Base):
 
 
 class FilingDocument(Base):
+    """Filing 主表：一份 SEC filing 一行，保存文档级公共元数据并作为结果表外键锚点。"""
     __tablename__ = "filing_document"
 
     accession_no: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -74,6 +78,7 @@ class FilingDocument(Base):
 
 
 class Holding13FSummary(Base):
+    """13F 汇总表：保存一份 13F filing 的 summary 级字段与文本量化结果。"""
     __tablename__ = "holding_13f_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -93,6 +98,7 @@ class Holding13FSummary(Base):
 
 
 class Holding13FPosition(Base):
+    """13F 持仓行表：一行一个 holding position，保存 13F infotable 的行级结果。"""
     __tablename__ = "holding_13f_position"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_holding_13f_position_accession_subject"),
@@ -117,6 +123,7 @@ class Holding13FPosition(Base):
 
 
 class Owner345Summary(Base):
+    """3/4/5 汇总表：保存 Form 3/4/5 filing 级文本量化结果。"""
     __tablename__ = "owner_345_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -133,6 +140,7 @@ class Owner345Summary(Base):
 
 
 class Owner345Transaction(Base):
+    """3/4/5 交易行表：一行一个 transaction，保存内部人交易数值字段。"""
     __tablename__ = "owner_345_transaction"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_owner_345_transaction_accession_subject"),
@@ -156,6 +164,7 @@ class Owner345Transaction(Base):
 
 
 class Owner345Position(Base):
+    """3/4/5 持仓行表：一行一个非衍生或衍生持仓对象。"""
     __tablename__ = "owner_345_position"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_owner_345_position_accession_subject"),
@@ -179,6 +188,7 @@ class Owner345Position(Base):
 
 
 class Owner13DGSummary(Base):
+    """13D/13G 汇总表：保存 filing 级意图、资金来源等文本量化结果。"""
     __tablename__ = "owner_13dg_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -195,6 +205,7 @@ class Owner13DGSummary(Base):
 
 
 class Owner13DGReportingPerson(Base):
+    """13D/13G 报告人表：一行一个 reporting person，保存受益持股与投票/处置权数据。"""
     __tablename__ = "owner_13dg_reporting_person"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_owner_13dg_person_accession_subject"),
@@ -222,6 +233,7 @@ class Owner13DGReportingPerson(Base):
 
 
 class Owner144Summary(Base):
+    """Form 144 汇总表：保存 filing 级 sale plan 文本量化结果。"""
     __tablename__ = "owner_144_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -236,6 +248,7 @@ class Owner144Summary(Base):
 
 
 class Owner144Notice(Base):
+    """Form 144 明细表：一行一个 sale notice 或 past-3m sale 记录。"""
     __tablename__ = "owner_144_notice"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_owner_144_notice_accession_subject"),
@@ -260,6 +273,7 @@ class Owner144Notice(Base):
 
 
 class IssuerPeriodicSummary(Base):
+    """Issuer 定期汇总表：保存 10-K/10-Q/20-F 等定期报告的 filing 级财务与文本量化结果。"""
     __tablename__ = "issuer_periodic_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -288,6 +302,7 @@ class IssuerPeriodicSummary(Base):
 
 
 class IssuerEventSummary(Base):
+    """Issuer 事件汇总表：保存 8-K/事件型 6-K/并购事件 filing 的 filing 级结果。"""
     __tablename__ = "issuer_event_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -307,6 +322,7 @@ class IssuerEventSummary(Base):
 
 
 class IssuerOfferingSummary(Base):
+    """Issuer 发行汇总表：保存 S-1/424B4 等发行募资 filing 的 filing 级结果。"""
     __tablename__ = "issuer_offering_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -327,6 +343,7 @@ class IssuerOfferingSummary(Base):
 
 
 class IssuerSecurityLine(Base):
+    """Issuer 证券行表：一行一个 security line，保存发行或要约中的证券级价格与数量。"""
     __tablename__ = "issuer_security_line"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_issuer_security_line_accession_subject"),
@@ -350,6 +367,7 @@ class IssuerSecurityLine(Base):
 
 
 class IssuerProposalVote(Base):
+    """Issuer 提案投票表：一行一个 proposal，保存 8-K/Proxy 的投票结果。"""
     __tablename__ = "issuer_proposal_vote"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_issuer_proposal_vote_accession_subject"),
@@ -373,6 +391,7 @@ class IssuerProposalVote(Base):
 
 
 class IssuerExecComp(Base):
+    """Issuer 高管薪酬表：一行一个 executive compensation row。"""
     __tablename__ = "issuer_exec_comp"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_issuer_exec_comp_accession_subject"),
@@ -393,6 +412,7 @@ class IssuerExecComp(Base):
 
 
 class IssuerHolderOwnership(Base):
+    """Issuer 持有人持股表：一行一个 holder beneficial ownership row。"""
     __tablename__ = "issuer_holder_ownership"
     __table_args__ = (
         UniqueConstraint("accession_no", "subject_key", name="uq_issuer_holder_ownership_accession_subject"),
@@ -414,6 +434,7 @@ class IssuerHolderOwnership(Base):
 
 
 class IssuerProxySummary(Base):
+    """Issuer Proxy 汇总表：保存 DEF 14A 等 proxy filing 的 filing 级治理/薪酬文本量化结果。"""
     __tablename__ = "issuer_proxy_summary"
 
     accession_no: Mapped[str] = mapped_column(
@@ -431,6 +452,7 @@ class IssuerProxySummary(Base):
 
 
 class PipelineLog(Base):
+    """运行日志表：记录每次 run 的阶段日志、错误类型与详细错误信息。"""
     __tablename__ = "pipeline_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -447,6 +469,7 @@ class PipelineLog(Base):
 
 
 class FilingAttempt(Base):
+    """Filing 处理状态表：记录某次 run 中每个 accession 在某条 route 上的处理状态。"""
     __tablename__ = "filing_attempt"
     __table_args__ = (
         UniqueConstraint("run_id", "route", "accession_no", name="uq_filing_attempt_run_route_accession"),
@@ -466,6 +489,7 @@ class FilingAttempt(Base):
 
 
 class ReviewTask(Base):
+    """审核任务表：记录需要人工确认或修正的字段级 review 任务。"""
     __tablename__ = "review_task"
 
     task_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -487,6 +511,7 @@ class ReviewTask(Base):
 
 
 class ReviewDecision(Base):
+    """审核决策表：记录 review task 的最终人工决策、修正值和 reviewer。"""
     __tablename__ = "review_decision"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -505,6 +530,7 @@ class ReviewDecision(Base):
 
 
 class GoldenCase(Base):
+    """Golden case 表：定义人工校验/评估使用的 filing 级真值案例。"""
     __tablename__ = "golden_case"
 
     case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -521,6 +547,7 @@ class GoldenCase(Base):
 
 
 class GoldenSubject(Base):
+    """Golden subject 表：定义 golden case 内部的主体粒度，如 transaction/proposal/position。"""
     __tablename__ = "golden_subject"
     __table_args__ = (
         UniqueConstraint("case_id", "subject_key", name="uq_golden_subject_case_subject_key"),
@@ -541,6 +568,7 @@ class GoldenSubject(Base):
 
 
 class GoldenTruth(Base):
+    """Golden truth 表：保存 case+subject+field 粒度的真值记录。"""
     __tablename__ = "golden_truth"
     __table_args__ = (
         UniqueConstraint(
@@ -578,6 +606,7 @@ class GoldenTruth(Base):
 
 
 class GoldenInvariantResult(Base):
+    """Golden invariant 表：保存 accounting / consistency invariant 的检验结果。"""
     __tablename__ = "golden_invariant_result"
     __table_args__ = (
         UniqueConstraint(
@@ -610,6 +639,7 @@ class GoldenInvariantResult(Base):
 
 
 class GoldenCandidate(Base):
+    """Golden candidate 表：记录某次 eval run 中每个候选抽取值及其 provenance。"""
     __tablename__ = "golden_candidate"
     __table_args__ = (
         UniqueConstraint(
@@ -653,6 +683,7 @@ class GoldenCandidate(Base):
 
 
 class GoldenEvalRun(Base):
+    """Golden eval run 表：记录一次完整 golden 评估运行的元数据与汇总。"""
     __tablename__ = "golden_eval_run"
 
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -663,6 +694,7 @@ class GoldenEvalRun(Base):
 
 
 class GoldenEvalResult(Base):
+    """Golden eval result 表：记录 run 对每个 case/subject/field 的评估结果。"""
     __tablename__ = "golden_eval_result"
     __table_args__ = (
         UniqueConstraint(
@@ -705,6 +737,7 @@ class GoldenEvalResult(Base):
 
 
 class GoldenReviewPacket(Base):
+    """Golden review packet 表：保存需人工复核的评估包与回放数据。"""
     __tablename__ = "golden_review_packet"
     __table_args__ = (
         UniqueConstraint(
