@@ -116,6 +116,320 @@ class Holding13FPosition(Base):
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class Owner345Summary(Base):
+    __tablename__ = "owner_345_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    insider_transaction_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insider_transaction_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insider_role_ownership_structure_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insider_role_ownership_structure_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Owner345Transaction(Base):
+    __tablename__ = "owner_345_transaction"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_owner_345_transaction_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    transaction_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    transaction_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    shares_acquired_or_disposed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transaction_price_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_owned_following_txn: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Owner345Position(Base):
+    __tablename__ = "owner_345_position"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_owner_345_position_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    position_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    position_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    non_derivative_shares_owned: Mapped[float | None] = mapped_column(Float, nullable=True)
+    derivative_underlying_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exercise_or_conversion_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Owner13DGSummary(Base):
+    __tablename__ = "owner_13dg_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    beneficial_ownership_intent_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    beneficial_ownership_intent_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_of_funds_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_of_funds_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Owner13DGReportingPerson(Base):
+    __tablename__ = "owner_13dg_reporting_person"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_owner_13dg_person_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    reporting_person_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    beneficially_owned_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beneficial_ownership_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sole_voting_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shared_voting_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sole_dispositive_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shared_dispositive_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    aggregate_purchase_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_of_funds_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Owner144Summary(Base):
+    __tablename__ = "owner_144_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    rule144_sale_plan_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rule144_sale_plan_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Owner144Notice(Base):
+    __tablename__ = "owner_144_notice"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_owner_144_notice_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    notice_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    notice_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    proposed_sale_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    proposed_sale_market_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_sold_past_3m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_value_sold_past_3m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerPeriodicSummary(Base):
+    __tablename__ = "issuer_periodic_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    total_revenue: Mapped[float | None] = mapped_column(Float, nullable=True)
+    operating_income: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_income: Mapped[float | None] = mapped_column(Float, nullable=True)
+    diluted_eps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cash_and_equivalents: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_debt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    operating_cash_flow: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capex: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_outstanding: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filing_delay_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mdna_outlook_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mdna_outlook_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_factor_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_factor_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delay_reason_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delay_reason_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerEventSummary(Base):
+    __tablename__ = "issuer_event_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    deal_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    financing_commitment_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    termination_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_event_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_event_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tender_going_private_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tender_going_private_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerOfferingSummary(Base):
+    __tablename__ = "issuer_offering_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    gross_proceeds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_proceeds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    underwriter_discount_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    financing_commitment_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    use_of_proceeds_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    use_of_proceeds_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_factor_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_factor_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerSecurityLine(Base):
+    __tablename__ = "issuer_security_line"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_issuer_security_line_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    security_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    offering_price_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    securities_offered_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    offer_price_per_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tender_shares_sought: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerProposalVote(Base):
+    __tablename__ = "issuer_proposal_vote"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_issuer_proposal_vote_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    proposal_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    proposal_votes_for: Mapped[float | None] = mapped_column(Float, nullable=True)
+    proposal_votes_against: Mapped[float | None] = mapped_column(Float, nullable=True)
+    proposal_votes_abstain: Mapped[float | None] = mapped_column(Float, nullable=True)
+    proposal_broker_non_votes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerExecComp(Base):
+    __tablename__ = "issuer_exec_comp"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_issuer_exec_comp_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    exec_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    exec_total_comp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerHolderOwnership(Base):
+    __tablename__ = "issuer_holder_ownership"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_issuer_holder_ownership_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    holder_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    holder_beneficial_ownership_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    holder_beneficial_ownership_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class IssuerProxySummary(Base):
+    __tablename__ = "issuer_proxy_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    shares_outstanding: Mapped[float | None] = mapped_column(Float, nullable=True)
+    proxy_proposal_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proxy_proposal_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comp_policy_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comp_policy_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ExtractedFact(Base):
     __tablename__ = "extracted_fact"
     __table_args__ = (
