@@ -14,7 +14,7 @@ def test_build_artifacts_include_db_migration_assets(tmp_path: Path) -> None:
         cwd=Path(__file__).resolve().parents[1],
     )
 
-    migration_name = "20260411_add_evidence_locator_and_filing_attempt.sql"
+    migration_name = "20260418_drop_legacy_generic_result_tables.sql"
     schema_name = "beneficial_ownership_intent_quant.yaml"
     wheel_path = next(dist_dir.glob("*.whl"))
     sdist_path = next(dist_dir.glob("*.tar.gz"))

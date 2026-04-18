@@ -8,8 +8,6 @@ from sqlalchemy import Text, cast, func, literal, select
 from sqlalchemy.orm import Session
 
 from src.db.models import (
-    ExtractedFact,
-    ExtractionEvidence,
     FilingDocument,
     Holding13FPosition,
     Holding13FSummary,
@@ -157,6 +155,26 @@ _FIELD_SPECS: dict[str, list[SpecializedFieldSpec]] = {
     "comp_policy_quant": [_spec(IssuerProxySummary, "comp_policy_quant", subject_kind="document", text_attr="comp_policy_quant_text", json_attr="comp_policy_quant_json")],
 }
 
+_FIELD_VALUE_UNITS: dict[str, str] = {
+    "shares_acquired_or_disposed": "shares",
+    "shares_owned_following_txn": "shares",
+    "non_derivative_shares_owned": "shares",
+    "derivative_underlying_shares": "shares",
+    "beneficially_owned_shares": "shares",
+    "beneficial_ownership_pct": "percent",
+    "sole_voting_power": "shares",
+    "shared_voting_power": "shares",
+    "sole_dispositive_power": "shares",
+    "shared_dispositive_power": "shares",
+    "proposed_sale_shares": "shares",
+    "shares_sold_past_3m": "shares",
+    "position_value_usd": "USD",
+    "info_table_value_total_usd": "USD",
+    "transaction_price_per_share": "currency_per_share",
+    "offering_price_per_share": "currency_per_share",
+    "offer_price_per_share": "currency_per_share",
+}
+
 
 def _evidence_for_field(row: Any, spec: SpecializedFieldSpec, field_name: str) -> dict[str, Any] | None:
     evidence_json = getattr(row, spec.evidence_attr, None)
@@ -223,60 +241,11 @@ def load_parsed_value(
             value_numeric=float(getattr(row, spec.numeric_attr)) if spec.numeric_attr is not None and getattr(row, spec.numeric_attr) is not None else None,
             value_text=getattr(row, spec.text_attr) if spec.text_attr is not None else None,
             value_json=getattr(row, spec.json_attr) if spec.json_attr is not None else None,
-            value_unit=None,
+            value_unit=_FIELD_VALUE_UNITS.get(field_name),
             confidence=None,
             evidence_payload=_evidence_for_field(row, spec, field_name),
         )
-
-    fact = session.scalar(
-        select(ExtractedFact).where(
-            ExtractedFact.accession_no == accession_no,
-            ExtractedFact.route == route,
-            ExtractedFact.field_name == field_name,
-            ExtractedFact.subject_key == subject_key,
-        )
-    )
-    if fact is None:
-        return None
-    evidence = session.scalar(
-        select(ExtractionEvidence).where(
-            ExtractionEvidence.accession_no == accession_no,
-            ExtractionEvidence.route == route,
-            ExtractionEvidence.field_name == field_name,
-            ExtractionEvidence.subject_key == subject_key,
-        )
-    )
-    evidence_payload = None
-    if evidence is not None:
-        evidence_payload = {
-            "id": evidence.id,
-            "locator_kind": evidence.locator_kind,
-            "source_section": evidence.source_section,
-            "source_item_no": evidence.source_item_no,
-            "source_xpath": evidence.source_xpath,
-            "xbrl_concept": evidence.xbrl_concept,
-            "source_span": evidence.source_span,
-            "source_locator_json": evidence.source_locator_json,
-            "source_heading_path_json": evidence.source_heading_path_json,
-            "source_block_offsets_json": evidence.source_block_offsets_json,
-            "adequacy_signals_json": evidence.adequacy_signals_json,
-            "retry_history_json": evidence.retry_history_json,
-            "selection_trace_json": evidence.selection_trace_json,
-            "raw_value": evidence.raw_value,
-            "normalized_value": evidence.normalized_value,
-        }
-    return ParsedValue(
-        route=route,
-        accession_no=accession_no,
-        field_name=field_name,
-        subject_key=subject_key,
-        value_numeric=fact.value_numeric,
-        value_text=fact.value_text,
-        value_json=fact.value_json,
-        value_unit=fact.value_unit,
-        confidence=fact.confidence,
-        evidence_payload=evidence_payload,
-    )
+    return None
 
 
 def update_parsed_value(
@@ -305,28 +274,7 @@ def update_parsed_value(
             setattr(row, spec.json_attr, value_json if isinstance(value_json, str) or value_json is None else json.dumps(value_json, ensure_ascii=False))
         return True
 
-    fact = session.scalar(
-        select(ExtractedFact).where(
-            ExtractedFact.accession_no == accession_no,
-            ExtractedFact.route == route,
-            ExtractedFact.field_name == field_name,
-            ExtractedFact.subject_key == subject_key,
-        )
-    )
-    if fact is None:
-        return False
-    if "value_numeric" in corrected_payload:
-        fact.value_numeric = corrected_payload.get("value_numeric")
-    if "value_text" in corrected_payload:
-        fact.value_text = corrected_payload.get("value_text")
-    if "value_json" in corrected_payload:
-        value_json = corrected_payload.get("value_json")
-        fact.value_json = value_json if isinstance(value_json, str) or value_json is None else json.dumps(value_json, ensure_ascii=False)
-    if "value_unit" in corrected_payload:
-        fact.value_unit = corrected_payload.get("value_unit")
-    if "confidence" in corrected_payload:
-        fact.confidence = corrected_payload.get("confidence")
-    return True
+    return False
 
 
 def clear_parsed_value(
@@ -353,18 +301,7 @@ def clear_parsed_value(
             setattr(row, spec.json_attr, None)
         return True
 
-    fact = session.scalar(
-        select(ExtractedFact).where(
-            ExtractedFact.accession_no == accession_no,
-            ExtractedFact.route == route,
-            ExtractedFact.field_name == field_name,
-            ExtractedFact.subject_key == subject_key,
-        )
-    )
-    if fact is None:
-        return False
-    session.delete(fact)
-    return True
+    return False
 
 
 def issuer_field_count(
@@ -391,17 +328,7 @@ def issuer_field_count(
         total += int(session.scalar(stmt) or 0)
     if total > 0:
         return total
-    count = session.scalar(
-        select(func.count())
-        .select_from(ExtractedFact)
-        .join(FilingDocument, FilingDocument.accession_no == ExtractedFact.accession_no)
-        .where(
-            FilingDocument.cik == cik,
-            ExtractedFact.route == route,
-            ExtractedFact.field_name == field_name,
-        )
-    )
-    return int(count or 0)
+    return 0
 
 
 def template_field_count(
@@ -420,14 +347,7 @@ def template_field_count(
         total += int(session.scalar(stmt) or 0)
     if total > 0:
         return total
-    count = session.scalar(
-        select(func.count()).select_from(ExtractionEvidence).where(
-            ExtractionEvidence.source_xpath == template_hash,
-            ExtractionEvidence.route == route,
-            ExtractionEvidence.field_name == field_name,
-        )
-    )
-    return int(count or 0)
+    return 0
 
 
 def numeric_history_values(
@@ -449,11 +369,4 @@ def numeric_history_values(
         rows.extend(session.execute(stmt).all())
     if rows:
         return rows
-    return list(
-        session.execute(
-            select(ExtractedFact.value_numeric, ExtractedFact.value_text).where(
-                ExtractedFact.route == route,
-                ExtractedFact.field_name == field_name,
-            )
-        ).all()
-    )
+    return []

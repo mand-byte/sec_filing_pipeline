@@ -20,13 +20,13 @@ def test_cli_db_rollout_assets_lists_checked_in_sql_and_readme() -> None:
     assert payload["readme_path"].endswith("src/db/migrations/README.md")
     assert payload["migrations"] == [
         {
-            "name": "20260411_add_evidence_locator_and_filing_attempt.sql",
+            "name": "20260418_drop_legacy_generic_result_tables.sql",
             "path": payload["migrations"][0]["path"],
-            "statement_count": 10,
+            "statement_count": 3,
         }
     ]
     assert payload["migrations"][0]["path"].endswith(
-        "src/db/migrations/20260411_add_evidence_locator_and_filing_attempt.sql"
+        "src/db/migrations/20260418_drop_legacy_generic_result_tables.sql"
     )
 
 
@@ -41,7 +41,7 @@ def test_cli_db_rollout_apply_dry_run_outputs_plan(monkeypatch) -> None:
     assert payload["applied"] is False
     assert payload["dry_run"] is True
     assert payload["dialect"] == "unresolved"
-    assert payload["statement_count"] == 10
+    assert payload["statement_count"] == 3
 
 
 def test_cli_db_rollout_apply_executes_against_configured_engine(monkeypatch) -> None:
@@ -87,7 +87,7 @@ def test_cli_db_init_bootstraps_base_schema(monkeypatch) -> None:
             applied=True,
             dialect="sqlite",
             table_count=3,
-            tables=["filing_document", "extracted_fact", "pipeline_log"],
+            tables=["filing_document", "holding_13f_summary", "pipeline_log"],
         )
 
     monkeypatch.setattr(cli_module, "init_database_schema", fake_init_database_schema)
@@ -126,7 +126,7 @@ def test_ensure_runtime_schema_ready_bootstraps_and_applies_rollout_once(monkeyp
             dry_run=False,
             dialect="postgresql",
             migration_count=1,
-            statement_count=10,
+            statement_count=3,
             migrations=[],
         ),
     )

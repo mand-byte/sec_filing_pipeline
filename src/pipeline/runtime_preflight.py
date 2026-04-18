@@ -35,8 +35,6 @@ _CORE_TABLES = {
     "issuer_exec_comp",
     "issuer_holder_ownership",
     "issuer_proxy_summary",
-    "extracted_fact",
-    "extraction_evidence",
     "pipeline_log",
     "filing_attempt",
     "route_watermark",

@@ -212,7 +212,7 @@ def test_review_workflow_service_corrected_updates_fact_and_persists_decision() 
         golden_packet = session.query(GoldenReviewPacket).one()
         assert fact is not None
         assert fact.value_numeric == 125.5
-        assert fact.value_unit is None
+        assert fact.value_unit == "shares"
         assert fact.confidence is None
         assert decision.decision == "CORRECTED"
         assert decision.reviewer == "alice"

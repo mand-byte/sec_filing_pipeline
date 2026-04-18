@@ -430,60 +430,6 @@ class IssuerProxySummary(Base):
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class ExtractedFact(Base):
-    __tablename__ = "extracted_fact"
-    __table_args__ = (
-        UniqueConstraint("accession_no", "route", "field_name", "subject_key", name="uq_fact_accession_route_field_subject"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    accession_no: Mapped[str] = mapped_column(
-        String(32),
-        ForeignKey("filing_document.accession_no"),
-        nullable=False,
-        index=True,
-    )
-    route: Mapped[str] = mapped_column(String(16), nullable=False)
-    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    subject_key: Mapped[str] = mapped_column(String(128), nullable=False, default="document", server_default="document")
-    value_numeric: Mapped[float | None] = mapped_column(Float, nullable=True)
-    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    value_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class ExtractionEvidence(Base):
-    __tablename__ = "extraction_evidence"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    accession_no: Mapped[str] = mapped_column(
-        String(32),
-        ForeignKey("filing_document.accession_no"),
-        nullable=False,
-        index=True,
-    )
-    route: Mapped[str] = mapped_column(String(16), nullable=False)
-    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    subject_key: Mapped[str] = mapped_column(String(128), nullable=False, default="document", server_default="document")
-    locator_kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    source_section: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    source_item_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    source_xpath: Mapped[str | None] = mapped_column(Text, nullable=True)
-    xbrl_concept: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    source_span: Mapped[str] = mapped_column(Text, nullable=False)
-    source_locator_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_heading_path_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_block_offsets_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    adequacy_signals_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    retry_history_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    selection_trace_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
-    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class PipelineLog(Base):
     __tablename__ = "pipeline_log"
 
@@ -532,12 +478,6 @@ class ReviewTask(Base):
     route: Mapped[str] = mapped_column(String(16), nullable=False)
     field_name: Mapped[str] = mapped_column(String(128), nullable=False)
     subject_key: Mapped[str] = mapped_column(String(128), nullable=False, default="document", server_default="document")
-    primary_evidence_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("extraction_evidence.id"),
-        nullable=True,
-        index=True,
-    )
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str | None] = mapped_column(String(64), nullable=True)

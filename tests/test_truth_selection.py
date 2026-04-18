@@ -10,7 +10,9 @@ from typer.testing import CliRunner
 
 import src.cli as cli_module
 from src.db.base import Base
-from src.db.models import ExtractedFact, FilingDocument, GoldenCase, GoldenSubject, GoldenTruth
+from src.db.models import GoldenCase, GoldenSubject, GoldenTruth
+from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
+from src.pipeline.types import FilingRecord
 from src.pipeline.truth_selection import select_preferred_truth
 
 
@@ -21,44 +23,29 @@ def _session_factory():
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, class_=Session, autoflush=False, expire_on_commit=False)
-
-
-def _seed_filing(session: Session, *, accession_no: str) -> None:
-    session.add(
-        FilingDocument(
-            accession_no=accession_no,
-            cik="0000789019",
-            ticker="MSFT",
-            form_type="4",
-            filed_at=None,
-            accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-            period_end=None,
-            is_amendment=False,
-            amendment_no=None,
-            created_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-        )
+def _owner_filing(accession_no: str) -> FilingRecord:
+    return FilingRecord(
+        accession_no=accession_no,
+        cik="0000789019",
+        ticker="MSFT",
+        form_type="4",
+        filed_at=None,
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        period_end=None,
+        is_amendment=False,
+        amendment_no=None,
     )
 
 
 def test_select_preferred_truth_returns_parsed_fact_when_manual_truth_missing() -> None:
     factory = _session_factory()
     with factory() as session:
-        _seed_filing(session, accession_no="0000000000-24-000030")
-        session.add(
-            ExtractedFact(
-                accession_no="0000000000-24-000030",
-                route="owner",
-                field_name="shares_acquired_or_disposed",
-                subject_key="txn:1",
-                value_numeric=100.0,
-                value_text=None,
-                value_json=None,
-                value_unit="shares",
-                confidence=0.99,
-                extracted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-            )
+        PersistenceService(session).persist_filing_bundle(
+            filing=_owner_filing("0000000000-24-000030"),
+            route="owner",
+            facts=[FactInput(field_name="shares_acquired_or_disposed", subject_key="txn:1", value_numeric=100.0, confidence=0.99)],
+            evidences=[EvidenceInput(field_name="shares_acquired_or_disposed", subject_key="txn:1", locator_kind="obj", source_span="transactions[0].shares", raw_value="100", normalized_value="100.0")],
         )
-        session.commit()
 
     with factory() as session:
         preferred = select_preferred_truth(
@@ -78,20 +65,11 @@ def test_select_preferred_truth_returns_parsed_fact_when_manual_truth_missing() 
 def test_select_preferred_truth_prefers_manual_review_ground_truth() -> None:
     factory = _session_factory()
     with factory() as session:
-        _seed_filing(session, accession_no="0000000000-24-000031")
-        session.add(
-            ExtractedFact(
-                accession_no="0000000000-24-000031",
-                route="owner",
-                field_name="shares_acquired_or_disposed",
-                subject_key="txn:1",
-                value_numeric=100.0,
-                value_text=None,
-                value_json=None,
-                value_unit="shares",
-                confidence=0.49,
-                extracted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-            )
+        PersistenceService(session).persist_filing_bundle(
+            filing=_owner_filing("0000000000-24-000031"),
+            route="owner",
+            facts=[FactInput(field_name="shares_acquired_or_disposed", subject_key="txn:1", value_numeric=100.0, confidence=0.49)],
+            evidences=[EvidenceInput(field_name="shares_acquired_or_disposed", subject_key="txn:1", locator_kind="obj", source_span="transactions[0].shares", raw_value="100", normalized_value="100.0")],
         )
         session.add(
             GoldenCase(
@@ -155,20 +133,11 @@ def test_select_preferred_truth_prefers_manual_review_ground_truth() -> None:
 def test_truth_select_cli_emits_preferred_ground_truth(monkeypatch) -> None:
     factory = _session_factory()
     with factory() as session:
-        _seed_filing(session, accession_no="0000000000-24-000032")
-        session.add(
-            ExtractedFact(
-                accession_no="0000000000-24-000032",
-                route="owner",
-                field_name="shares_acquired_or_disposed",
-                subject_key="txn:1",
-                value_numeric=100.0,
-                value_text=None,
-                value_json=None,
-                value_unit="shares",
-                confidence=0.49,
-                extracted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-            )
+        PersistenceService(session).persist_filing_bundle(
+            filing=_owner_filing("0000000000-24-000032"),
+            route="owner",
+            facts=[FactInput(field_name="shares_acquired_or_disposed", subject_key="txn:1", value_numeric=100.0, confidence=0.49)],
+            evidences=[EvidenceInput(field_name="shares_acquired_or_disposed", subject_key="txn:1", locator_kind="obj", source_span="transactions[0].shares", raw_value="100", normalized_value="100.0")],
         )
         session.add(
             GoldenCase(

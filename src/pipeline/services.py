@@ -6,8 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db.models import (
-    ExtractedFact,
-    ExtractionEvidence,
     FilingDocument,
     Holding13FPosition,
     Holding13FSummary,
@@ -120,33 +118,6 @@ class PersistenceService:
         """Persist extracted facts, evidences, and review tasks into the DB."""
         self.session = session
 
-    @staticmethod
-    def _bounded_text(value: str | None, *, limit: int) -> str | None:
-        """Trim text fields to the database column limit when present."""
-        if value is None:
-            return None
-        text = str(value)
-        return text[:limit]
-
-    @staticmethod
-    def _effective_source_locator_json(evidence: EvidenceInput) -> str:
-        """Reuse explicit locator JSON or derive a stable fallback payload."""
-        if evidence.source_locator_json is not None:
-            return evidence.source_locator_json
-
-        return json.dumps(
-            {
-                "locator_kind": evidence.locator_kind,
-                "source_span": evidence.source_span,
-                "source_section": evidence.source_section,
-                "source_item_no": evidence.source_item_no,
-                "source_xpath": evidence.source_xpath,
-                "xbrl_concept": evidence.xbrl_concept,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-
     def _upsert_filing_document(self, *, filing: FilingRecord, now: datetime) -> None:
         """Ensure the shared filing_document row exists before result persistence."""
         existing_doc = self.session.scalar(
@@ -177,7 +148,6 @@ class PersistenceService:
         route: RouteName | str,
         fact: FactInput,
         now: datetime,
-        primary_evidence_id: int | None = None,
     ) -> None:
         """Create one open review task when low-confidence output requires human review."""
         existing_review_task = self.session.scalar(
@@ -197,7 +167,6 @@ class PersistenceService:
                 route=route,
                 field_name=fact.field_name,
                 subject_key=fact.subject_key,
-                primary_evidence_id=primary_evidence_id,
                 status="open",
                 priority=fact.review_priority or "high",
                 reason=fact.review_reason,
@@ -327,7 +296,6 @@ class PersistenceService:
                     route="holding",
                     fact=fact,
                     now=now,
-                    primary_evidence_id=None,
                 )
 
         self.session.query(Holding13FPosition).filter(
@@ -419,7 +387,6 @@ class PersistenceService:
                     route=route,
                     fact=fact,
                     now=now,
-                    primary_evidence_id=None,
                 )
 
         if any(field in summary_facts for field in _OWNER_345_SUMMARY_FIELDS):
@@ -589,7 +556,6 @@ class PersistenceService:
                     route=route,
                     fact=fact,
                     now=now,
-                    primary_evidence_id=None,
                 )
 
         if any(field in summary_facts for field in (_ISSUER_PERIODIC_NUMERIC_FIELDS | _ISSUER_PERIODIC_TEXT_FIELDS)):
@@ -754,117 +720,6 @@ class PersistenceService:
             )
         self.session.commit()
 
-    def _persist_generic_bundle(
-        self,
-        *,
-        filing: FilingRecord,
-        route: RouteName | str,
-        facts: list[FactInput],
-        evidences: list[EvidenceInput],
-        now: datetime,
-    ) -> None:
-        """Persist non-specialized filings through the legacy generic fact/evidence tables."""
-        self._upsert_filing_document(filing=filing, now=now)
-
-        evidence_rows_by_key: dict[tuple[str, str], ExtractionEvidence] = {}
-        for evidence in evidences:
-            source_locator_json = self._effective_source_locator_json(evidence)
-            existing_evidence = self.session.scalar(
-                select(ExtractionEvidence).where(
-                    ExtractionEvidence.accession_no == filing.accession_no,
-                    ExtractionEvidence.route == route,
-                    ExtractionEvidence.field_name == evidence.field_name,
-                    ExtractionEvidence.subject_key == evidence.subject_key,
-                    ExtractionEvidence.locator_kind == evidence.locator_kind,
-                    ExtractionEvidence.source_span == evidence.source_span,
-                    ExtractionEvidence.source_section == evidence.source_section,
-                    ExtractionEvidence.source_item_no == evidence.source_item_no,
-                    ExtractionEvidence.source_xpath == evidence.source_xpath,
-                    ExtractionEvidence.xbrl_concept == evidence.xbrl_concept,
-                    ExtractionEvidence.raw_value == evidence.raw_value,
-                    ExtractionEvidence.normalized_value == evidence.normalized_value,
-                    ExtractionEvidence.source_locator_json == source_locator_json,
-                    ExtractionEvidence.source_heading_path_json == evidence.source_heading_path_json,
-                    ExtractionEvidence.source_block_offsets_json == evidence.source_block_offsets_json,
-                    ExtractionEvidence.adequacy_signals_json == evidence.adequacy_signals_json,
-                    ExtractionEvidence.retry_history_json == evidence.retry_history_json,
-                    ExtractionEvidence.selection_trace_json == evidence.selection_trace_json,
-                )
-            )
-            evidence_row = existing_evidence
-            if evidence_row is None:
-                evidence_row = ExtractionEvidence(
-                    accession_no=filing.accession_no,
-                    route=route,
-                    field_name=evidence.field_name,
-                    subject_key=evidence.subject_key,
-                    locator_kind=evidence.locator_kind,
-                    source_section=self._bounded_text(evidence.source_section, limit=128),
-                    source_item_no=self._bounded_text(evidence.source_item_no, limit=32),
-                    source_xpath=evidence.source_xpath,
-                    xbrl_concept=self._bounded_text(evidence.xbrl_concept, limit=128),
-                    source_span=evidence.source_span,
-                    source_locator_json=source_locator_json,
-                    source_heading_path_json=evidence.source_heading_path_json,
-                    source_block_offsets_json=evidence.source_block_offsets_json,
-                    adequacy_signals_json=evidence.adequacy_signals_json,
-                    retry_history_json=evidence.retry_history_json,
-                    selection_trace_json=evidence.selection_trace_json,
-                    raw_value=evidence.raw_value,
-                    normalized_value=evidence.normalized_value,
-                    created_at=now,
-                )
-                self.session.add(evidence_row)
-
-            evidence_rows_by_key[(evidence.field_name, evidence.subject_key)] = evidence_row
-
-        self.session.flush()
-
-        for fact in facts:
-            existing_fact = self.session.scalar(
-                select(ExtractedFact).where(
-                    ExtractedFact.accession_no == filing.accession_no,
-                    ExtractedFact.route == route,
-                    ExtractedFact.field_name == fact.field_name,
-                    ExtractedFact.subject_key == fact.subject_key,
-                )
-            )
-
-            if existing_fact is None:
-                self.session.add(
-                    ExtractedFact(
-                        accession_no=filing.accession_no,
-                        route=route,
-                        field_name=fact.field_name,
-                        subject_key=fact.subject_key,
-                        value_numeric=fact.value_numeric,
-                        value_text=fact.value_text,
-                        value_json=fact.value_json,
-                        value_unit=fact.value_unit,
-                        confidence=fact.confidence,
-                        extracted_at=now,
-                    )
-                )
-            else:
-                existing_fact.value_numeric = fact.value_numeric
-                existing_fact.value_text = fact.value_text
-                existing_fact.value_json = fact.value_json
-                existing_fact.value_unit = fact.value_unit
-                existing_fact.confidence = fact.confidence
-                existing_fact.extracted_at = now
-
-            if fact.confidence is not None and fact.confidence < 0.5:
-                evidence_row = evidence_rows_by_key.get((fact.field_name, fact.subject_key))
-                self._upsert_open_review_task(
-                    filing=filing,
-                    route=route,
-                    fact=fact,
-                    now=now,
-                    primary_evidence_id=evidence_row.id if evidence_row is not None else None,
-                )
-
-        self.session.commit()
-
     def persist_filing_bundle(
         self,
         *,
@@ -917,10 +772,4 @@ class PersistenceService:
             )
             return
 
-        self._persist_generic_bundle(
-            filing=filing,
-            route=route,
-            facts=facts,
-            evidences=evidences,
-            now=now,
-        )
+        raise ValueError(f"unsupported route for specialized persistence: {route}")

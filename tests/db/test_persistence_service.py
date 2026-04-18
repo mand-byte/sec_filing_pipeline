@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.base import Base
 from src.db.models import (
-    ExtractedFact,
-    ExtractionEvidence,
     FilingDocument,
     IssuerEventSummary,
     IssuerExecComp,
@@ -141,8 +139,6 @@ def test_persist_filing_bundle_supports_multiple_subject_keys() -> None:
     assert [txn.subject_key for txn in txns] == ["txn:1", "txn:2"]
     assert '"source_locator_json": "{\\"kind\\":\\"obj\\",\\"path\\":\\"transactions[0].shares\\"}"' in txns[0].evidence_map_json
     assert '"source_locator_json": "{\\"kind\\":\\"obj\\",\\"path\\":\\"transactions[1].shares\\"}"' in txns[1].evidence_map_json
-    assert session.query(ExtractedFact).all() == []
-    assert session.query(ExtractionEvidence).all() == []
 
 
 def test_persist_filing_bundle_derives_source_locator_json_when_missing() -> None:
@@ -390,8 +386,6 @@ def test_persist_filing_bundle_supports_holding_position_rows() -> None:
     assert positions[1].subject_key == "position:2"
     assert positions[1].position_value_usd == 750000.0
     assert positions[1].shares_or_principal_amount == 600.0
-    assert session.query(ExtractedFact).all() == []
-    assert session.query(ExtractionEvidence).all() == []
 
 
 def test_persist_filing_bundle_populates_owner_345_specialized_tables() -> None:
@@ -430,7 +424,6 @@ def test_persist_filing_bundle_populates_owner_345_specialized_tables() -> None:
     assert pos.subject_key == "nhold:1"
     assert pos.position_kind == "non_derivative"
     assert pos.non_derivative_shares_owned == 500.0
-    assert session.query(ExtractedFact).count() == 0
 
 
 def test_persist_filing_bundle_populates_owner_13dg_and_144_specialized_tables() -> None:
@@ -571,7 +564,6 @@ def test_persist_filing_bundle_creates_row_level_review_tasks_with_primary_evide
     review_tasks = session.query(ReviewTask).order_by(ReviewTask.subject_key).all()
     assert len(review_tasks) == 2
     assert [task.subject_key for task in review_tasks] == ["txn:1", "txn:2"]
-    assert all(task.primary_evidence_id is None for task in review_tasks)
 
 
 def test_persist_filing_bundle_deduplicates_open_review_tasks_by_subject_key() -> None:
