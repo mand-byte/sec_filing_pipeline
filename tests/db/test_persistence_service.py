@@ -6,7 +6,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.base import Base
-from src.db.models import ExtractedFact, ExtractionEvidence, FilingDocument, ReviewTask
+from src.db.models import (
+    ExtractedFact,
+    ExtractionEvidence,
+    FilingDocument,
+    Holding13FPosition,
+    Holding13FSummary,
+    ReviewTask,
+)
 from src.pipeline.services import EvidenceInput, FactInput, PersistenceService
 from src.pipeline.types import FilingRecord
 
@@ -28,6 +35,20 @@ def _filing() -> FilingRecord:
         period_end=None,
         is_amendment=False,
         amendment_no=None,
+    )
+
+
+def _holding_filing(form_type: str = "13F-HR") -> FilingRecord:
+    return FilingRecord(
+        accession_no="0000000000-24-000013",
+        cik="0000789019",
+        ticker="MSFT",
+        form_type=form_type,
+        filed_at=None,
+        accepted_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        period_end=None,
+        is_amendment=form_type.endswith("/A"),
+        amendment_no=1 if form_type.endswith("/A") else None,
     )
 
 
@@ -257,12 +278,15 @@ def test_persist_filing_bundle_supports_holding_position_rows() -> None:
     service = PersistenceService(session)
 
     service.persist_filing_bundle(
-        filing=_filing(),
+        filing=_holding_filing(),
         route="holding",
         facts=[
             FactInput(field_name="position_value_usd", subject_key="position:1", value_numeric=1250000.0),
+            FactInput(field_name="shares_or_principal_amount", subject_key="position:1", value_numeric=1000.0),
             FactInput(field_name="position_value_usd", subject_key="position:2", value_numeric=750000.0),
+            FactInput(field_name="shares_or_principal_amount", subject_key="position:2", value_numeric=600.0),
             FactInput(field_name="info_table_entry_total", subject_key="document", value_numeric=2.0),
+            FactInput(field_name="info_table_value_total_usd", subject_key="document", value_numeric=2000000.0),
         ],
         evidences=[
             EvidenceInput(
@@ -274,12 +298,28 @@ def test_persist_filing_bundle_supports_holding_position_rows() -> None:
                 normalized_value="1250000.0",
             ),
             EvidenceInput(
+                field_name="shares_or_principal_amount",
+                subject_key="position:1",
+                locator_kind="obj",
+                source_span="infotable[0].SharesPrnAmount",
+                raw_value="1000",
+                normalized_value="1000.0",
+            ),
+            EvidenceInput(
                 field_name="position_value_usd",
                 subject_key="position:2",
                 locator_kind="obj",
                 source_span="infotable[1].Value",
                 raw_value="750",
                 normalized_value="750000.0",
+            ),
+            EvidenceInput(
+                field_name="shares_or_principal_amount",
+                subject_key="position:2",
+                locator_kind="obj",
+                source_span="infotable[1].SharesPrnAmount",
+                raw_value="600",
+                normalized_value="600.0",
             ),
             EvidenceInput(
                 field_name="info_table_entry_total",
@@ -289,16 +329,31 @@ def test_persist_filing_bundle_supports_holding_position_rows() -> None:
                 raw_value="2",
                 normalized_value="2.0",
             ),
+            EvidenceInput(
+                field_name="info_table_value_total_usd",
+                subject_key="document",
+                locator_kind="obj",
+                source_span="summary_page.tableValueTotal",
+                raw_value="2000",
+                normalized_value="2000000.0",
+            ),
         ],
     )
 
-    facts = session.query(ExtractedFact).order_by(ExtractedFact.subject_key, ExtractedFact.field_name).all()
-    assert len(facts) == 3
-    assert [fact.subject_key for fact in facts] == ["document", "position:1", "position:2"]
+    summary = session.query(Holding13FSummary).one()
+    positions = session.query(Holding13FPosition).order_by(Holding13FPosition.position_index.asc()).all()
 
-    evidences = session.query(ExtractionEvidence).order_by(ExtractionEvidence.subject_key, ExtractionEvidence.field_name).all()
-    assert len(evidences) == 3
-    assert [evidence.subject_key for evidence in evidences] == ["document", "position:1", "position:2"]
+    assert summary.accession_no == "0000000000-24-000013"
+    assert summary.info_table_entry_total == 2.0
+    assert summary.info_table_value_total_usd == 2000000.0
+    assert positions[0].subject_key == "position:1"
+    assert positions[0].position_value_usd == 1250000.0
+    assert positions[0].shares_or_principal_amount == 1000.0
+    assert positions[1].subject_key == "position:2"
+    assert positions[1].position_value_usd == 750000.0
+    assert positions[1].shares_or_principal_amount == 600.0
+    assert session.query(ExtractedFact).all() == []
+    assert session.query(ExtractionEvidence).all() == []
 
 
 def test_persist_filing_bundle_creates_row_level_review_tasks_with_primary_evidence_link() -> None:

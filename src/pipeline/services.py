@@ -5,7 +5,14 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.db.models import ExtractedFact, ExtractionEvidence, FilingDocument, ReviewTask
+from src.db.models import (
+    ExtractedFact,
+    ExtractionEvidence,
+    FilingDocument,
+    Holding13FPosition,
+    Holding13FSummary,
+    ReviewTask,
+)
 from src.pipeline.types import FilingRecord, RouteName
 
 
@@ -74,49 +81,208 @@ class PersistenceService:
             sort_keys=True,
         )
 
-    def persist_filing_bundle(
+    def _upsert_filing_document(self, *, filing: FilingRecord, now: datetime) -> None:
+        """Ensure the shared filing_document row exists before result persistence."""
+        existing_doc = self.session.scalar(
+            select(FilingDocument).where(FilingDocument.accession_no == filing.accession_no)
+        )
+        if existing_doc is not None:
+            return
+        self.session.add(
+            FilingDocument(
+                accession_no=filing.accession_no,
+                cik=filing.cik,
+                ticker=filing.ticker,
+                form_type=filing.form_type,
+                filed_at=filing.filed_at,
+                accepted_at=filing.accepted_at,
+                period_end=filing.period_end,
+                is_amendment=filing.is_amendment,
+                amendment_no=filing.amendment_no,
+                created_at=now,
+            )
+        )
+        self.session.flush()
+
+    def _upsert_open_review_task(
+        self,
+        *,
+        filing: FilingRecord,
+        route: RouteName | str,
+        fact: FactInput,
+        now: datetime,
+        primary_evidence_id: int | None = None,
+    ) -> None:
+        """Create one open review task when low-confidence output requires human review."""
+        existing_review_task = self.session.scalar(
+            select(ReviewTask).where(
+                ReviewTask.accession_no == filing.accession_no,
+                ReviewTask.route == route,
+                ReviewTask.field_name == fact.field_name,
+                ReviewTask.subject_key == fact.subject_key,
+                ReviewTask.status == "open",
+            )
+        )
+        if existing_review_task is not None:
+            return
+        self.session.add(
+            ReviewTask(
+                accession_no=filing.accession_no,
+                route=route,
+                field_name=fact.field_name,
+                subject_key=fact.subject_key,
+                primary_evidence_id=primary_evidence_id,
+                status="open",
+                priority=fact.review_priority or "high",
+                reason=fact.review_reason,
+                assignee=None,
+                created_at=now,
+                resolved_at=None,
+            )
+        )
+
+    @staticmethod
+    def _is_holding_13f_bundle(*, route: RouteName | str, filing: FilingRecord) -> bool:
+        """Return True when a filing should persist through the specialized 13F tables."""
+        return str(route) == "holding" and filing.form_type.strip().upper().startswith("13F-HR")
+
+    @staticmethod
+    def _evidence_payload(evidence: EvidenceInput) -> dict[str, object | None]:
+        """Convert one evidence input into the compact persisted JSON payload."""
+        return {
+            "locator_kind": evidence.locator_kind,
+            "source_section": evidence.source_section,
+            "source_item_no": evidence.source_item_no,
+            "source_xpath": evidence.source_xpath,
+            "xbrl_concept": evidence.xbrl_concept,
+            "source_span": evidence.source_span,
+            "source_locator_json": evidence.source_locator_json,
+            "source_heading_path_json": evidence.source_heading_path_json,
+            "source_block_offsets_json": evidence.source_block_offsets_json,
+            "adequacy_signals_json": evidence.adequacy_signals_json,
+            "retry_history_json": evidence.retry_history_json,
+            "selection_trace_json": evidence.selection_trace_json,
+            "raw_value": evidence.raw_value,
+            "normalized_value": evidence.normalized_value,
+        }
+
+    def _persist_holding_13f_bundle(
         self,
         *,
         filing: FilingRecord,
         route: RouteName | str,
         facts: list[FactInput],
         evidences: list[EvidenceInput],
+        now: datetime,
     ) -> None:
-        """Upsert one filing's extracted facts and linked evidence rows."""
-        if facts and not evidences:
-            raise ValueError("at least one evidence")
+        """Persist 13F holding outputs into specialized summary + position tables."""
+        del route
+        self._upsert_filing_document(filing=filing, now=now)
 
-        if facts:
-            evidence_keys = {(evidence.field_name, evidence.subject_key) for evidence in evidences}
-            missing_evidence = [
-                (fact.field_name, fact.subject_key)
-                for fact in facts
-                if (fact.field_name, fact.subject_key) not in evidence_keys
-            ]
-            if missing_evidence:
-                raise ValueError("at least one evidence")
+        evidence_map_by_subject: dict[str, dict[str, list[dict[str, object | None]]]] = {}
+        for evidence in evidences:
+            subject_map = evidence_map_by_subject.setdefault(evidence.subject_key, {})
+            field_payloads = subject_map.setdefault(evidence.field_name, [])
+            field_payloads.append(self._evidence_payload(evidence))
 
-        now = datetime.now(timezone.utc)
+        summary_values: dict[str, object | None] = {}
+        summary_facts = {
+            fact.field_name: fact
+            for fact in facts
+            if fact.subject_key == "document"
+        }
+        position_values: dict[str, dict[str, object | None]] = {}
+        for fact in facts:
+            if fact.subject_key == "document":
+                summary_values[fact.field_name] = fact.value_numeric if fact.value_numeric is not None else (
+                    fact.value_text if fact.value_text is not None else fact.value_json
+                )
+            elif fact.subject_key.startswith("position:"):
+                position_map = position_values.setdefault(fact.subject_key, {})
+                position_map[fact.field_name] = fact.value_numeric if fact.value_numeric is not None else (
+                    fact.value_text if fact.value_text is not None else fact.value_json
+                )
 
-        existing_doc = self.session.scalar(
-            select(FilingDocument).where(FilingDocument.accession_no == filing.accession_no)
+            if fact.confidence is not None and fact.confidence < 0.5:
+                self._upsert_open_review_task(
+                    filing=filing,
+                    route="holding",
+                    fact=fact,
+                    now=now,
+                    primary_evidence_id=None,
+                )
+
+        self.session.query(Holding13FPosition).filter(
+            Holding13FPosition.accession_no == filing.accession_no
+        ).delete(synchronize_session=False)
+        self.session.query(Holding13FSummary).filter(
+            Holding13FSummary.accession_no == filing.accession_no
+        ).delete(synchronize_session=False)
+
+        summary_evidence_map = evidence_map_by_subject.get("document", {})
+        self.session.add(
+            Holding13FSummary(
+                accession_no=filing.accession_no,
+                info_table_entry_total=(
+                    float(summary_values["info_table_entry_total"])
+                    if summary_values.get("info_table_entry_total") is not None
+                    else None
+                ),
+                info_table_value_total_usd=(
+                    float(summary_values["info_table_value_total_usd"])
+                    if summary_values.get("info_table_value_total_usd") is not None
+                    else None
+                ),
+                other_included_managers_count=(
+                    float(summary_values["other_included_managers_count"])
+                    if summary_values.get("other_included_managers_count") is not None
+                    else None
+                ),
+                manager_structure_quant_text=summary_facts["manager_structure_quant"].value_text if "manager_structure_quant" in summary_facts else None,
+                manager_structure_quant_json=summary_facts["manager_structure_quant"].value_json if "manager_structure_quant" in summary_facts else None,
+                amendment_scope_quant_text=summary_facts["amendment_scope_quant"].value_text if "amendment_scope_quant" in summary_facts else None,
+                amendment_scope_quant_json=summary_facts["amendment_scope_quant"].value_json if "amendment_scope_quant" in summary_facts else None,
+                evidence_map_json=json.dumps(summary_evidence_map, ensure_ascii=False, sort_keys=True)
+                if summary_evidence_map
+                else None,
+                extracted_at=now,
+            )
         )
-        if existing_doc is None:
+
+        for subject_key, values in sorted(
+            position_values.items(),
+            key=lambda item: int(item[0].split(":", 1)[1]) if ":" in item[0] and item[0].split(":", 1)[1].isdigit() else 0,
+        ):
+            position_index = int(subject_key.split(":", 1)[1]) if ":" in subject_key and subject_key.split(":", 1)[1].isdigit() else 0
+            evidence_map = evidence_map_by_subject.get(subject_key, {})
             self.session.add(
-                FilingDocument(
+                Holding13FPosition(
                     accession_no=filing.accession_no,
-                    cik=filing.cik,
-                    ticker=filing.ticker,
-                    form_type=filing.form_type,
-                    filed_at=filing.filed_at,
-                    accepted_at=filing.accepted_at,
-                    period_end=filing.period_end,
-                    is_amendment=filing.is_amendment,
-                    amendment_no=filing.amendment_no,
-                    created_at=now,
+                    subject_key=subject_key,
+                    position_index=position_index,
+                    position_value_usd=float(values["position_value_usd"]) if values.get("position_value_usd") is not None else None,
+                    shares_or_principal_amount=float(values["shares_or_principal_amount"]) if values.get("shares_or_principal_amount") is not None else None,
+                    sole_voting_auth_shares=float(values["sole_voting_auth_shares"]) if values.get("sole_voting_auth_shares") is not None else None,
+                    shared_voting_auth_shares=float(values["shared_voting_auth_shares"]) if values.get("shared_voting_auth_shares") is not None else None,
+                    none_voting_auth_shares=float(values["none_voting_auth_shares"]) if values.get("none_voting_auth_shares") is not None else None,
+                    evidence_map_json=json.dumps(evidence_map, ensure_ascii=False, sort_keys=True) if evidence_map else None,
+                    extracted_at=now,
                 )
             )
-            self.session.flush()
+
+        self.session.commit()
+
+    def _persist_generic_bundle(
+        self,
+        *,
+        filing: FilingRecord,
+        route: RouteName | str,
+        facts: list[FactInput],
+        evidences: list[EvidenceInput],
+        now: datetime,
+    ) -> None:
+        """Persist non-specialized filings through the legacy generic fact/evidence tables."""
+        self._upsert_filing_document(filing=filing, now=now)
 
         evidence_rows_by_key: dict[tuple[str, str], ExtractionEvidence] = {}
         for evidence in evidences:
@@ -207,30 +373,53 @@ class PersistenceService:
 
             if fact.confidence is not None and fact.confidence < 0.5:
                 evidence_row = evidence_rows_by_key.get((fact.field_name, fact.subject_key))
-                existing_review_task = self.session.scalar(
-                    select(ReviewTask).where(
-                        ReviewTask.accession_no == filing.accession_no,
-                        ReviewTask.route == route,
-                        ReviewTask.field_name == fact.field_name,
-                        ReviewTask.subject_key == fact.subject_key,
-                        ReviewTask.status == "open",
-                    )
+                self._upsert_open_review_task(
+                    filing=filing,
+                    route=route,
+                    fact=fact,
+                    now=now,
+                    primary_evidence_id=evidence_row.id if evidence_row is not None else None,
                 )
-                if existing_review_task is None:
-                    self.session.add(
-                        ReviewTask(
-                            accession_no=filing.accession_no,
-                            route=route,
-                            field_name=fact.field_name,
-                            subject_key=fact.subject_key,
-                            primary_evidence_id=evidence_row.id if evidence_row is not None else None,
-                            status="open",
-                            priority=fact.review_priority or "high",
-                            reason=fact.review_reason,
-                            assignee=None,
-                            created_at=now,
-                            resolved_at=None,
-                        )
-                    )
 
         self.session.commit()
+
+    def persist_filing_bundle(
+        self,
+        *,
+        filing: FilingRecord,
+        route: RouteName | str,
+        facts: list[FactInput],
+        evidences: list[EvidenceInput],
+    ) -> None:
+        """Upsert one filing's extracted facts and linked evidence rows."""
+        if facts and not evidences:
+            raise ValueError("at least one evidence")
+
+        if facts:
+            evidence_keys = {(evidence.field_name, evidence.subject_key) for evidence in evidences}
+            missing_evidence = [
+                (fact.field_name, fact.subject_key)
+                for fact in facts
+                if (fact.field_name, fact.subject_key) not in evidence_keys
+            ]
+            if missing_evidence:
+                raise ValueError("at least one evidence")
+
+        now = datetime.now(timezone.utc)
+        if self._is_holding_13f_bundle(route=route, filing=filing):
+            self._persist_holding_13f_bundle(
+                filing=filing,
+                route=route,
+                facts=facts,
+                evidences=evidences,
+                now=now,
+            )
+            return
+
+        self._persist_generic_bundle(
+            filing=filing,
+            route=route,
+            facts=facts,
+            evidences=evidences,
+            now=now,
+        )

@@ -73,6 +73,49 @@ class FilingDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class Holding13FSummary(Base):
+    __tablename__ = "holding_13f_summary"
+
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        primary_key=True,
+    )
+    info_table_entry_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    info_table_value_total_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    other_included_managers_count: Mapped[float | None] = mapped_column(Float, nullable=True)
+    manager_structure_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    manager_structure_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amendment_scope_quant_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amendment_scope_quant_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Holding13FPosition(Base):
+    __tablename__ = "holding_13f_position"
+    __table_args__ = (
+        UniqueConstraint("accession_no", "subject_key", name="uq_holding_13f_position_accession_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    position_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    position_value_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shares_or_principal_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sole_voting_auth_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shared_voting_auth_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    none_voting_auth_shares: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ExtractedFact(Base):
     __tablename__ = "extracted_fact"
     __table_args__ = (

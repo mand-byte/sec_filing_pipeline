@@ -18,6 +18,8 @@ _QUALIFIED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za
 _CORE_TABLES = {
     "security_master",
     "filing_document",
+    "holding_13f_summary",
+    "holding_13f_position",
     "extracted_fact",
     "extraction_evidence",
     "pipeline_log",
