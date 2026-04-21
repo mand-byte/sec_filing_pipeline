@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import Settings
@@ -9,7 +10,26 @@ from src.config import Settings
 @lru_cache(maxsize=None)
 def _engine_for_dsn(pg_dsn: str) -> Engine:
     """Reuse one SQLAlchemy engine per DSN."""
-    return create_engine(pg_dsn)
+    engine_kwargs: dict[str, object] = {}
+    try:
+        backend_name = make_url(pg_dsn).get_backend_name()
+    except Exception:
+        backend_name = ""
+
+    if backend_name == "postgresql":
+        engine_kwargs.update(
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            connect_args={
+                "options": (
+                    "-c application_name=sec_filing_pipeline "
+                    "-c lock_timeout=60000 "
+                    "-c idle_in_transaction_session_timeout=300000"
+                )
+            },
+        )
+
+    return create_engine(pg_dsn, **engine_kwargs)
 
 
 @lru_cache(maxsize=None)

@@ -280,14 +280,41 @@ class PipelineRepository:
 
         self._commit_with_rollback()
 
-    def is_filing_completed(self, *, route: RouteName, accession_no: str) -> bool:
-        """Return True when the latest DB attempt for this route/accession is completed."""
-        row = self.session.scalar(
+    def latest_filing_attempt(self, *, route: RouteName, accession_no: str) -> FilingAttempt | None:
+        """Return the latest attempt row for one route/accession across all runs."""
+        return self.session.scalar(
             select(FilingAttempt).where(
                 FilingAttempt.route == route,
                 FilingAttempt.accession_no == accession_no,
             ).order_by(FilingAttempt.updated_at.desc(), FilingAttempt.id.desc())
         )
+
+    def fail_stale_in_progress_attempt(
+        self,
+        *,
+        route: RouteName,
+        accession_no: str,
+        older_than: datetime,
+        error_type: str,
+        error_detail: str,
+    ) -> bool:
+        """Mark the latest in-progress attempt failed when it is older than the cutoff."""
+        row = self.latest_filing_attempt(route=route, accession_no=accession_no)
+        if row is None or row.status != "in_progress":
+            return False
+        if _normalize_to_utc(row.updated_at) >= _normalize_to_utc(older_than):
+            return False
+
+        row.status = "failed"
+        row.error_type = error_type
+        row.error_detail = error_detail
+        row.updated_at = datetime.now(timezone.utc)
+        self._commit_with_rollback()
+        return True
+
+    def is_filing_completed(self, *, route: RouteName, accession_no: str) -> bool:
+        """Return True when the latest DB attempt for this route/accession is completed."""
+        row = self.latest_filing_attempt(route=route, accession_no=accession_no)
         if row is None:
             return False
         return row.status == "completed"

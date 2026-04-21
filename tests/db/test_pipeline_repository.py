@@ -125,6 +125,63 @@ def test_is_filing_completed_uses_latest_attempt_status() -> None:
     assert repo.is_filing_completed(route="issuer", accession_no="0000000000-24-000001") is False
 
 
+def test_fail_stale_in_progress_attempt_marks_latest_old_attempt_failed() -> None:
+    session = _session()
+    repo = PipelineRepository(session)
+
+    repo.upsert_filing_attempt(
+        run_id="run-001",
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        cik="0000789019",
+        accepted_at=None,
+        status="in_progress",
+    )
+    row = session.query(FilingAttempt).one()
+    row.updated_at = datetime(2024, 5, 1, tzinfo=timezone.utc).replace(tzinfo=None)
+    session.commit()
+
+    marked = repo.fail_stale_in_progress_attempt(
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        older_than=datetime(2024, 5, 2, tzinfo=timezone.utc),
+        error_type="STALE_IN_PROGRESS_ATTEMPT",
+        error_detail="stale",
+    )
+
+    updated = session.query(FilingAttempt).one()
+    assert marked is True
+    assert updated.status == "failed"
+    assert updated.error_type == "STALE_IN_PROGRESS_ATTEMPT"
+    assert updated.error_detail == "stale"
+
+
+def test_fail_stale_in_progress_attempt_keeps_recent_attempt_active() -> None:
+    session = _session()
+    repo = PipelineRepository(session)
+
+    repo.upsert_filing_attempt(
+        run_id="run-001",
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        cik="0000789019",
+        accepted_at=None,
+        status="in_progress",
+    )
+
+    marked = repo.fail_stale_in_progress_attempt(
+        route="issuer",
+        accession_no="0000000000-24-000001",
+        older_than=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        error_type="STALE_IN_PROGRESS_ATTEMPT",
+        error_detail="stale",
+    )
+
+    updated = session.query(FilingAttempt).one()
+    assert marked is False
+    assert updated.status == "in_progress"
+
+
 def test_upsert_route_watermark_only_moves_forward() -> None:
     session = _session()
     repo = PipelineRepository(session)

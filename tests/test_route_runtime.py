@@ -53,15 +53,23 @@ class FakeSession:
 
 
 class FakeRepo:
-    def __init__(self, *, watermark: datetime | None = None, completion: object | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        watermark: datetime | None = None,
+        completion: object | None = None,
+        stale_attempts: set[tuple[str, str]] | None = None,
+    ) -> None:
         self.session = FakeSession()
         self.watermark = watermark
         self.completion = completion
+        self.stale_attempts = set(stale_attempts or set())
         self.logs: list[dict[str, object]] = []
         self.upserted_watermarks: list[tuple[str, str, datetime]] = []
         self.completed_routes: list[dict[str, object]] = []
         self.invalidations: list[tuple[str, str, str]] = []
         self.filing_attempts: list[dict[str, object]] = []
+        self.stale_failures: list[dict[str, object]] = []
 
     def get_delisted_route_completion(self, *, composite_figi: str, cik: str, route: str) -> object | None:
         return self.completion
@@ -80,6 +88,30 @@ class FakeRepo:
 
     def upsert_filing_attempt(self, **kwargs: object) -> None:
         self.filing_attempts.append(dict(kwargs))
+
+    def fail_stale_in_progress_attempt(
+        self,
+        *,
+        route: str,
+        accession_no: str,
+        older_than: datetime,
+        error_type: str,
+        error_detail: str,
+    ) -> bool:
+        del older_than
+        key = (route, accession_no)
+        if key not in self.stale_attempts:
+            return False
+        self.stale_attempts.remove(key)
+        self.stale_failures.append(
+            {
+                "route": route,
+                "accession_no": accession_no,
+                "error_type": error_type,
+                "error_detail": error_detail,
+            }
+        )
+        return True
 
     def mark_delisted_route_completed(
         self,
@@ -190,6 +222,45 @@ def test_route_processor_continues_after_bundle_failure_and_advances_watermark_b
     assert failed_attempt["status"] == "failed"
     assert failed_attempt["error_type"] == "RuntimeError"
     assert "persist exploded" in str(failed_attempt["error_detail"])
+
+
+def test_route_processor_auto_fails_stale_in_progress_attempt_before_retry() -> None:
+    accepted_at = datetime(2024, 5, 1, tzinfo=timezone.utc)
+    bundle = FilingBundle(filing=_filing("0000000000-24-000099", accepted_at))
+    repo = FakeRepo(stale_attempts={("owner", "0000000000-24-000099")})
+    persistence_service = FakePersistenceService()
+    processor = RouteProcessor(
+        repo=repo,
+        persistence_service=persistence_service,
+        start_date=date(2024, 1, 1),
+        provider_bundle_builder=lambda **kwargs: [bundle],
+    )
+
+    processor.run(
+        security=SimpleNamespace(
+            cik="0000789019",
+            active=True,
+            composite_figi="FIGI1",
+            delisted_utc=None,
+        ),
+        route="owner",
+        run_id="run-stale-001",
+    )
+
+    assert repo.stale_failures == [
+        {
+            "route": "owner",
+            "accession_no": "0000000000-24-000099",
+            "error_type": "STALE_IN_PROGRESS_ATTEMPT",
+            "error_detail": "auto-failed stale in_progress attempt before retry; timeout_seconds=1800",
+        }
+    ]
+    assert [log["message"] for log in repo.logs] == [
+        "stale in-progress attempt auto-failed before retry",
+        "filing persisted",
+        "route processed: eligible=1 persisted=1 failed=0 skipped_before_watermark=0 skipped_ineligible=0",
+    ]
+    assert [attempt["status"] for attempt in repo.filing_attempts] == ["in_progress", "completed"]
 
 
 def test_route_processor_streams_provider_bundles_atomically_when_builder_supports_on_bundle() -> None:

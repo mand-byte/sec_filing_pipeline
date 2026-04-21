@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import json
 import traceback
 from typing import Any, Callable
@@ -32,6 +32,10 @@ class BundleBuildOutcome:
 
 class _AtomicRouteStop(RuntimeError):
     """Sentinel exception used to stop a route after a hard filing failure."""
+
+
+_STALE_IN_PROGRESS_TIMEOUT = timedelta(minutes=30)
+_STALE_IN_PROGRESS_ERROR_TYPE = "STALE_IN_PROGRESS_ATTEMPT"
 
 
 def _normalize_to_utc(value: datetime) -> datetime:
@@ -349,6 +353,49 @@ class RouteProcessor:
                 return True
 
             eligible_bundles += 1
+            stale_detail = (
+                "auto-failed stale in_progress attempt before retry; "
+                f"timeout_seconds={int(_STALE_IN_PROGRESS_TIMEOUT.total_seconds())}"
+            )
+            try:
+                stale_cutoff = datetime.now(timezone.utc) - _STALE_IN_PROGRESS_TIMEOUT
+                stale_marked = self.repo.fail_stale_in_progress_attempt(
+                    route=route,
+                    accession_no=bundle.filing.accession_no,
+                    older_than=stale_cutoff,
+                    error_type=_STALE_IN_PROGRESS_ERROR_TYPE,
+                    error_detail=stale_detail,
+                )
+            except AttributeError:
+                stale_marked = False
+            except Exception as exc:
+                stale_marked = False
+                _safe_write_log(
+                    self.repo,
+                    run_id=run_id,
+                    route=route,
+                    cik=cik,
+                    accession_no=bundle.filing.accession_no,
+                    stage="persist",
+                    level="ERROR",
+                    message="stale in-progress recovery failed",
+                    error_type=exc.__class__.__name__,
+                    error_detail=_format_exception_detail(exc),
+                )
+            if stale_marked:
+                _safe_write_log(
+                    self.repo,
+                    run_id=run_id,
+                    route=route,
+                    cik=cik,
+                    accession_no=bundle.filing.accession_no,
+                    stage="persist",
+                    level="INFO",
+                    message="stale in-progress attempt auto-failed before retry",
+                    error_type=_STALE_IN_PROGRESS_ERROR_TYPE,
+                    error_detail=stale_detail,
+                )
+
             try:
                 self.repo.upsert_filing_attempt(
                     run_id=run_id,
