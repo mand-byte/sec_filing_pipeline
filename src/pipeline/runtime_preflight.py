@@ -10,35 +10,13 @@ from sqlalchemy import Engine, inspect, select, func
 from sqlalchemy.orm import Session
 
 from src.config import Settings
-from src.db.models import SecurityMaster
+from src.db.models import AUDIT_TABLE_NAMES, PRODUCTION_TABLE_NAMES, SecurityMaster
 from src.db.session import build_engine, get_session_factory
 
 
 _QUALIFIED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
-_CORE_TABLES = {
-    "security_master",
-    "filing_document",
-    "holding_13f_summary",
-    "holding_13f_position",
-    "owner_345_summary",
-    "owner_345_transaction",
-    "owner_345_position",
-    "owner_13dg_summary",
-    "owner_13dg_reporting_person",
-    "owner_144_summary",
-    "owner_144_notice",
-    "issuer_periodic_summary",
-    "issuer_event_summary",
-    "issuer_offering_summary",
-    "issuer_security_line",
-    "issuer_proposal_vote",
-    "issuer_exec_comp",
-    "issuer_holder_ownership",
-    "issuer_proxy_summary",
-    "pipeline_log",
-    "filing_attempt",
-    "route_watermark",
-}
+_CORE_TABLES = set(PRODUCTION_TABLE_NAMES)
+_AUDIT_CORE_TABLES = set(AUDIT_TABLE_NAMES)
 
 
 @dataclass(frozen=True)
@@ -75,21 +53,39 @@ def _split_qualified_name(value: str) -> tuple[str | None, str]:
     return database, table
 
 
+def _build_engine_for_role(settings: Settings, *, role: str):
+    """Call build_engine while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return build_engine(settings, role=role)
+    except TypeError:
+        return build_engine(settings)
+
+
+def _get_session_factory_for_role(settings: Settings, *, role: str):
+    """Call get_session_factory while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return get_session_factory(settings, role=role)
+    except TypeError:
+        return get_session_factory(settings)
+
+
 def run_runtime_preflight(
     *,
     settings: Settings | None = None,
     engine: Engine | None = None,
+    role: str = "prod",
     clickhouse_client_factory: Callable[..., object] | None = None,
 ) -> RuntimePreflightResult:
     """Validate DB, EDGAR, text-normalizer, and universe-source readiness."""
     effective_settings = settings or Settings()
-    effective_engine = engine or build_engine(effective_settings)
+    effective_engine = engine or _build_engine_for_role(effective_settings, role=role)
     checks: list[RuntimePreflightCheck] = []
 
     try:
         inspector = inspect(effective_engine)
         tables = set(inspector.get_table_names())
-        missing_tables = sorted(_CORE_TABLES - tables)
+        required_tables = _AUDIT_CORE_TABLES if role == "audit" else _CORE_TABLES
+        missing_tables = sorted(required_tables - tables)
         if missing_tables:
             checks.append(_check("postgres_schema", "fail", f"missing core tables: {', '.join(missing_tables)}"))
         else:
@@ -98,7 +94,7 @@ def run_runtime_preflight(
         checks.append(_check("postgres_schema", "fail", f"postgres schema inspection failed: {exc}"))
         return RuntimePreflightResult(passed=False, checks=checks)
 
-    session_factory = get_session_factory(effective_settings)
+    session_factory = _get_session_factory_for_role(effective_settings, role=role)
     with session_factory() as session:
         security_master_rows = 0
         try:

@@ -14,7 +14,7 @@ from src.config import (
     Settings,
 )
 from src.db.rollout import apply_rollout_assets, describe_rollout_assets, dry_run_rollout_result, init_database_schema
-from src.db.repositories import PipelineRepository
+from src.db.repositories import PipelineRepository, ProductionRepository
 from src.db.session import build_engine, get_session_factory
 from src.pipeline.edgar_provider import classify_form_family, fetch_filings_for_security, iter_filings_for_security
 from src.pipeline.extraction._config import tier2_path
@@ -63,7 +63,86 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
-_SCHEMA_READY_DSNS: set[str] = set()
+_SCHEMA_READY_DB_KEYS: set[tuple[str, str]] = set()
+_SCHEMA_READY_DSNS = _SCHEMA_READY_DB_KEYS
+
+
+def _build_engine_for_role(settings: Any, *, role: str):
+    """Call build_engine while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return build_engine(settings, role=role)
+    except TypeError:
+        return build_engine(settings)
+
+
+def _get_session_factory_for_role(settings: Any, *, role: str):
+    """Call get_session_factory while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return get_session_factory(settings, role=role)
+    except TypeError:
+        return get_session_factory(settings)
+
+
+def _run_runtime_preflight_for_role(settings: Any, *, role: str):
+    """Call runtime preflight while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return run_runtime_preflight(settings=settings, role=role)
+    except TypeError:
+        return run_runtime_preflight(settings=settings)
+
+
+def _init_database_schema_for_scope(engine: Any, *, scope: str):
+    """Call schema init while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return init_database_schema(engine=engine, scope=scope)
+    except TypeError:
+        return init_database_schema(engine=engine)
+
+
+def _invoke_run_once_pipeline(*, route: RouteName | None = None, artifacts_dir: Path | None = None, audit_mode: bool) -> None:
+    """Call run-once pipeline while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        _run_once_pipeline(route=route, artifacts_dir=artifacts_dir, audit_mode=audit_mode)
+    except TypeError:
+        _run_once_pipeline(route=route, artifacts_dir=artifacts_dir)
+
+
+def _invoke_run_backfill_pipeline(
+    *,
+    route: RouteName | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    tickers: tuple[str, ...] = (),
+    ciks: tuple[str, ...] = (),
+    limit: int | None = None,
+    ignore_existing_watermarks: bool = True,
+    artifacts_dir: Path | None = None,
+    audit_mode: bool,
+):
+    """Call backfill pipeline while tolerating tests that monkeypatch the legacy signature."""
+    try:
+        return _run_backfill_pipeline(
+            route=route,
+            start_date=start_date,
+            end_date=end_date,
+            tickers=tickers,
+            ciks=ciks,
+            limit=limit,
+            ignore_existing_watermarks=ignore_existing_watermarks,
+            artifacts_dir=artifacts_dir,
+            audit_mode=audit_mode,
+        )
+    except TypeError:
+        return _run_backfill_pipeline(
+            route=route,
+            start_date=start_date,
+            end_date=end_date,
+            tickers=tickers,
+            ciks=ciks,
+            limit=limit,
+            ignore_existing_watermarks=ignore_existing_watermarks,
+            artifacts_dir=artifacts_dir,
+        )
 
 
 @app.callback(invoke_without_command=True)
@@ -94,16 +173,32 @@ def db_rollout_apply(
 
 @app.command("db-init")
 def db_init() -> None:
-    """Bootstrap the base database schema from SQLAlchemy metadata."""
+    """Bootstrap the tracked audit database schema from SQLAlchemy metadata."""
     settings = Settings()
-    result = init_database_schema(engine=build_engine(settings))
+    result = _init_database_schema_for_scope(_build_engine_for_role(settings, role="audit"), scope="audit")
     typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 
-def _ensure_runtime_schema_ready(settings: Any | None = None) -> None:
-    """Initialize the runtime schema once per configured Postgres DSN."""
+@app.command("prod-db-init")
+def prod_db_init() -> None:
+    """Bootstrap the production database schema from SQLAlchemy metadata."""
+    settings = Settings()
+    result = _init_database_schema_for_scope(_build_engine_for_role(settings, role="prod"), scope="prod")
+    typer.echo(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+
+
+@app.command("audit-db-init")
+def audit_db_init() -> None:
+    """Alias for db-init; bootstraps the tracked audit database schema."""
+    db_init()
+
+
+def _ensure_runtime_schema_ready(settings: Any | None = None, *, role: str = "prod") -> None:
+    """Initialize the runtime schema once per configured Postgres DSN and role."""
     effective_settings = settings or Settings()
-    pg_dsn = getattr(effective_settings, "pg_dsn", None)
+    pg_dsn = getattr(effective_settings, "audit_pg_dsn", None) if role == "audit" else getattr(effective_settings, "pg_dsn", None)
+    if role == "audit" and pg_dsn is None:
+        pg_dsn = getattr(effective_settings, "pg_dsn", None)
     if pg_dsn is None:
         return
 
@@ -111,14 +206,15 @@ def _ensure_runtime_schema_ready(settings: Any | None = None) -> None:
     if not normalized_dsn:
         return
 
-    if normalized_dsn in _SCHEMA_READY_DSNS:
+    db_key = (role, normalized_dsn)
+    if db_key in _SCHEMA_READY_DB_KEYS:
         return
 
-    engine = build_engine(effective_settings)
-    init_database_schema(engine=engine)
+    engine = _build_engine_for_role(effective_settings, role=role)
+    _init_database_schema_for_scope(engine, scope="audit" if role == "audit" else "prod")
     if getattr(getattr(engine, "dialect", None), "name", None) == "postgresql":
         apply_rollout_assets(engine=engine, dry_run=False)
-    _SCHEMA_READY_DSNS.add(normalized_dsn)
+    _SCHEMA_READY_DB_KEYS.add(db_key)
 
 
 def _load_run_once_securities(session: Any, settings: Settings) -> list[SecurityUniverseRow]:
@@ -334,11 +430,13 @@ def _run_pipeline(
     limit: int | None = None,
     ignore_existing_watermarks: bool = False,
     artifacts_dir: Path | None = None,
+    audit_mode: bool = False,
 ) -> str:
     """Run one runtime pass for the selected cohort and optionally write artifacts."""
     settings = Settings()
-    _ensure_runtime_schema_ready(settings)
-    session_factory = get_session_factory(settings)
+    role = "audit" if audit_mode else "prod"
+    _ensure_runtime_schema_ready(settings, role=role)
+    session_factory = _get_session_factory_for_role(settings, role=role)
     selected_routes = _selected_routes(route)
     effective_start_date = start_date_override or settings.start_date
     effective_end_date = end_date_override
@@ -366,7 +464,7 @@ def _run_pipeline(
 
     for index, security in enumerate(securities, start=1):
         with session_factory() as session:
-            repo = PipelineRepository(session)
+            repo = PipelineRepository(session) if audit_mode else ProductionRepository(session)
             persistence_service = PersistenceService(session)
             processor = RouteProcessor(
                 repo=repo,
@@ -386,7 +484,7 @@ def _run_pipeline(
         if mode == "backfill" and (index == len(securities) or index % 100 == 0):
             typer.echo(f"progress: securities={index}/{len(securities)}")
 
-    if settings.write_offline_artifacts:
+    if audit_mode and settings.write_offline_artifacts:
         with session_factory() as session:
             summary_payload, sample_payload, diff_markdown = build_run_artifact_payloads(
                 session=session,
@@ -417,9 +515,9 @@ def _run_pipeline(
     return run_id
 
 
-def _run_once_pipeline(*, route: RouteName | None = None, artifacts_dir: Path | None = None) -> None:
+def _run_once_pipeline(*, route: RouteName | None = None, artifacts_dir: Path | None = None, audit_mode: bool = True) -> None:
     """Run the incremental pipeline once."""
-    _run_pipeline(mode="run_once", route=route, artifacts_dir=artifacts_dir)
+    _run_pipeline(mode="run_once", route=route, artifacts_dir=artifacts_dir, audit_mode=audit_mode)
 
 
 def _run_backfill_pipeline(
@@ -432,6 +530,7 @@ def _run_backfill_pipeline(
     limit: int | None = None,
     ignore_existing_watermarks: bool = True,
     artifacts_dir: Path | None = None,
+    audit_mode: bool = True,
 ) -> str:
     """Run the historical backfill variant of the pipeline."""
     return _run_pipeline(
@@ -444,6 +543,7 @@ def _run_backfill_pipeline(
         limit=limit,
         ignore_existing_watermarks=ignore_existing_watermarks,
         artifacts_dir=artifacts_dir,
+        audit_mode=audit_mode,
     )
 
 
@@ -494,7 +594,7 @@ def run_once(
     artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run the phase-1 pipeline once."""
-    _run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts)
+    _invoke_run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts, audit_mode=True)
 
 
 @app.command("run-route")
@@ -503,7 +603,7 @@ def run_route(
     artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run a single pipeline route once."""
-    _run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts)
+    _invoke_run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts, audit_mode=True)
 
 
 @app.command("run-issuer")
@@ -511,7 +611,7 @@ def run_issuer(
     artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run the issuer route once."""
-    _run_once_pipeline(route="issuer", artifacts_dir=artifacts)
+    _invoke_run_once_pipeline(route="issuer", artifacts_dir=artifacts, audit_mode=True)
 
 
 @app.command("run-owner")
@@ -519,7 +619,7 @@ def run_owner(
     artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run the owner route once."""
-    _run_once_pipeline(route="owner", artifacts_dir=artifacts)
+    _invoke_run_once_pipeline(route="owner", artifacts_dir=artifacts, audit_mode=True)
 
 
 @app.command("run-holding")
@@ -527,7 +627,25 @@ def run_holding(
     artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
     """Run the holding route once."""
-    _run_once_pipeline(route="holding", artifacts_dir=artifacts)
+    _invoke_run_once_pipeline(route="holding", artifacts_dir=artifacts, audit_mode=True)
+
+
+@app.command("prod-run-once")
+def prod_run_once(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
+    """Run one production pass that writes final results without run-scoped audit history."""
+    _invoke_run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts, audit_mode=False)
+
+
+@app.command("audit-run-once")
+def audit_run_once(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
+    """Alias for run-once; runs one tracked audit pass."""
+    _invoke_run_once_pipeline(route=_parse_route_name(route), artifacts_dir=artifacts, audit_mode=True)
 
 
 @app.command("backfill")
@@ -545,8 +663,8 @@ def backfill(
         help="Ignore stored route watermarks so historical filings before the current watermark can be replayed.",
     ),
 ) -> None:
-    """Run a historical backfill cohort with optional security filters and watermark replay."""
-    _run_backfill_pipeline(
+    """Run a historical audit backfill cohort with run-scoped tracking and artifacts."""
+    _invoke_run_backfill_pipeline(
         route=_parse_route_name(route),
         start_date=_parse_start_date_value(start_date),
         end_date=_parse_end_date_value(end_date),
@@ -555,6 +673,65 @@ def backfill(
         limit=limit,
         ignore_existing_watermarks=ignore_existing_watermarks,
         artifacts_dir=artifacts,
+        audit_mode=True,
+    )
+
+
+@app.command("prod-backfill")
+def prod_backfill(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    start_date: str | None = typer.Option(None, "--start-date", help="Override historical backfill start date (YYYY-MM-DD)"),
+    end_date: str | None = typer.Option(None, "--end-date", help="Optional inclusive historical backfill end date (YYYY-MM-DD)"),
+    ticker: list[str] | None = typer.Option(None, "--ticker", help="Optional ticker filter; repeatable"),
+    cik: list[str] | None = typer.Option(None, "--cik", help="Optional CIK filter; repeatable"),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Optional max securities after filtering"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+    ignore_existing_watermarks: bool = typer.Option(
+        True,
+        "--ignore-existing-watermarks/--respect-watermarks",
+        help="Ignore stored route watermarks so historical filings before the current watermark can be replayed.",
+    ),
+) -> None:
+    """Run a production backfill without run-scoped audit history."""
+    _invoke_run_backfill_pipeline(
+        route=_parse_route_name(route),
+        start_date=_parse_start_date_value(start_date),
+        end_date=_parse_end_date_value(end_date),
+        tickers=_normalize_security_filters(ticker, upper=True),
+        ciks=_normalize_security_filters(cik),
+        limit=limit,
+        ignore_existing_watermarks=ignore_existing_watermarks,
+        artifacts_dir=artifacts,
+        audit_mode=False,
+    )
+
+
+@app.command("audit-backfill")
+def audit_backfill(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    start_date: str | None = typer.Option(None, "--start-date", help="Override historical backfill start date (YYYY-MM-DD)"),
+    end_date: str | None = typer.Option(None, "--end-date", help="Optional inclusive historical backfill end date (YYYY-MM-DD)"),
+    ticker: list[str] | None = typer.Option(None, "--ticker", help="Optional ticker filter; repeatable"),
+    cik: list[str] | None = typer.Option(None, "--cik", help="Optional CIK filter; repeatable"),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Optional max securities after filtering"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+    ignore_existing_watermarks: bool = typer.Option(
+        True,
+        "--ignore-existing-watermarks/--respect-watermarks",
+        help="Ignore stored route watermarks so historical filings before the current watermark can be replayed.",
+    ),
+) -> None:
+    """Alias for backfill; runs the tracked audit backfill flow."""
+    _invoke_run_backfill_pipeline(
+        route=_parse_route_name(route),
+        start_date=_parse_start_date_value(start_date),
+        end_date=_parse_end_date_value(end_date),
+        tickers=_normalize_security_filters(ticker, upper=True),
+        ciks=_normalize_security_filters(cik),
+        limit=limit,
+        ignore_existing_watermarks=ignore_existing_watermarks,
+        artifacts_dir=artifacts,
+        audit_mode=True,
     )
 
 
@@ -572,7 +749,7 @@ def backfill_cohort(
         help="Ignore stored route watermarks so historical filings before the current watermark can be replayed.",
     ),
 ) -> None:
-    """Run a named seed cohort backfill from versioned runtime config."""
+    """Run a named seed cohort audit backfill from versioned runtime config."""
     settings = Settings()
     cohorts = load_backfill_cohorts()
     selected = cohorts.get(cohort.strip())
@@ -593,7 +770,7 @@ def backfill_cohort(
     )
     route_run_ids: list[dict[str, str]] = []
     for route_name in selected_routes:
-        route_run_id = _run_backfill_pipeline(
+        route_run_id = _invoke_run_backfill_pipeline(
             route=route_name,
             start_date=parsed_start_date,
             end_date=parsed_end_date,
@@ -602,6 +779,7 @@ def backfill_cohort(
             limit=limit,
             ignore_existing_watermarks=ignore_existing_watermarks,
             artifacts_dir=effective_artifacts_dir,
+            audit_mode=True,
         )
         route_run_ids.append({"route": route_name, "run_id": route_run_id})
     if getattr(settings, "write_offline_artifacts", False):
@@ -1130,10 +1308,10 @@ def verify_runtime_run(
 ) -> None:
     """Verify runtime run artifacts against filing_attempt and pipeline_log DB state."""
     settings = Settings()
-    _ensure_runtime_schema_ready(settings)
+    _ensure_runtime_schema_ready(settings, role="audit")
     base_dir = artifacts_dir or settings.offline_artifacts_dir
 
-    with get_session_factory(settings)() as session:
+    with _get_session_factory_for_role(settings, role="audit")() as session:
         result = verify_runtime_run_with_session(session=session, run_id=run_id, base_dir=base_dir)
 
     payload = result.__dict__
@@ -1144,13 +1322,30 @@ def verify_runtime_run(
 
 @app.command("runtime-preflight")
 def runtime_preflight() -> None:
-    """Check whether the current environment is ready for real runtime/backfill evidence collection."""
+    """Check whether the tracked audit environment is ready for runtime/backfill evidence collection."""
     settings = Settings()
-    _ensure_runtime_schema_ready(settings)
-    result = run_runtime_preflight(settings=settings)
+    _ensure_runtime_schema_ready(settings, role="audit")
+    result = _run_runtime_preflight_for_role(settings, role="audit")
     typer.echo(json.dumps(result.asdict(), ensure_ascii=False, indent=2))
     if not result.passed:
         raise typer.Exit(code=1)
+
+
+@app.command("prod-runtime-preflight")
+def prod_runtime_preflight() -> None:
+    """Check whether the production database environment is ready for normal non-audit runs."""
+    settings = Settings()
+    _ensure_runtime_schema_ready(settings, role="prod")
+    result = _run_runtime_preflight_for_role(settings, role="prod")
+    typer.echo(json.dumps(result.asdict(), ensure_ascii=False, indent=2))
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command("audit-runtime-preflight")
+def audit_runtime_preflight() -> None:
+    """Alias for runtime-preflight; checks the tracked audit environment."""
+    runtime_preflight()
 
 
 @app.command("schedule")
@@ -1158,13 +1353,45 @@ def schedule(
     route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
     artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
 ) -> None:
-    """Run the phase-1 scheduler loop."""
+    """Run the tracked audit scheduler loop."""
     settings = Settings()
-    _ensure_runtime_schema_ready(settings)
+    _ensure_runtime_schema_ready(settings, role="audit")
     parsed_route = _parse_route_name(route)
     scheduler = build_blocking_scheduler(
         interval_minutes=settings.scheduler_interval_minutes,
-        tick_callable=partial(_run_once_pipeline, route=parsed_route, artifacts_dir=artifacts),
+        tick_callable=partial(_invoke_run_once_pipeline, route=parsed_route, artifacts_dir=artifacts, audit_mode=True),
+    )
+    scheduler.start()
+
+
+@app.command("prod-schedule")
+def prod_schedule(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
+    """Run the production scheduler loop against the production database without run-scoped audit history."""
+    settings = Settings()
+    _ensure_runtime_schema_ready(settings, role="prod")
+    parsed_route = _parse_route_name(route)
+    scheduler = build_blocking_scheduler(
+        interval_minutes=settings.scheduler_interval_minutes,
+        tick_callable=partial(_invoke_run_once_pipeline, route=parsed_route, artifacts_dir=artifacts, audit_mode=False),
+    )
+    scheduler.start()
+
+
+@app.command("audit-schedule")
+def audit_schedule(
+    route: str | None = typer.Option(None, "--route", help="Optional route filter: issuer, owner, holding"),
+    artifacts: Path | None = typer.Option(None, "--artifacts", help="Optional runtime artifacts base directory override"),
+) -> None:
+    """Alias for schedule; runs the tracked audit scheduler loop."""
+    settings = Settings()
+    _ensure_runtime_schema_ready(settings, role="audit")
+    parsed_route = _parse_route_name(route)
+    scheduler = build_blocking_scheduler(
+        interval_minutes=settings.scheduler_interval_minutes,
+        tick_callable=partial(_invoke_run_once_pipeline, route=parsed_route, artifacts_dir=artifacts, audit_mode=True),
     )
     scheduler.start()
 

@@ -15,6 +15,7 @@ EDGAR_DOWNLOAD_FILINGS_FLAG_CLOUD = 2
 
 class Settings(BaseSettings):
     pg_dsn: str = Field(alias="PG_DSN")
+    audit_pg_dsn: str | None = Field(default=None, alias="AUDIT_PG_DSN")
     ch_dsn: str | None = Field(default=None, alias="CH_DSN")
     postgres_host: str | None = Field(default=None, alias="POSTGRES_HOST", exclude=True)
     postgres_port: str | None = Field(default=None, alias="POSTGRES_PORT", exclude=True)

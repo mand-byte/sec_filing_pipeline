@@ -8,6 +8,7 @@ from sqlalchemy import Engine
 from sqlalchemy import inspect
 
 from src.db.base import Base
+from src.db.models import AUDIT_TABLE_NAMES, PRODUCTION_TABLE_NAMES
 
 
 def migration_dir() -> Path:
@@ -155,9 +156,21 @@ def apply_rollout_assets(*, engine: Engine, dry_run: bool = False) -> RolloutApp
     )
 
 
-def init_database_schema(*, engine: Engine) -> DbInitResult:
+def init_database_schema(*, engine: Engine, scope: str = "all") -> DbInitResult:
     """Create the base SQLAlchemy schema for the configured engine."""
-    Base.metadata.create_all(engine)
+    if scope == "prod":
+        selected_table_names = PRODUCTION_TABLE_NAMES
+    elif scope == "audit":
+        selected_table_names = AUDIT_TABLE_NAMES
+    else:
+        selected_table_names = {table.name for table in Base.metadata.sorted_tables}
+
+    selected_tables = [
+        table
+        for table in Base.metadata.sorted_tables
+        if table.name in selected_table_names
+    ]
+    Base.metadata.create_all(engine, tables=selected_tables)
     inspector = inspect(engine)
     tables = sorted(inspector.get_table_names())
     return DbInitResult(

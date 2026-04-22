@@ -77,6 +77,33 @@ class FilingDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class FilingStatus(Base):
+    """Filing 当前状态表：生产库里用于断点续跑与去重判断的全局 filing 状态。"""
+    __tablename__ = "filing_status"
+    __table_args__ = (
+        UniqueConstraint("route", "accession_no", name="uq_filing_status_route_accession"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    route: Mapped[str] = mapped_column(String(16), nullable=False)
+    accession_no: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("filing_document.accession_no"),
+        nullable=False,
+        index=True,
+    )
+    cik: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    latest_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Holding13FSummary(Base):
     """13F 汇总表：保存一份 13F filing 的 summary 级字段与文本量化结果。"""
     __tablename__ = "holding_13f_summary"
@@ -771,3 +798,39 @@ class GoldenReviewPacket(Base):
     field_name: Mapped[str] = mapped_column(String(128), nullable=False)
     packet_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+PRODUCTION_TABLE_NAMES = {
+    "security_master",
+    "route_watermark",
+    "delisted_route_completion",
+    "filing_document",
+    "filing_status",
+    "holding_13f_summary",
+    "holding_13f_position",
+    "owner_345_summary",
+    "owner_345_transaction",
+    "owner_345_position",
+    "owner_13dg_summary",
+    "owner_13dg_reporting_person",
+    "owner_144_summary",
+    "owner_144_notice",
+    "issuer_periodic_summary",
+    "issuer_event_summary",
+    "issuer_offering_summary",
+    "issuer_security_line",
+    "issuer_proposal_vote",
+    "issuer_exec_comp",
+    "issuer_holder_ownership",
+    "issuer_proxy_summary",
+    "review_task",
+    "review_decision",
+    "golden_case",
+    "golden_subject",
+    "golden_truth",
+}
+
+AUDIT_TABLE_NAMES = {
+    table.name
+    for table in Base.metadata.sorted_tables
+}
