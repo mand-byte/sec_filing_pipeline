@@ -38,6 +38,39 @@ def test_write_log_persists_error_detail() -> None:
     assert row.error_detail == "Traceback (most recent call last): ..."
 
 
+def test_write_log_aggregates_repeated_extract_errors_per_filing_when_buffered() -> None:
+    session = _session()
+    repo = PipelineRepository(session, autocommit=False)
+
+    repo.write_log(
+        run_id="run-001",
+        route="owner",
+        stage="extract",
+        level="ERROR",
+        message="text field extraction failed",
+        cik="0000789019",
+        accession_no="0000000000-24-000001",
+        error_type="SPAN_POLICY_FAILED",
+    )
+    repo.write_log(
+        run_id="run-001",
+        route="owner",
+        stage="extract",
+        level="ERROR",
+        message="text field extraction failed",
+        cik="0000789019",
+        accession_no="0000000000-24-000001",
+        error_type="SPAN_POLICY_FAILED",
+    )
+    repo.flush_pending()
+
+    rows = session.query(PipelineLog).all()
+    assert len(rows) == 1
+    assert rows[0].message == "text field extraction failed"
+    assert rows[0].error_type == "SPAN_POLICY_FAILED"
+    assert rows[0].error_detail == "aggregated_count=2"
+
+
 def test_upsert_filing_attempt_updates_existing_run_route_accession() -> None:
     session = _session()
     repo = PipelineRepository(session)

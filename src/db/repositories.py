@@ -21,6 +21,7 @@ class PipelineRepository:
         """Persist runtime watermarks, logs, and filing attempts."""
         self.session = session
         self.autocommit = autocommit
+        self._buffered_logs: dict[tuple[str, str, str, str, str | None, str | None, str], dict[str, object]] = {}
 
     def _is_postgresql(self) -> bool:
         """Check whether the current session is bound to PostgreSQL."""
@@ -43,11 +44,51 @@ class PipelineRepository:
             return
         if not hasattr(self.session, "commit") or not hasattr(self.session, "rollback"):
             return
+        self._flush_buffered_logs_to_session()
         try:
             self.session.commit()
         except Exception:
             self.session.rollback()
             raise
+
+    @staticmethod
+    def _is_aggregatable_log(
+        *,
+        stage: str,
+        level: str,
+        accession_no: str | None,
+    ) -> bool:
+        """Return True when one log row is safe to aggregate per filing."""
+        return stage == "extract" and level == "ERROR" and accession_no is not None
+
+    def _flush_buffered_logs_to_session(self) -> None:
+        """Materialize any buffered aggregate log rows into the SQLAlchemy session."""
+        if not self._buffered_logs:
+            return
+        for payload in self._buffered_logs.values():
+            count = int(payload["count"])
+            error_detail = payload["error_detail"]
+            if count > 1:
+                aggregate_note = f"aggregated_count={count}"
+                if isinstance(error_detail, str) and error_detail.strip():
+                    error_detail = f"{aggregate_note}; last_error_detail={error_detail}"
+                else:
+                    error_detail = aggregate_note
+            self.session.add(
+                PipelineLog(
+                    run_id=str(payload["run_id"]),
+                    route=str(payload["route"]),
+                    cik=payload["cik"],
+                    accession_no=payload["accession_no"],
+                    stage=str(payload["stage"]),
+                    level=str(payload["level"]),
+                    message=str(payload["message"]),
+                    error_type=payload["error_type"],
+                    error_detail=error_detail,
+                    created_at=payload["created_at"],
+                )
+            )
+        self._buffered_logs.clear()
 
     def get_route_watermark(self, cik: str, route: RouteName) -> datetime | None:
         """Fetch the stored watermark for one CIK/route pair."""
@@ -231,6 +272,29 @@ class PipelineRepository:
     ) -> None:
         """Persist one pipeline log record."""
         now = datetime.now(timezone.utc)
+
+        if not self.autocommit and self._is_aggregatable_log(stage=stage, level=level, accession_no=accession_no):
+            key = (run_id, route, stage, level, cik, accession_no, error_type or message)
+            buffered = self._buffered_logs.get(key)
+            if buffered is None:
+                self._buffered_logs[key] = {
+                    "run_id": run_id,
+                    "route": route,
+                    "cik": cik,
+                    "accession_no": accession_no,
+                    "stage": stage,
+                    "level": level,
+                    "message": message,
+                    "error_type": error_type,
+                    "error_detail": error_detail,
+                    "created_at": now,
+                    "count": 1,
+                }
+            else:
+                buffered["count"] = int(buffered["count"]) + 1
+                buffered["created_at"] = now
+                buffered["error_detail"] = error_detail
+            return
 
         self.session.add(
             PipelineLog(
