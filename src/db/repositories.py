@@ -17,9 +17,10 @@ def _normalize_to_utc(value: datetime) -> datetime:
 
 
 class PipelineRepository:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, *, autocommit: bool = True):
         """Persist runtime watermarks, logs, and filing attempts."""
         self.session = session
+        self.autocommit = autocommit
 
     def _is_postgresql(self) -> bool:
         """Check whether the current session is bound to PostgreSQL."""
@@ -28,6 +29,20 @@ class PipelineRepository:
 
     def _commit_with_rollback(self) -> None:
         """Commit the current transaction and roll back on failure."""
+        if not self.autocommit:
+            return
+        try:
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def flush_pending(self) -> None:
+        """Commit any buffered state when repository autocommit is disabled."""
+        if self.autocommit:
+            return
+        if not hasattr(self.session, "commit") or not hasattr(self.session, "rollback"):
+            return
         try:
             self.session.commit()
         except Exception:

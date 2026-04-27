@@ -446,6 +446,9 @@ class RouteProcessor:
                         error_type=exc.__class__.__name__,
                         error_detail=_format_exception_detail(exc),
                     )
+                flush_pending = getattr(self.repo, "flush_pending", None)
+                if callable(flush_pending):
+                    flush_pending()
                 return True
             except Exception as exc:
                 failed_bundles += 1
@@ -478,6 +481,9 @@ class RouteProcessor:
                     error_type=exc.__class__.__name__,
                     error_detail=_format_exception_detail(exc),
                 )
+                flush_pending = getattr(self.repo, "flush_pending", None)
+                if callable(flush_pending):
+                    flush_pending()
                 return False
 
         if prebuilt_bundles:

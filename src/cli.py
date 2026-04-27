@@ -464,7 +464,7 @@ def _run_pipeline(
 
     for index, security in enumerate(securities, start=1):
         with session_factory() as session:
-            repo = PipelineRepository(session) if audit_mode else ProductionRepository(session)
+            repo = PipelineRepository(session, autocommit=False) if audit_mode else ProductionRepository(session)
             persistence_service = PersistenceService(session)
             processor = RouteProcessor(
                 repo=repo,
@@ -481,6 +481,9 @@ def _run_pipeline(
                 routers=routers,
                 repo=repo,
             )
+            flush_pending = getattr(repo, "flush_pending", None)
+            if callable(flush_pending):
+                flush_pending()
         if mode == "backfill" and (index == len(securities) or index % 100 == 0):
             typer.echo(f"progress: securities={index}/{len(securities)}")
 
